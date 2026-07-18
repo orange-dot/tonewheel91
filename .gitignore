@@ -1,0 +1,6 @@
+*.o
+*.wav
+/build/
+/docs/externalDocs/
+/docs/src-review.md
+/renders/
