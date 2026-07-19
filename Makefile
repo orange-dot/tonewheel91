@@ -8,7 +8,7 @@ CORE_CFLAGS := $(CFLAGS) -ffreestanding
 
 CORE_OBJS := $(BUILD)/generator.o $(BUILD)/midi.o $(BUILD)/organ.o $(BUILD)/scanner.o $(BUILD)/drive.o $(BUILD)/rotary.o
 
-all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/render_midi $(BUILD)/tw91
+all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/render_midi $(BUILD)/tw91
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -43,6 +43,9 @@ $(BUILD)/exhibit_drive: driver/exhibit_drive.c $(BUILD)/wav.o $(CORE_OBJS) src/t
 $(BUILD)/exhibit_rotary: driver/exhibit_rotary.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/exhibit_rotary.c $(BUILD)/wav.o $(CORE_OBJS) -o $@ -lm
 
+$(BUILD)/exhibit_wear: driver/exhibit_wear.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+	$(CC) $(CFLAGS) driver/exhibit_wear.c $(BUILD)/wav.o $(CORE_OBJS) -o $@ -lm
+
 $(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/render_midi.c $(BUILD)/wav.o $(CORE_OBJS) -o $@
 
@@ -52,7 +55,7 @@ $(BUILD)/tw91: driver/main.c $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 test: $(BUILD)/test
 	./$(BUILD)/test
 
-exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary
+exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear
 	./$(BUILD)/exhibit_phase
 	./$(BUILD)/exhibit_contacts
 	./$(BUILD)/exhibit_taper
@@ -60,6 +63,7 @@ exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper
 	./$(BUILD)/exhibit_scanner
 	./$(BUILD)/exhibit_drive
 	./$(BUILD)/exhibit_rotary
+	./$(BUILD)/exhibit_wear
 
 clean:
 	rm -rf $(BUILD)

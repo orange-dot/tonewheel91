@@ -26,6 +26,9 @@ static float click127[120000], click25[120000], merged[96000];
 static void render_click(float *dst, long n, int vel) {
     tw_organ o;
     tw_organ_init(&o, RATE);
+    /* M7: pin the idealized reference (wear 0) — this exhibit's recorded
+     * signatures predate the wear stage and must stay bit-stable. */
+    tw_organ_set_wear(&o, 0.0f);
     static const uint8_t dark[TW_DRAWBARS] = { 8, 8, 8, 8, 0, 0, 0, 0, 0 };
     tw_organ_set_registration(&o, dark);
     for (long i = 0; i < n; i++) {
@@ -57,6 +60,7 @@ static double steady_rms(tw_organ *o, long settle, long window) {
 static double pair_rms(const int *notes, int n, float *wav, long frames) {
     tw_organ o;
     tw_organ_init(&o, RATE);
+    tw_organ_set_wear(&o, 0.0f); /* M7: idealized reference */
     static const uint8_t reg16[TW_DRAWBARS] = { 8, 0, 0, 0, 0, 0, 0, 0, 0 };
     tw_organ_set_registration(&o, reg16);
     for (int i = 0; i < n; i++) tw_organ_note(&o, notes[i], true, 127);
@@ -72,6 +76,7 @@ static double pair_rms(const int *notes, int n, float *wav, long frames) {
 static void run_script(float *dst, long n) {
     tw_organ o;
     tw_organ_init(&o, RATE);
+    tw_organ_set_wear(&o, 0.0f); /* M7: idealized reference */
     for (long i = 0; i < n; i++) {
         if (i == 4800) tw_organ_note(&o, 57, true, 96);
         if (i == 6000) tw_organ_note(&o, 64, true, 40);
@@ -124,6 +129,7 @@ int main(void) {
 
     tw_organ o;
     tw_organ_init(&o, RATE);
+    tw_organ_set_wear(&o, 0.0f); /* M7: idealized reference */
     tw_organ_note(&o, 60, true, 127);
     tw_organ_note(&o, 64, true, 127);
     tw_organ_note(&o, 67, true, 127);

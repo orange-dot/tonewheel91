@@ -41,6 +41,9 @@ static float drive_pre(float v) { return (1.0f + 7.0f * v * v) / 8.0f; }
 static void render_passage(float *dst, int frames, float drive) {
     tw_instrument ins;
     tw_instrument_init(&ins, RATE);
+    /* M7: pin the idealized reference (wear 0) — this exhibit's recorded
+     * signatures predate the wear stage and must stay bit-stable. */
+    tw_organ_set_wear(&ins.organ, 0.0f);
     tw_instrument_set_drive(&ins, drive);
     static const uint8_t reg[TW_DRAWBARS] = { 8, 8, 8, 8, 0, 0, 0, 0, 0 };
     tw_organ_set_registration(&ins.organ, reg);
@@ -61,6 +64,7 @@ static void render_passage(float *dst, int frames, float drive) {
 static void render_organ_twin(float *dst, int frames) {
     tw_organ o;
     tw_organ_init(&o, RATE);
+    tw_organ_set_wear(&o, 0.0f); /* M7: idealized reference */
     static const uint8_t reg[TW_DRAWBARS] = { 8, 8, 8, 8, 0, 0, 0, 0, 0 };
     tw_organ_set_registration(&o, reg);
     tw_organ_set_percussion(&o, true, false, false, true);

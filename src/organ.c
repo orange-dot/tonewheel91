@@ -10,12 +10,7 @@ static constexpr float STAGGER_MAX_S = 0.015f; /* slow press, nine buses */
 static constexpr float RELEASE_STAGGER_S = 0.003f;
 static constexpr float BOUNCE_WINDOW_S = 0.002f; /* <= 3 toggles inside */
 
-static uint64_t rng_next(uint64_t *s) { /* splitmix64 */
-    uint64_t z = (*s += 0x9e3779b97f4a7c15u);
-    z = (z ^ z >> 30) * 0xbf58476d1ce4e5b9u;
-    z = (z ^ z >> 27) * 0x94d049bb133111ebu;
-    return z ^ z >> 31;
-}
+static uint64_t rng_next(uint64_t *s) { return tw_splitmix64(s); }
 
 /* Taper: six resistance-wire classes per (key, bus), dB-ladder order
  * +7, +3.5, 0, -3.5, -7, -10 dB / 10, 15, 24, 34, 50, 100 ohm. Gains are
@@ -55,6 +50,11 @@ static int taper_class(int key, int bus) { /* key 0-based */
  * R57||R58 (1.137 Mohm), ratio 4.133:1. constants.md section 8. */
 static constexpr float PERC_TAU_SLOW_S = 1.551f;
 static constexpr float PERC_TAU_FAST_S = 0.375f;
+
+/* Shipped wear default (design.md: nonzero — tolerance effects exist on
+ * a factory-new unit; wear = 0 stays the idealized test reference).
+ * constants.md sec 12.1 [FOLK]; by-ear verdict overrides. */
+const float TW_WEAR_DEFAULT = 0.2f;
 
 /* Peak percussion amplitude at trigger: [decision], matches the 0 dB
  * taper reference class (TAPER_GAIN[2] above); tune by ear once played
@@ -163,6 +163,7 @@ void tw_organ_init(tw_organ *o, float sample_rate_hz) {
     o->swell_coeff = 1.0f / (SWELL_TAU_S * sample_rate_hz);
     o->perc = (tw_percussion){ .armed = true, .normal = true };
     tw_generator_set_perc_tau(&o->gen, sample_rate_hz, PERC_TAU_FAST_S);
+    tw_organ_set_wear(o, TW_WEAR_DEFAULT);
 }
 
 static void schedule_key(tw_organ *o, int key, bool down, int velocity) {
@@ -256,6 +257,10 @@ void tw_organ_set_vibrato(tw_organ *o, int mode) {
     o->scan.mode = mode;
 }
 
+void tw_organ_set_wear(tw_organ *o, float v) {
+    tw_generator_set_wear(&o->gen, v); /* sanitize lives in the setter */
+}
+
 void tw_organ_set_swell(tw_organ *o, float v) {
     if (!(v >= 0.0f)) v = 0.0f;
     else if (v > 1.0f) v = 1.0f;
@@ -291,13 +296,17 @@ float tw_organ_tick(tw_organ *o) {
     /* Scanner sits between the keyed+perc sum and swell (sec 9). OFF
      * takes the original expression untouched — bit-identical to pre-M4.
      * The line feed is the above-80 Hz remainder plus percussion (its
-     * lowest tap is wheel 25, so all of it is line-side); frame.leak is
-     * all-zero until M7, when its routing gets its own call. */
+     * lowest tap is wheel 25, so all of it is line-side). The M7 bleed
+     * bus joins the same generator-side sum (sec 13: crosstalk couples
+     * at the wheel wiring, ahead of the preamp/line), riding the line
+     * whole — its sub-80 Hz share is far below the bass-split's
+     * audibility [decision]. frame.leak is exactly +0 at wear 0, so
+     * every pre-M7 render is bit-stable. */
     float mix;
     if (o->scan.mode == TW_VIB_OFF) {
-        mix = f.keyed + f.percussion;
+        mix = f.keyed + f.percussion + f.leak;
     } else {
-        float high = (f.keyed - f.keyed_low) + f.percussion;
+        float high = (f.keyed - f.keyed_low) + f.percussion + f.leak;
         mix = tw_scanner_tick(&o->scan, f.keyed_low, high);
     }
     return mix * o->swell_gain;

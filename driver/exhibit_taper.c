@@ -28,6 +28,9 @@ static float sweep[TW_KEYS * STEP];
 static double settled_target(const int *keys, int n, int bus, int wheel) {
     tw_organ o;
     tw_organ_init(&o, RATE);
+    /* M7: pin the idealized reference (wear 0) — this exhibit's recorded
+     * signatures predate the wear stage and must stay bit-stable. */
+    tw_organ_set_wear(&o, 0.0f);
     uint8_t reg[TW_DRAWBARS] = { 0 };
     reg[bus] = 8;
     tw_organ_set_registration(&o, reg);
@@ -39,6 +42,7 @@ static double settled_target(const int *keys, int n, int bus, int wheel) {
 static void render_sweep(float *dst, long n) {
     tw_organ o;
     tw_organ_init(&o, RATE);
+    tw_organ_set_wear(&o, 0.0f); /* M7: idealized reference */
     static const uint8_t reg16[TW_DRAWBARS] = { 8, 0, 0, 0, 0, 0, 0, 0, 0 };
     tw_organ_set_registration(&o, reg16);
     for (long i = 0; i < n; i++) {

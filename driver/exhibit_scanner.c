@@ -30,6 +30,9 @@ static float dry_buf[FRAMES], v3_buf[FRAMES], c3_buf[FRAMES], naive_buf[FRAMES];
 static void render_organ(float *dst, int frames, int vib_mode) {
     tw_organ o;
     tw_organ_init(&o, RATE);
+    /* M7: pin the idealized reference (wear 0) — this exhibit's recorded
+     * signatures predate the wear stage and must stay bit-stable. */
+    tw_organ_set_wear(&o, 0.0f);
     static const uint8_t reg[TW_DRAWBARS] = { 8, 8, 8, 8, 0, 0, 0, 0, 0 };
     tw_organ_set_registration(&o, reg);
     tw_organ_set_vibrato(&o, vib_mode);

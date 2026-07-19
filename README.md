@@ -7,20 +7,21 @@ percussion, a vibrato/chorus scanner, stateful preamp drive, and a two-rotor
 rotary speaker. Live-first: the primary driver is a Linux ALSA MIDI-in /
 PCM-out loop; an offline script renderer is the deterministic test twin.
 
-Status: M6 landed — the rotary speaker, and with it the whole design.md
-signal chain: an 800 Hz crossover splits the driven organ into a horn
-path (Doppler FM through a fractional delay + directivity AM) and a
-drum path (band-limited AM, no Doppler — the drum is too large for its
-wavelengths), two rotors with per-direction slip inertia and a
-front-parking brake, two virtual mics into a stereo field, and the M5
-drive stage reused as the 40 W amp ceiling ahead of the rotors. Rotor
-speeds are pinned folklore ([FOLK], `docs/constants.md` sec 15) — the
-by-ear pass against reference recordings is the open verdict. `rotary =
-bypass` (the default) is bit-identical to the M5 mono chain on both
-channels. `tw91`, the single-threaded ALSA driver, is now true stereo.
-Evidence: `docs/m6-evidence.md` back through `docs/m1-evidence.md`.
+Status: M7 landed — wear, the structured deviations: per-wheel level
+spread, tooth-profile harmonics, motion AM at each wheel's own rotation
+rate, an asymmetric pickup nonlinearity, leakage structured by the
+generator's bin/shaft layout (not the musical order), and a 60 Hz mains
+line, all behind one `wear` knob. `wear = 0` is the idealized reference
+and reproduces every pre-M7 render bit-for-bit — asserted against
+pinned pre-M7 signatures in test.c and the recorded exhibit hashes;
+the shipped default is 0.2 (tolerance effects exist on a factory-new
+unit), so an idle organ now carries its ~-44 dB noise floor. Every
+depth except the pickup's measured alpha is a [FOLK]/[decision] working
+value (`docs/constants.md` secs 11.1/12.1/13.1) — the by-ear pass
+against reference recordings owns them. Evidence: `docs/m7-evidence.md`
+back through `docs/m1-evidence.md`.
 
-    make test      # table-driven checks (7764)
+    make test      # table-driven checks (8911)
     make exhibit   # renders the evidence WAVs into build/
     make           # also builds the live driver
 

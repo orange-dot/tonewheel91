@@ -101,13 +101,14 @@ feature with a source and an owning milestone:
 
 1. **Non-sine wheel EMF** — tooth profile and magnetic-circuit
    nonlinearity add harmonic content and asymmetry, per wheel and
-   IMD-free (constants sec. 12) — M7; the shared-preamp IMD stays a
-   separate stage (M5).
+   IMD-free (constants sec. 12) — **landed at M7**; the shared-preamp
+   IMD stays a separate stage (M5).
 2. **Motion AM ("shimmer")** — shaft eccentricity and bearing play
-   modulate each wheel at its own rotation rate (constants sec. 12) — M7.
+   modulate each wheel at its own rotation rate (constants sec. 12) —
+   **landed at M7**.
 3. **Leakage/crosstalk** — magnetic and capacitive bleed follows the
    physical bin/shaft layout, not the musical scale (constants sec. 13) —
-   M7; the `leak` frame slot exists since M1.
+   **landed at M7**; the `leak` frame slot exists since M1.
 4. **Key click** — nine asynchronous contacts switching live signals
    (constants sec. 7) — **landed at M2**.
 5. **Foldback** — the finite wheel set borrows top/bottom harmonics,

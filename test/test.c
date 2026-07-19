@@ -318,9 +318,10 @@ static double organ_rms(tw_organ *o, int frames) {
     return sqrt(acc / frames);
 }
 
-static void run_script(float *dst, int frames) {
+static void run_script(float *dst, int frames, float wear) {
     tw_organ o;
     tw_organ_init(&o, 48000.0f);
+    if (wear >= 0.0f) tw_organ_set_wear(&o, wear); /* < 0: shipped default */
     for (int i = 0; i < frames; i++) {
         if (i == 4800) tw_organ_note(&o, 60, true, 90);
         if (i == 9600) tw_organ_set_drawbar(&o, 4, 6);
@@ -333,6 +334,9 @@ static void test_organ(void) {
     static const uint8_t reg16[TW_DRAWBARS] = { 8, 0, 0, 0, 0, 0, 0, 0, 0 };
     tw_organ o;
     tw_organ_init(&o, 48000.0f);
+    /* M7: the shipped default carries the sec 13 idle floor; contact
+     * machinery is probed on the idealized (wear 0) reference. */
+    tw_organ_set_wear(&o, 0.0f);
     for (int i = 0; i < 100; i++)
         CHECK(tw_organ_tick(&o) == 0.0f, "idle organ must be silent");
 
@@ -367,16 +371,20 @@ static void test_organ(void) {
         CHECK(a.gen.keyed_target[w] == b.gen.keyed_target[w],
               "velocity leaked into loudness at wheel %d", w + 1);
 
-    /* out-of-compass notes are ignored and counted */
+    /* out-of-compass notes are ignored and counted (idealized: the M7
+     * default's idle floor would mask the silence assertion) */
     tw_organ_init(&o, 48000.0f);
+    tw_organ_set_wear(&o, 0.0f);
     tw_organ_note(&o, 35, true, 100);
     tw_organ_note(&o, 97, true, 100);
     CHECK(o.out_of_compass == 2, "compass counter, got %u", o.out_of_compass);
     for (int i = 0; i < 4800; i++)
         CHECK(tw_organ_tick(&o) == 0.0f, "compass notes must stay silent");
 
-    /* note-off during the stagger window must settle to silence */
+    /* note-off during the stagger window must settle to silence
+     * (idealized, as above) */
     tw_organ_init(&o, 48000.0f);
+    tw_organ_set_wear(&o, 0.0f);
     tw_organ_note(&o, 60, true, 1); /* slowest press, ~15 ms stagger */
     for (int i = 0; i < 240; i++) (void)tw_organ_tick(&o); /* 5 ms in */
     tw_organ_note(&o, 60, false, 0);
@@ -384,8 +392,9 @@ static void test_organ(void) {
     double tail = organ_rms(&o, 4800);
     CHECK(tail < 1e-6, "mid-stagger release leaves residue rms %.2e", tail);
 
-    /* panic empties everything immediately */
+    /* panic empties everything immediately (idealized, as above) */
     tw_organ_init(&o, 48000.0f);
+    tw_organ_set_wear(&o, 0.0f);
     tw_organ_note(&o, 60, true, 127);
     tw_organ_note(&o, 64, true, 127);
     for (int i = 0; i < 9600; i++) (void)tw_organ_tick(&o);
@@ -406,8 +415,8 @@ static void test_organ(void) {
 
     /* two identical scripted runs are bit-identical */
     static float r1[19200], r2[19200];
-    run_script(r1, 19200);
-    run_script(r2, 19200);
+    run_script(r1, 19200, -1.0f);
+    run_script(r2, 19200, -1.0f);
     CHECK(memcmp(r1, r2, sizeof r1) == 0, "scripted runs differ");
     CHECK(tw_fnv1a64(r1, sizeof r1, 0) == tw_fnv1a64(r2, sizeof r2, 0),
           "scripted FNV differs");
@@ -750,16 +759,20 @@ static void test_scanner_bass_split(void) {
     }
 
     /* organ: 16'-only lowest key sounds wheel 13 alone (65.4 Hz), all of
-     * it below the sec 9 bass line — V3 on is bit-identical to off */
+     * it below the sec 9 bass line — V3 on is bit-identical to off.
+     * Idealized (wear 0): the M7 bleed bus is full-band and rides the
+     * line, which is its own test — this one probes the bass split. */
     static const uint8_t reg16[TW_DRAWBARS] = { 8, 0, 0, 0, 0, 0, 0, 0, 0 };
     static float on_buf[24000], off_buf[24000];
     tw_organ a, b;
     tw_organ_init(&a, 48000.0f);
+    tw_organ_set_wear(&a, 0.0f);
     tw_organ_set_registration(&a, reg16);
     tw_organ_set_vibrato(&a, TW_VIB_V3);
     tw_organ_note(&a, 36, true, 127);
     for (int i = 0; i < 24000; i++) on_buf[i] = tw_organ_tick(&a);
     tw_organ_init(&b, 48000.0f);
+    tw_organ_set_wear(&b, 0.0f);
     tw_organ_set_registration(&b, reg16);
     tw_organ_note(&b, 36, true, 127);
     for (int i = 0; i < 24000; i++) off_buf[i] = tw_organ_tick(&b);
@@ -781,9 +794,10 @@ static void test_scanner_bass_split(void) {
           "a 2 kHz wheel must be audibly swept by V3");
 }
 
-static void run_vib_script(float *dst, int frames) {
+static void run_vib_script(float *dst, int frames, float wear) {
     tw_organ o;
     tw_organ_init(&o, 48000.0f);
+    if (wear >= 0.0f) tw_organ_set_wear(&o, wear);
     for (int i = 0; i < frames; i++) {
         if (i == 2400) tw_organ_note(&o, 72, true, 100);
         if (i == 4800) tw_organ_set_vibrato(&o, TW_VIB_V3);
@@ -822,8 +836,8 @@ static void test_scanner_wiring(void) {
 
     /* scripted vibrato render: two runs bit-identical */
     static float r1[19200], r2[19200];
-    run_vib_script(r1, 19200);
-    run_vib_script(r2, 19200);
+    run_vib_script(r1, 19200, -1.0f);
+    run_vib_script(r2, 19200, -1.0f);
     CHECK(memcmp(r1, r2, sizeof r1) == 0, "vibrato script runs differ");
     CHECK(tw_fnv1a64(r1, sizeof r1, 0) == tw_fnv1a64(r2, sizeof r2, 0),
           "vibrato FNV differs");
@@ -1025,9 +1039,10 @@ static void test_drive_highpass(void) {
     CHECK(tw_fabsf(y) < 1e-5f, "DC must be blocked, got %e", (double)y);
 }
 
-static void run_drive_script(float *dst, int frames) {
+static void run_drive_script(float *dst, int frames, float wear) {
     tw_instrument ins;
     tw_instrument_init(&ins, 48000.0f);
+    if (wear >= 0.0f) tw_organ_set_wear(&ins.organ, wear);
     for (int i = 0; i < frames; i++) {
         if (i == 2400) {
             tw_organ_note(&ins.organ, 60, true, 100);
@@ -1074,8 +1089,10 @@ static void test_instrument(void) {
     CHECK(tw_fnv1a64(ia, sizeof ia, 0) == tw_fnv1a64(ib, sizeof ib, 0),
           "drive 0 FNV differs from the organ's");
 
-    /* silence stays exactly silent at any drive */
+    /* silence stays exactly silent at any drive (idealized: the M7
+     * default's idle floor is by design nonzero and drive-visible) */
     tw_instrument_init(&ins, 48000.0f);
+    tw_organ_set_wear(&ins.organ, 0.0f);
     tw_instrument_set_drive(&ins, 1.0f);
     int noisy = 0;
     for (int i = 0; i < 4800; i++)
@@ -1107,8 +1124,8 @@ static void test_instrument(void) {
 
     /* scripted two-run determinism with the knob moving */
     static float r1[19200], r2[19200];
-    run_drive_script(r1, 19200);
-    run_drive_script(r2, 19200);
+    run_drive_script(r1, 19200, -1.0f);
+    run_drive_script(r2, 19200, -1.0f);
     CHECK(memcmp(r1, r2, sizeof r1) == 0, "drive script runs differ");
     CHECK(tw_fnv1a64(r1, sizeof r1, 0) == tw_fnv1a64(r2, sizeof r2, 0),
           "drive FNV differs");
@@ -1581,9 +1598,10 @@ static void test_rotary_amp(void) {
     CHECK(r.amp.drive == 0.0f, "NaN rotary drive must clamp to 0");
 }
 
-static void run_rotary_script(float *dst, int frames) {
+static void run_rotary_script(float *dst, int frames, float wear) {
     tw_instrument ins;
     tw_instrument_init(&ins, 48000.0f);
+    if (wear >= 0.0f) tw_organ_set_wear(&ins.organ, wear);
     for (int i = 0; i < frames; i++) {
         if (i == 2400) {
             tw_organ_note(&ins.organ, 60, true, 100);
@@ -1657,11 +1675,440 @@ static void test_rotary_instrument(void) {
 
     /* scripted two-run determinism with modes and knobs moving */
     static float r1[2 * 19200], r2[2 * 19200];
-    run_rotary_script(r1, 19200);
-    run_rotary_script(r2, 19200);
+    run_rotary_script(r1, 19200, -1.0f);
+    run_rotary_script(r2, 19200, -1.0f);
     CHECK(memcmp(r1, r2, sizeof r1) == 0, "rotary script runs differ");
     CHECK(tw_fnv1a64(r1, sizeof r1, 0) == tw_fnv1a64(r2, sizeof r2, 0),
           "rotary FNV differs");
+}
+
+/* --- M7: wear — the structured-deviation banks (constants.md 11-13) --- */
+
+/* Wear oracle constants — the test's own copies of sections 11.1/12/13. */
+static const uint64_t WEAR_SEED = 0x7765617274773931u; /* [decision]     */
+static const double WEAR_LEVEL_SPREAD = 0.12;          /* [FOLK] sec 11.1 */
+static const double WEAR_ZONE_TRIM[3] = { 0.0, -0.02, 0.02 }; /* [FOLK] */
+
+static uint64_t wear_mix64(uint64_t *s) { /* the sec 12 splitmix64 */
+    uint64_t z = (*s += 0x9e3779b97f4a7c15u);
+    z = (z ^ z >> 30) * 0xbf58476d1ce4e5b9u;
+    z = (z ^ z >> 27) * 0x94d049bb133111ebu;
+    return z ^ z >> 31;
+}
+
+static void test_wear_level(void) {
+    /* M7-1: wear = 0 is the idealized flat profile, exactly */
+    tw_generator g;
+    tw_generator_init(&g, 48000.0f, 0.001f);
+    CHECK(g.wear == 0.0f, "fresh generator must start at wear 0");
+    for (int i = 0; i < TW_WHEELS; i++)
+        CHECK(g.level[i] == 1.0f, "wear 0 level[%d] must be exactly 1", i);
+
+    /* wear up and back to 0 restores the exact flat bank, and a render
+     * after the round trip is bit-identical to a never-worn one */
+    tw_generator_set_wear(&g, 0.7f);
+    tw_generator_set_wear(&g, 0.0f);
+    for (int i = 0; i < TW_WHEELS; i++)
+        CHECK(g.level[i] == 1.0f, "wear 0.7 -> 0 level[%d] must restore 1", i);
+    tw_generator h;
+    tw_generator_init(&h, 48000.0f, 0.001f);
+    float t[TW_WHEELS] = { 0 };
+    t[36] = 1.0f;
+    t[60] = 0.5f;
+    tw_generator_set_keyed_targets(&g, t);
+    tw_generator_set_keyed_targets(&h, t);
+    int id_bad = 0;
+    for (int i = 0; i < 4800; i++) {
+        tw_frame fg = tw_generator_tick(&g), fh = tw_generator_tick(&h);
+        if (fg.keyed != fh.keyed || fg.percussion != fh.percussion
+            || fg.leak != fh.leak || fg.keyed_low != fh.keyed_low)
+            id_bad++;
+    }
+    CHECK(id_bad == 0, "wear round trip broke identity at %d samples", id_bad);
+
+    /* wear = 1: the level law itself, against the oracle (sec 11.1) —
+     * spread field is bits 0..20 of the per-wheel draw */
+    tw_generator_set_wear(&g, 1.0f);
+    int nonflat = 0;
+    uint64_t s = WEAR_SEED;
+    for (int i = 0; i < TW_WHEELS; i++) {
+        uint64_t d = wear_mix64(&s);
+        double ul = (double)(d & 0x1fffffu) / 2097152.0;
+        int zone = (i + 1 <= 43) ? 0 : (i + 1 <= 48) ? 1 : 2;
+        double want = 1.0 + WEAR_LEVEL_SPREAD * (2.0 * ul - 1.0)
+                    + WEAR_ZONE_TRIM[zone];
+        CHECK(fabs((double)g.level[i] - want) < 1e-6,
+              "wear 1 level[%d] = %f, oracle %f", i, (double)g.level[i], want);
+        CHECK(g.level[i] > 0.8f && g.level[i] < 1.2f,
+              "wear 1 level[%d] = %f out of the +-spread+trim bound",
+              i, (double)g.level[i]);
+        if (g.level[i] != 1.0f) nonflat++;
+    }
+    CHECK(nonflat > 80, "wear 1 left %d/91 wheels off flat, expected ~all",
+          nonflat);
+
+    /* deviation scales with the knob (half wear ~ half deviation) */
+    tw_generator_set_wear(&g, 0.5f);
+    s = WEAR_SEED;
+    for (int i = 0; i < TW_WHEELS; i++) {
+        uint64_t d = wear_mix64(&s);
+        double ul = (double)(d & 0x1fffffu) / 2097152.0;
+        int zone = (i + 1 <= 43) ? 0 : (i + 1 <= 48) ? 1 : 2;
+        double dev1 = WEAR_LEVEL_SPREAD * (2.0 * ul - 1.0) + WEAR_ZONE_TRIM[zone];
+        CHECK(fabs((double)g.level[i] - (1.0 + 0.5 * dev1)) < 1e-6,
+              "wear must scale the deviation linearly at wheel %d", i + 1);
+    }
+
+    /* hostile knob values sanitize */
+    tw_generator_set_wear(&g, 0.0f / 0.0f);
+    CHECK(g.wear == 0.0f, "NaN wear must clamp to 0");
+    tw_generator_set_wear(&g, 7.0f);
+    CHECK(g.wear == 1.0f, "huge wear must clamp to 1");
+    tw_generator_set_wear(&g, -3.0f);
+    CHECK(g.wear == 0.0f, "negative wear must clamp to 0");
+}
+
+/* Render one wheel alone at a given wear and DFT its harmonics. */
+static float wear_buf[48000];
+
+static void wear_render_wheel(int wheel, float wear, int frames) {
+    tw_generator g;
+    tw_generator_init(&g, 48000.0f, 0.001f);
+    tw_generator_set_wear(&g, wear);
+    float t[TW_WHEELS] = { 0 };
+    t[wheel - 1] = 1.0f;
+    tw_generator_set_keyed_targets(&g, t);
+    for (int i = 0; i < 4800; i++) (void)tw_generator_tick(&g); /* settle */
+    for (int i = 0; i < frames; i++) wear_buf[i] = tw_generator_tick(&g).keyed;
+}
+
+static void test_wear_tooth(void) {
+    /* M7-2: the 4/teeth depth law against the oracle (sec 12.1) */
+    tw_generator g;
+    tw_generator_init(&g, 48000.0f, 0.001f);
+    for (int i = 0; i < TW_WHEELS; i++)
+        CHECK(g.t2[i] == 0.0f && g.t3[i] == 0.0f,
+              "wear 0 toothing[%d] must be exactly 0", i);
+    tw_generator_set_wear(&g, 1.0f);
+    for (int i = 0; i < TW_WHEELS; i++) {
+        int wheel = i + 1;
+        int teeth = (wheel <= 84) ? 2 << ((wheel - 1) / 12) : 192;
+        double f4 = 4.0 / teeth;
+        CHECK(fabs((double)g.t2[i] - 0.015 * f4) < 1e-7
+                  && fabs((double)g.t3[i] - 0.03 * f4) < 1e-7,
+              "toothing law at wheel %d: t2 %f t3 %f, teeth %d",
+              wheel, (double)g.t2[i], (double)g.t3[i], teeth);
+    }
+
+    /* spectral: wheel 13 (65.38 Hz, 4 teeth) carries its 2nd and 3rd
+     * partials at the pinned depths; the idealized wheel does not */
+    double f1 = tw_wheel_freq_hz(13);
+    wear_render_wheel(13, 1.0f, 48000);
+    double h1 = scan_mag(wear_buf, 48000, f1, 48000.0);
+    double h2 = scan_mag(wear_buf, 48000, 2.0 * f1, 48000.0);
+    double h3 = scan_mag(wear_buf, 48000, 3.0 * f1, 48000.0);
+    CHECK(h3 / h1 > 0.6 * 0.03 && h3 / h1 < 1.4 * 0.03,
+          "wheel 13 3rd partial %.4f of H1, pinned 0.03", h3 / h1);
+    CHECK(h2 / h1 > 0.5 * 0.015,
+          "wheel 13 2nd partial %.4f of H1, pinned 0.015", h2 / h1);
+    wear_render_wheel(13, 0.0f, 48000);
+    double h3_id = scan_mag(wear_buf, 48000, 3.0 * f1, 48000.0)
+                 / scan_mag(wear_buf, 48000, f1, 48000.0);
+    CHECK(h3_id < 0.002, "idealized wheel 13 must stay a near-sine, H3 %.5f",
+          h3_id);
+
+    /* the top wheels stay near-sine even at full wear (4/192 scaling) */
+    CHECK(g.t3[90] < 7e-4, "wheel 91 toothing must be tiny, got %f",
+          (double)g.t3[90]);
+}
+
+/* Magnitude of the demodulated-envelope ripple at f_hz, on env[j0..j1)
+ * with its mean removed. */
+static double env_ripple(const double *env, int j0, int j1, double f_hz,
+                         double fs) {
+    double mean = 0.0;
+    for (int j = j0; j < j1; j++) mean += env[j];
+    mean /= (double)(j1 - j0);
+    double re = 0.0, im = 0.0;
+    for (int j = j0; j < j1; j++) {
+        double w = TAU_D * f_hz * (double)(j - j0) / fs;
+        re += (env[j] - mean) * cos(w);
+        im -= (env[j] - mean) * sin(w);
+    }
+    /* normalized: a pure A(1 + d sin) envelope returns d */
+    return 2.0 * sqrt(re * re + im * im) / (mean * (double)(j1 - j0));
+}
+
+static void test_wear_motion_am(void) {
+    /* M7-3: the rotation-rate law — every wheel's AM accumulator runs
+     * at f_wheel/teeth = 20 rev/s x class ratio (sec 12) */
+    tw_generator g;
+    tw_generator_init(&g, 48000.0f, 0.001f);
+    for (int i = 0; i < TW_WHEELS; i++) {
+        int wheel = i + 1;
+        int teeth = (wheel <= 84) ? 2 << ((wheel - 1) / 12) : 192;
+        double want = (double)tw_wheel_freq_hz(wheel) / teeth / 48000.0;
+        CHECK(fabs((double)g.rev_step[i] - want) < 1e-9,
+              "rev rate at wheel %d: %e, want %e",
+              wheel, (double)g.rev_step[i], want);
+    }
+    CHECK(fabs((double)g.rev_step[45] * 48000.0 - 27.5) < 1e-4,
+          "wheel 46 must revolve at 27.5 Hz");
+    CHECK(g.am_g[45] == 0.0f, "wear 0 AM depth must be exactly 0");
+
+    /* the depth law against the per-wheel draw (bits 21..41, sec 11.1) */
+    tw_generator_set_wear(&g, 1.0f);
+    uint64_t s = WEAR_SEED;
+    for (int i = 0; i < TW_WHEELS; i++) {
+        uint64_t d = wear_mix64(&s);
+        double ua = (double)((d >> 21) & 0x1fffffu) / 2097152.0;
+        CHECK(fabs((double)g.am_g[i] - 0.05 * ua) < 1e-7,
+              "AM depth law at wheel %d: %f, draw says %f",
+              i + 1, (double)g.am_g[i], 0.05 * ua);
+    }
+    double want_d = (double)g.am_g[45]; /* wheel 46 drew ~0.034 */
+
+    /* demodulate a worn wheel 46: the envelope ripples at the wheel's
+     * own 27.5 Hz rotation rate, at the drawn depth, and not at
+     * neighbouring rates; the idealized wheel holds flat */
+    static double env[48000], frq[48000];
+    wear_render_wheel(46, 1.0f, 43200);
+    int n = rot_demod(wear_buf, 43200, 440.0, 48000.0, 218, env, frq);
+    int j0 = 500, j1 = n - 500;
+    double d_rev = env_ripple(env, j0, j1, 27.5, 48000.0);
+    double d_lo = env_ripple(env, j0, j1, 21.0, 48000.0);
+    double d_hi = env_ripple(env, j0, j1, 34.0, 48000.0);
+    CHECK(d_rev > 0.75 * want_d && d_rev < 1.25 * want_d,
+          "wheel 46 AM depth %.4f at 27.5 Hz, draw says %.4f", d_rev, want_d);
+    CHECK(d_rev > 5.0 * d_lo && d_rev > 5.0 * d_hi,
+          "AM must sit at the rotation rate: 27.5 Hz %.4f vs %.4f/%.4f",
+          d_rev, d_lo, d_hi);
+    wear_render_wheel(46, 0.0f, 43200);
+    n = rot_demod(wear_buf, 43200, 440.0, 48000.0, 218, env, frq);
+    double d_id = env_ripple(env, j0, n - 500, 27.5, 48000.0);
+    CHECK(d_id < 1e-4, "idealized wheel 46 must not shimmer, got %.6f", d_id);
+}
+
+static void test_wear_pickup(void) {
+    /* M7-4: the alpha law (sec 12.1 [AS16]: alpha = wear x 0.3, cubic
+     * series coefficients alpha/2 and alpha^2/6) */
+    tw_generator g;
+    tw_generator_init(&g, 48000.0f, 0.001f);
+    CHECK(g.pk2 == 0.0f && g.pk3 == 0.0f,
+          "wear 0 pickup must be exactly linear");
+    tw_generator_set_wear(&g, 1.0f);
+    CHECK(fabs((double)g.pk2 - 0.15) < 1e-7
+              && fabs((double)g.pk3 - 0.015) < 1e-7,
+          "alpha 0.3 series: pk2 %f pk3 %f", (double)g.pk2, (double)g.pk3);
+
+    /* harmonics: wheel 73 (2092 Hz, toothing ~1e-3 — alpha dominates):
+     * the x^2 term puts H2/H1 at ~alpha/4 = 0.074, scaling with wear */
+    double f1 = tw_wheel_freq_hz(73);
+    wear_render_wheel(73, 1.0f, 48000);
+    double h1 = scan_mag(wear_buf, 48000, f1, 48000.0);
+    double h2 = scan_mag(wear_buf, 48000, 2.0 * f1, 48000.0);
+    double full = h2 / h1;
+    CHECK(full > 0.063 && full < 0.086,
+          "worn pickup H2/H1 %.4f, alpha/4 says ~0.074", full);
+    double dc = 0.0;
+    for (int i = 0; i < 48000; i++) dc += (double)wear_buf[i];
+    dc /= 48000.0;
+    CHECK(fabs(dc) < 1e-3,
+          "the static term must stay subtracted, DC %.5f", dc);
+
+    wear_render_wheel(73, 0.5f, 48000);
+    double half = scan_mag(wear_buf, 48000, 2.0 * f1, 48000.0)
+                / scan_mag(wear_buf, 48000, f1, 48000.0);
+    CHECK(half / full > 0.42 && half / full < 0.58,
+          "H2 must scale with wear: half/full = %.3f", half / full);
+
+    wear_render_wheel(73, 0.0f, 48000);
+    double id = scan_mag(wear_buf, 48000, 2.0 * f1, 48000.0)
+              / scan_mag(wear_buf, 48000, f1, 48000.0);
+    CHECK(id < 1e-3, "idealized pickup must add no H2, got %.5f", id);
+
+    /* IMD-free (sec 12 [AS16]): each wheel meets only its own pickup,
+     * so two worn wheels distort but never intermodulate — H2 of wheel
+     * 46 present, f1+f2 sum tone absent */
+    tw_generator_init(&g, 48000.0f, 0.001f);
+    tw_generator_set_wear(&g, 1.0f);
+    float t[TW_WHEELS] = { 0 };
+    t[45] = 1.0f; /* 440.00 Hz */
+    t[48] = 1.0f; /* 523.08 Hz */
+    tw_generator_set_keyed_targets(&g, t);
+    for (int i = 0; i < 4800; i++) (void)tw_generator_tick(&g);
+    for (int i = 0; i < 48000; i++) wear_buf[i] = tw_generator_tick(&g).keyed;
+    double fa = tw_wheel_freq_hz(46), fb = tw_wheel_freq_hz(49);
+    double a1 = scan_mag(wear_buf, 48000, fa, 48000.0);
+    double a2 = scan_mag(wear_buf, 48000, 2.0 * fa, 48000.0);
+    double imd = scan_mag(wear_buf, 48000, fa + fb, 48000.0);
+    CHECK(a2 / a1 > 0.05, "worn pair must still distort, H2 %.4f", a2 / a1);
+    CHECK(imd / a1 < 2e-3,
+          "per-wheel pickups must not intermodulate: %.5f at f1+f2", imd / a1);
+}
+
+static void test_wear_leakage(void) {
+    /* M7-5: the bleed follows the bin/shaft layout (sec 13.1) — three
+     * structural classes from the matrix contraction, not a function of
+     * musical adjacency */
+    tw_generator g;
+    tw_generator_init(&g, 48000.0f, 0.001f);
+    for (int i = 0; i < TW_WHEELS; i++)
+        CHECK(g.leak_gain[i] == 0.0f, "wear 0 leak[%d] must be exactly 0", i);
+    tw_generator_set_wear(&g, 1.0f);
+    const double S = 3e-3, B = 8e-4; /* sec 13.1 [FOLK] */
+    for (int i = 0; i < TW_WHEELS; i++) {
+        int wheel = i + 1;
+        int partner = wheel <= 36 ? wheel + 48
+                    : wheel <= 41 ? 0
+                    : wheel <= 48 ? wheel + 43
+                    : wheel <= 84 ? wheel - 48 : wheel - 43;
+        int mates = ((wheel >= 13 && wheel <= 17)
+                     || (wheel >= 61 && wheel <= 65)) ? 1 : 2;
+        double want = (partner ? S : 0.0) + B * mates;
+        CHECK(fabs((double)g.leak_gain[i] - want) < 1e-9,
+              "leak class at wheel %d: %e, matrix says %e",
+              wheel, (double)g.leak_gain[i], want);
+    }
+    /* the structure in one line each: blank-partner wheels are the
+     * quietest; adjacent wheel numbers 36/37 split across classes;
+     * shaft pairs (20/68, 42/85) share theirs */
+    CHECK(g.leak_gain[36] < g.leak_gain[35] && g.leak_gain[36] < g.leak_gain[37 + 5],
+          "wheel 37 (blank partner) must bleed least");
+    CHECK(g.leak_gain[35] != g.leak_gain[36],
+          "bleed must follow bins, not neighbouring wheel numbers");
+    CHECK(g.leak_gain[19] == g.leak_gain[67] && g.leak_gain[41] == g.leak_gain[84],
+          "shaft pairs must share a bleed class");
+
+    /* the bus itself: an unkeyed worn generator hums its floor — wheel
+     * 46 present at its class weight (x level profile), silence at 0 */
+    for (int i = 0; i < 4800; i++) (void)tw_generator_tick(&g);
+    static float lk[48000];
+    double rms = 0.0;
+    for (int i = 0; i < 48000; i++) {
+        lk[i] = tw_generator_tick(&g).leak;
+        rms += (double)lk[i] * lk[i];
+    }
+    rms = sqrt(rms / 48000.0);
+    CHECK(rms > 0.01 && rms < 0.06,
+          "idle floor rms %.4f at wear 1, expected ~0.03 (-30 dB)", rms);
+    double a46 = scan_mag(lk, 48000, tw_wheel_freq_hz(46), 48000.0)
+               / (48000.0 / 2.0);
+    double want46 = (double)g.leak_gain[45] * (double)g.level[45];
+    CHECK(fabs(a46 / want46 - 1.0) < 0.3,
+          "440 Hz line in the floor at %.2e, class weight %.2e", a46, want46);
+
+    /* organ routing: an idle organ carries the floor once worn, and
+     * stays exactly silent idealized (organ default is M7-7's slice) */
+    tw_organ o;
+    tw_organ_init(&o, 48000.0f);
+    tw_generator_set_wear(&o.gen, 1.0f);
+    double orms = organ_rms(&o, 4800);
+    CHECK(orms > 0.005, "worn idle organ must carry its floor, rms %.4f", orms);
+    tw_generator_set_wear(&o.gen, 0.0f);
+    for (int i = 0; i < 100; i++)
+        CHECK(tw_organ_tick(&o) == 0.0f, "idealized idle organ must be silent");
+}
+
+static float hum_buf[192000];
+
+static void test_wear_hum(void) {
+    /* M7-6: the 60 Hz line (sec 1) — law first */
+    tw_generator g;
+    tw_generator_init(&g, 48000.0f, 0.001f);
+    CHECK(g.hum_gain == 0.0f, "wear 0 hum must be exactly 0");
+    CHECK(fabs((double)g.hum_step * 48000.0 - 60.0) < 1e-4,
+          "hum must sit at 60 Hz, got %.2f", (double)g.hum_step * 48000.0);
+    tw_generator_set_wear(&g, 1.0f);
+    CHECK(fabs((double)g.hum_gain - 1e-3) < 1e-9,
+          "hum level at wear 1 must be the pinned 1e-3");
+
+    /* presence: a 4 s idle worn organ carries the 60 Hz line at the
+     * pinned level (4 s separates it from wheel 12's 61.7 Hz floor
+     * line); the idealized organ carries nothing at all */
+    tw_organ o;
+    tw_organ_init(&o, 48000.0f);
+    tw_generator_set_wear(&o.gen, 1.0f);
+    for (int i = 0; i < 4800; i++) (void)tw_organ_tick(&o);
+    for (int i = 0; i < 192000; i++) hum_buf[i] = tw_organ_tick(&o);
+    double a60 = scan_mag(hum_buf, 192000, 60.0, 48000.0) / (192000.0 / 2.0);
+    CHECK(a60 > 0.6e-3 && a60 < 1.4e-3,
+          "60 Hz line at %.2e, pinned 1e-3", a60);
+    tw_organ_init(&o, 48000.0f);
+    tw_organ_set_wear(&o, 0.0f); /* the idealized reference, not the default */
+    for (int i = 0; i < 4800; i++) (void)tw_organ_tick(&o);
+    for (int i = 0; i < 192000; i++) hum_buf[i] = tw_organ_tick(&o);
+    CHECK(scan_mag(hum_buf, 192000, 60.0, 48000.0) == 0.0,
+          "idealized organ must carry no hum at all");
+}
+
+/* Pre-M7 baseline signatures of the four scripted renders, captured on
+ * the M6 tree (7764 checks) the day M7 landed: wear = 0 must reproduce
+ * each bit-for-bit — the M7-7 identity contract. */
+static const uint64_t PRE_M7_SCRIPT_FNV = 0xf0b4c7c3f7705480u;
+static const uint64_t PRE_M7_VIB_FNV = 0xb01485a1702721a3u;
+static const uint64_t PRE_M7_DRIVE_FNV = 0x730ac52bff1f129du;
+static const uint64_t PRE_M7_ROTARY_FNV = 0xf1d10bfe4b6cab4du;
+
+static void test_wear_knob(void) {
+    /* M7-7: one knob; the shipped default is nonzero (design.md — a
+     * factory-new unit already deviates) and sanitizes hostile input */
+    tw_organ o;
+    tw_organ_init(&o, 48000.0f);
+    CHECK(TW_WEAR_DEFAULT > 0.0f, "the shipped default must be nonzero");
+    CHECK(o.gen.wear == TW_WEAR_DEFAULT,
+          "a fresh organ must ship at the default wear");
+    tw_organ_set_wear(&o, 0.0f / 0.0f);
+    CHECK(o.gen.wear == 0.0f, "NaN wear must clamp to 0");
+    tw_organ_set_wear(&o, 9.0f);
+    CHECK(o.gen.wear == 1.0f, "huge wear must clamp to 1");
+
+    /* the shipped idle floor sits near the sec 13.1 -44 dB estimate */
+    tw_organ_init(&o, 48000.0f);
+    for (int i = 0; i < 4800; i++) (void)tw_organ_tick(&o);
+    double floor_rms = organ_rms(&o, 48000);
+    CHECK(floor_rms > 1e-3 && floor_rms < 2e-2,
+          "shipped idle floor rms %.5f, expected ~6e-3 (-44 dB)", floor_rms);
+
+    /* wear = 0 reproduces every pre-M7 scripted render bit-for-bit */
+    static float r[2 * 19200];
+    run_script(r, 19200, 0.0f);
+    CHECK(tw_fnv1a64(r, 19200 * sizeof(float), 0) == PRE_M7_SCRIPT_FNV,
+          "wear 0 organ script must equal the pre-M7 signature");
+    run_vib_script(r, 19200, 0.0f);
+    CHECK(tw_fnv1a64(r, 19200 * sizeof(float), 0) == PRE_M7_VIB_FNV,
+          "wear 0 vibrato script must equal the pre-M7 signature");
+    run_drive_script(r, 19200, 0.0f);
+    CHECK(tw_fnv1a64(r, 19200 * sizeof(float), 0) == PRE_M7_DRIVE_FNV,
+          "wear 0 drive script must equal the pre-M7 signature");
+    run_rotary_script(r, 19200, 0.0f);
+    CHECK(tw_fnv1a64(r, sizeof r, 0) == PRE_M7_ROTARY_FNV,
+          "wear 0 rotary script must equal the pre-M7 signature");
+
+    /* ...and the shipped default is audibly its own render */
+    run_script(r, 19200, -1.0f);
+    CHECK(tw_fnv1a64(r, 19200 * sizeof(float), 0) != PRE_M7_SCRIPT_FNV,
+          "the shipped default must not be the idealized render");
+
+    /* mid-note wear -> 0 rejoins the never-worn render bit-exactly:
+     * wear scales gain banks only, phase state advances identically */
+    tw_organ a, b;
+    tw_organ_init(&a, 48000.0f); /* ships worn */
+    tw_organ_init(&b, 48000.0f);
+    tw_organ_set_wear(&b, 0.0f);
+    tw_organ_note(&a, 60, true, 100);
+    tw_organ_note(&b, 60, true, 100);
+    int ndiff = 0;
+    for (int i = 0; i < 4800; i++)
+        if (tw_organ_tick(&a) != tw_organ_tick(&b)) ndiff++;
+    CHECK(ndiff > 1000, "default wear changed only %d of 4800 samples", ndiff);
+    tw_organ_set_wear(&a, 0.0f);
+    int rejoin_bad = 0;
+    for (int i = 0; i < 4800; i++)
+        if (tw_organ_tick(&a) != tw_organ_tick(&b)) rejoin_bad++;
+    CHECK(rejoin_bad == 0,
+          "wear back to 0 must rejoin the idealized render, %d differ",
+          rejoin_bad);
 }
 
 int main(void) {
@@ -1695,6 +2142,13 @@ int main(void) {
     test_rotary_stereo();
     test_rotary_amp();
     test_rotary_instrument();
+    test_wear_level();
+    test_wear_tooth();
+    test_wear_motion_am();
+    test_wear_pickup();
+    test_wear_leakage();
+    test_wear_hum();
+    test_wear_knob();
     printf("%d checks, %d failures\n", checks, fails);
     return fails ? 1 : 0;
 }

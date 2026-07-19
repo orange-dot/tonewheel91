@@ -108,6 +108,11 @@ reasons). Citation tags:
 - Mains hum fundamental: default **60 Hz** (the reference-era machines and
   canonical recordings are 60 Hz units); one documented constant, switchable
   to 50 [decision].
+- Hum level (M7): **1e-3 at wear = 1** (-60 dB vs a unit wheel) [FOLK],
+  scaled by the `wear` knob, injected on the generator bleed bus so it
+  passes scanner and swell with the leakage [decision]; exactly absent
+  at wear = 0. The 50 Hz switch stays the `HUM_HZ` constant in
+  `generator.c` pending a real control.
 
 ## 2. Gear table (12 driver/driven tooth pairs)
 
@@ -640,6 +645,26 @@ modeling the actual circuit.
   across **73 mH / 153 mH** transformer windings [ISMA19 Fig 1] — anchors
   for any future circuit-level pickup/filter model.
 
+### 11.1 M7 level profile — pinned
+
+The `wear` knob scales every value here linearly; `wear = 0` restores
+the exact flat reference. By-ear verdicts against reference recordings
+override all of it (section 16).
+
+- Per-unit spread: uniform per wheel in **+-0.12 (~+-1 dB) at wear = 1**
+  [FOLK — alignment-tolerance folklore; the factory trimmed each wheel
+  to equal loudness by magnet position, sec 11, so the shipped deviation
+  is the residual of that procedure].
+- Zone coloration: the three conditioning zones (sec 11) trimmed
+  **0 / -0.02 / +0.02** (<= 43 / 44..48 / 49..91) at wear = 1 [FOLK —
+  placeholder direction and size; a real value needs measurements or
+  ears].
+- Character draws: **one splitmix64 draw per wheel** at the fixed seed
+  `0x7765617274773931` [decision — sec 12's determinism rule], split
+  into 21-bit fields: bits 0..20 level spread, 21..41 motion-AM depth,
+  42..62 motion-AM phase (sec 12). Re-derived on every wear change, so
+  the knob is stateless.
+
 ## 12. Wheel waveform, pickup nonlinearity, and motion AM
 
 What keeps 91 near-sines from sounding like a bare additive synthesizer at
@@ -677,10 +702,55 @@ Measured ground truth: high-speed-camera plus oscilloscope study of a
   Model: per-wheel AM depth and phase, deterministic (fixed-seed
   splitmix64, one draw per wheel at init) [decision].
 - Depths (AM percent, toothing strength, alpha) are
-  character-of-one-unit, not machine constants: **open — pinned at M7 by
-  ear** behind the `wear` knob. `wear = 0` stays the idealized,
-  bit-identical-to-pre-M7 reference; the shipped default is nonzero,
-  because tolerance effects exist on a factory-new unit [decision].
+  character-of-one-unit, not machine constants: working values **pinned
+  at M7 in section 12.1** behind the `wear` knob; final judgement stays
+  by ear. `wear = 0` stays the idealized, bit-identical-to-pre-M7
+  reference; the shipped default is nonzero, because tolerance effects
+  exist on a factory-new unit [decision].
+
+### 12.1 M7 wheel-deviation set — pinned
+
+All depths scale linearly with `wear`; `wear = 0` zeroes every one of
+them exactly. All values below are working defaults awaiting the by-ear
+pass (section 16) unless tagged otherwise.
+
+- **Toothing** (the [ISMA19] iron nonlinearity): exact 2nd and 3rd
+  partials added on the wheel's own phase accumulator — per wheel and
+  IMD-free by construction, band-bounded by 3 x wheel 91 = 17.8 kHz <
+  any supported Nyquist [derived]. Depths follow **4/teeth** (stronger
+  for the cornered low-register geometries — the [ISMA19] observation
+  gives the shape [derived]; the anchors are folklore): at the 4-tooth
+  lowest manual octave, 2nd = **0.015**, 3rd = **0.03** at wear = 1
+  [FOLK]. Wheels 1..12 take the same law as a placeholder; their true
+  squarish profile (sec 3 / [AS16 eq 10]) stays out of scope below the
+  manual foldback floor.
+- **Motion AM**: one sinusoidal AM per wheel ([DAFx11]'s literature
+  form of the [ISMA19] wobble) at the wheel's own rotation rate
+  `f_wheel / teeth` (= 20 rev/s x class ratio: 16.3..30.9 Hz), applied
+  to the whole induced EMF. Per-wheel depth = draw x **0.05 max at
+  wear = 1** [FOLK]; per-wheel random start angle (draw bits 42..62,
+  taken at init — phase is state). The rotation accumulator always
+  advances, so a wear change never breaks the rejoin discipline.
+- **Pickup nonlinearity**: `y = (1 - exp(-alpha x))/alpha` with
+  **alpha = 0.3 at wear = 1** (the measured literature value [AS16];
+  scaling it by `wear` so the idealized pickup is exactly linear is
+  [decision]). Implemented as the cubic series
+  `x - (alpha/2) x^2 + (alpha^2/6) x^3` [derived]: the dropped quartic
+  term is alpha^3/24 ~ 1.1e-3 (~-59 dB) at full wear, and truncation
+  bounds the bandwidth expansion at 3 x wheel 91 = 17.8 kHz — alias-free
+  at every supported rate (the [AS16] aliasing caution). The x^2 term's
+  static component (-alpha/4 per unit wheel) is subtracted at the
+  source [decision]: the matching transformer (sec 5) passes no DC, and
+  carrying it forward would put a swell-scaled offset in every render.
+  Asymmetry check: the curve compresses the positive polarity and
+  expands the negative, per the measured pickup shape [AS16].
+- **Shipped default: `wear = 0.2`** [FOLK] — a factory-new unit's
+  tolerance effects (design.md deviation ledger); `wear = 0` stays the
+  idealized test reference that reproduces every pre-M7 signature
+  bit-exactly. The by-ear pass against reference recordings owns the
+  final value (section 16). The knob rebuilds gain banks only — no
+  smoothing — so it is a setup control, not a performance control
+  [decision]; no MIDI CC is assigned at M7.
 
 ## 13. Leakage structure (the wear/character matrix)
 
@@ -713,6 +783,28 @@ Measured ground truth: high-speed-camera plus oscilloscope study of a
   simplification]: crosstalk clearly audible in spectrograms at
   **-24..-6 dB**; -inf..-24 dB subtle. Physical-adjacency levels start
   below that band and tune upward by ear.
+
+### 13.1 M7 leakage — pinned
+
+- Model [decision]: the `leak` frame slot is a **static bleed bus** —
+  the idle-organ noise floor. Each wheel's weight on it is the sum of
+  its couplings to its physical neighbours' wires (the matrix above
+  contracted per wheel: every wire couples onward into the common
+  harness, all key contacts being live, sec 6). The bus taps the
+  conditioned wire signal (post-pickup, post-level: the per-pickup
+  filters shape what leaks [ISMA19]) and joins the keyed+percussion sum
+  ahead of the scanner line and swell [decision]; it rides the line
+  whole, its sub-80 Hz share being far below the bass-split's
+  audibility [decision].
+- Coupling strengths at wear = 1 [FOLK]: same-shaft **3e-3 (-50 dB)**,
+  same-bin **8e-4 (-62 dB)** per neighbour. The contraction yields
+  three structural classes — full-bin wheels (shaft + 2 mates,
+  4.6e-3), the r < 5 shaft pairs 13..17/61..65 (shaft + 1 mate,
+  3.8e-3), and the blank-partner wheels 37..41 (2 mates, 1.6e-3) — so
+  bleed follows the bin layout, not the musical order (adjacent wheel
+  numbers 36/37 sit in different classes). Aggregate idle floor
+  ~**-30 dB rms at wear = 1** (~-44 dB at the shipped default), below
+  the -24 dB clearly-audible band above, tuned upward by ear only.
 
 ## 14. Preamp and drive reference points
 
@@ -1031,5 +1123,5 @@ default the by-ear pass is expected to move.
 | scanner | **components + taps [DAFx16]; depth/rate [P45]; C-mode voicing target [P39]**; **M4 landed**: trapezoidal nodal ladder (no prewarp; edge 6575 Hz at 48 kHz, ~7.1 kHz at 192 kHz), C mix = (dry+wet)/2 [decision], bass bypass as the exact wheel-1..16 split [derived], CC84; measured V3 cyclical depth 1.48% (in band), peak 1.91% with the moving ripple. **Still open**: output level trim and every by-ear verdict (C-mode voicing vs [P39] treble-detune target, ripple strength) |
 | drive curves (bias depth, tilt) | **M5 landed** (section 14.1): saturator kernel [derived, tangent-bound rational], X_ref = 8, pregain 1..8 on drive^2, bias follower 5/50 ms at depth 0.5, coupling cap 10 Hz, CC85 — stage structure and unit behavior test-pinned. **Still open, by ear**: attack/release, bias depth, drive taper, any level trim; a wave-digital triode stage is the named upgrade if the ear demands it |
 | rotary numeric dynamics | **Crossover pinned: 800 Hz, 12 dB/oct, 16 ohm passive** [HX], corroborated by the factory spec sheet [RS] (was a guess). Construction [HX]: motors **mains-synchronous**; drum is **AM-only, ~200-800 Hz — no Doppler on it**. Drive mechanics pinned [RS]: **two motors per rotor** (large = tremolo; small = chorale, which *brakes*), **bass tremolo->chorale 5-8 s** (a service acceptance figure — first sourced inertia number), treble speed is an **installation choice** on a 3-step pulley (centre groove = normal). 50 Hz units run the **same** speed — a distinct 50 Hz pulley compensates; the earlier "50 Hz runs slower" was wrong. Construction now **corroborated by a teardown video [KX]** (two-motor assembly, relay speed-switch, belt drive, 15" woofer + tube amp + compression-driver horn) — second witness, no numbers. **Speeds pinned as [FOLK] working defaults** (tremolo ~400/~340 rpm, chorale ~40-50 rpm, horn spin-up ~1 s) — used for M6, tagged as folklore, **by-ear call overrides**; a [KX] frame-track cross-check confirms the chorale/tremolo *shape* but not the numbers (1x/2x + 30 fps aliasing). **Truly still open for a primary source:** motor pole count + 3-step pulley groove diameters (those derive every speed) and horn radius. [DAFx11]'s 2/6 Hz are its own dial settings, **not corroboration**; its +0.1 Hz mistuning is **withdrawn**, unsupported by [HX]. **M6 landed** on the 15.1 working set: crossover measured -3 dB at 800 Hz both sides, horn FM 50.9 Hz p-p on a 2 kHz tone at tremolo (geometry says 50.3), drum pitch residual 0.33 Hz (AM-only holds), AM floors 0.60 horn / 0.87 drum-mid / 0.97 drum-100 Hz, brake parks exact. **Still open, by ear:** every [FOLK] speed, all four transition taus, both AM depths, the Doppler swing, mic geometry, balance/width laws — the whole 15.1 [decision] column awaits reference recordings |
-| leakage/hum levels, level-profile spread | M7 — audible band starts ~-24 dB per [AS16] demos |
-| wheel motion-AM depths, pickup alpha, low-register toothing, default `wear` | M7 — mechanisms sourced [ISMA19/AS16/DAFx11]; depths by ear |
+| leakage/hum levels, level-profile spread | **M7 landed** (secs 11.1/13.1): level spread +-0.12 + zone trims 0/-0.02/+0.02; bleed 3e-3 shaft / 8e-4 bin per the compartment classes (bleed follows the bin layout — asserted); hum 1e-3 at 60 Hz — all [FOLK] working values pinned to start below the [AS16] -24 dB clearly-audible band and tune upward. Idle-floor evidence render in docs/m7-evidence.md (-30.2 dB at wear 1, -44.5 dB at the shipped default). By-ear verification **still open** |
+| wheel motion-AM depths, pickup alpha, low-register toothing, default `wear` | **M7 landed** (sec 12.1): motion AM max 0.05 x per-wheel draw at each wheel's own rotation rate; alpha = wear x 0.3 ([AS16] — the one measured magnitude) as a DC-free cubic; tooth anchors 0.015/0.03 x 4/teeth; shipped default `wear = 0.2`. `wear = 0` reproduces every pre-M7 render bit-for-bit (pinned signatures in test.c; the M7 exhibit re-derives the m6-evidence transition hash). Every magnitude except alpha is [FOLK]/[decision]; the by-ear verdicts **still open** — the default 0.2 most of all |

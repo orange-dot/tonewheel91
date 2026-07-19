@@ -28,6 +28,9 @@ static float decay_fast[2 * RATE], decay_slow[2 * RATE];
 static int render_phrase(float *dst, long frames, const int *notes, int n, bool legato) {
     tw_organ o;
     tw_organ_init(&o, RATE);
+    /* M7: pin the idealized reference (wear 0) — this exhibit's recorded
+     * signatures predate the wear stage and must stay bit-stable. */
+    tw_organ_set_wear(&o, 0.0f);
     static const uint8_t silent[TW_DRAWBARS] = { 0 };
     tw_organ_set_registration(&o, silent);
     tw_organ_set_percussion(&o, true, false, false, true); /* on, 2nd, fast, normal */
@@ -49,6 +52,7 @@ static int render_phrase(float *dst, long frames, const int *notes, int n, bool 
 static long render_decay(float *dst, long frames, bool slow) {
     tw_organ o;
     tw_organ_init(&o, RATE);
+    tw_organ_set_wear(&o, 0.0f);
     static const uint8_t silent[TW_DRAWBARS] = { 0 };
     tw_organ_set_registration(&o, silent);
     tw_organ_set_percussion(&o, true, false, slow, true);

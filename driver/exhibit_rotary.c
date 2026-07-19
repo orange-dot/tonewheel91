@@ -123,6 +123,9 @@ static void render_passage(float *dst, int frames, int rot_mode,
                            int trem_at, int chor_at) {
     tw_instrument ins;
     tw_instrument_init(&ins, RATE);
+    /* M7: pin the idealized reference (wear 0) — this exhibit's recorded
+     * signatures predate the wear stage and must stay bit-stable. */
+    tw_organ_set_wear(&ins.organ, 0.0f);
     static const uint8_t reg[TW_DRAWBARS] = { 8, 8, 8, 8, 0, 0, 0, 0, 0 };
     tw_organ_set_registration(&ins.organ, reg);
     tw_instrument_set_drive(&ins, 0.4f);
@@ -146,6 +149,7 @@ static void render_passage(float *dst, int frames, int rot_mode,
 static void render_fm_am(float *dst, int frames, int note) {
     tw_instrument ins;
     tw_instrument_init(&ins, RATE);
+    tw_organ_set_wear(&ins.organ, 0.0f); /* M7: idealized reference */
     static const uint8_t reg[TW_DRAWBARS] = { 0, 0, 8, 0, 0, 0, 0, 0, 0 };
     tw_organ_set_registration(&ins.organ, reg);
     tw_rotary_set_mode(&ins.rotary, TW_ROT_TREMOLO);
@@ -239,6 +243,8 @@ int main(void) {
     tw_instrument ia, ib;
     tw_instrument_init(&ia, RATE);
     tw_instrument_init(&ib, RATE);
+    tw_organ_set_wear(&ia.organ, 0.0f); /* M7: idealized reference */
+    tw_organ_set_wear(&ib.organ, 0.0f);
     int byp_bad = 0;
     for (int i = 0; i < 4 * RATE; i++) {
         if (i == RATE / 2) {

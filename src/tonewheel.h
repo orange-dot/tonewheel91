@@ -35,8 +35,32 @@ typedef struct {
     float keyed_target[TW_WHEELS];
     float perc_gain[TW_WHEELS];
     float perc_target[TW_WHEELS];
-    float leak_gain[TW_WHEELS]; /* static profile; all zero until wear lands */
-    float level[TW_WHEELS];     /* per-wheel level profile; flat until wear */
+    float leak_gain[TW_WHEELS]; /* static bleed-bus weights, sec 13; all
+                                 * zero at wear 0 */
+    float level[TW_WHEELS];     /* per-wheel level profile: 1 + wear x
+                                 * (spread + zone trim), sec 11; exactly
+                                 * 1.0 at wear 0 */
+    float t2[TW_WHEELS];        /* tooth-profile 2nd/3rd partial depths,
+                                 * sec 12: wear x base x 4/teeth; exact
+                                 * harmonics of the wheel's own phase, so
+                                 * per-wheel and IMD-free; 0 at wear 0 */
+    float t3[TW_WHEELS];
+    float rev_phase[TW_WHEELS]; /* shaft-rotation phase [0, 1) at
+                                 * f_wheel/teeth, sec 12 motion AM;
+                                 * random start per wheel, advances
+                                 * always (wear-independent state) */
+    float rev_step[TW_WHEELS];
+    float am_g[TW_WHEELS];      /* motion-AM depth, wear x max x draw;
+                                 * exactly 0 at wear 0 */
+    float pk2, pk3;             /* pickup nonlinearity, sec 12: cubic
+                                 * series of (1 - exp(-alpha x))/alpha
+                                 * at alpha = wear x 0.3; exactly 0 at
+                                 * wear 0 */
+    float hum_phase, hum_step;  /* mains hum on the bleed bus, sec 1:
+                                 * 60 Hz; phase advances always */
+    float hum_gain;             /* wear x level; exactly 0 at wear 0 */
+    float wear;                 /* 0 = idealized reference (bit-identical
+                                 * to pre-M7); write via the setter */
     float smooth;               /* one-pole coefficient toward gain targets */
     float perc_smooth;          /* separate one-pole coefficient: perc_target's
                                   * own decay toward 0 (tau fast/slow, sec 8);
@@ -66,6 +90,16 @@ void tw_generator_set_perc_targets(tw_generator *g, const float t[TW_WHEELS]);
  * whenever the percussion DECAY switch changes. Independent of tau_s above,
  * which shapes keyed_gain's click only. */
 void tw_generator_set_perc_tau(tw_generator *g, float sample_rate_hz, float tau_s);
+
+/* The wear knob at the generator: rebuilds every deviation bank (level
+ * profile; toothing, motion AM, pickup alpha, leakage, hum as their
+ * slices land — constants.md sec 11-13) from the fixed-seed per-wheel
+ * character draws, scaled by wear in [0, 1]. Hostile values sanitize
+ * (NaN/negative -> 0, cap 1). wear = 0 restores the idealized reference
+ * exactly: every bank returns to its bit-exact pre-M7 value, so a
+ * mid-render return to 0 rejoins the never-worn render (the scanner-OFF
+ * discipline). Phase state is untouched. */
+void tw_generator_set_wear(tw_generator *g, float wear);
 
 /* Advance all 91 wheels one sample. Constant cost regardless of targets:
  * behavior differences are gain-gated, never branch-gated. */
@@ -202,6 +236,17 @@ void tw_organ_set_vibrato(tw_organ *o, int mode);
 
 /* Swell pedal position 0..1; the audio-taper curve lives inside. */
 void tw_organ_set_swell(tw_organ *o, float v);
+
+/* The shipped wear default (design.md: nonzero, because tolerance
+ * effects exist on a factory-new unit). constants.md sec 12.1 [FOLK]. */
+extern const float TW_WEAR_DEFAULT;
+
+/* The one wear knob, 0..1 (design.md control surface): scales every
+ * sec 11-13 deviation — level spread, toothing, motion AM, pickup
+ * alpha, leakage, hum. 0 restores the idealized pre-M7 render
+ * bit-exactly, even mid-note (the scanner-OFF discipline); the organ
+ * initializes to TW_WEAR_DEFAULT. Hostile values sanitize. */
+void tw_organ_set_wear(tw_organ *o, float v);
 
 /* Electrical all-off: clears pending contact events and opens every
  * contact immediately (no bounce); gains glide out in the click tau. */
@@ -364,6 +409,15 @@ static inline float tw_sin_turns(float p) {
 static inline float tw_sat(float x) {
     x = (x > 3.0f) ? 3.0f : (x < -3.0f) ? -3.0f : x;
     return x * (27.0f + x * x) / (27.0f + 9.0f * x * x);
+}
+
+/* splitmix64 — the repo's deterministic RNG (contact bounce, per-wheel
+ * wear character). Fixed seeds per use site; see design.md determinism. */
+static inline uint64_t tw_splitmix64(uint64_t *s) {
+    uint64_t z = (*s += 0x9e3779b97f4a7c15u);
+    z = (z ^ z >> 30) * 0xbf58476d1ce4e5b9u;
+    z = (z ^ z >> 27) * 0x94d049bb133111ebu;
+    return z ^ z >> 31;
 }
 
 /* FNV-1a 64 over raw bytes — the repo's determinism signature.
