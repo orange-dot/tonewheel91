@@ -124,6 +124,7 @@ static void usage(const char *argv0) {
             "  -p 0|1   percussion on (2nd/fast/normal; default 0)\n"
             "  -f       octave-fold out-of-compass notes into 36..96\n"
             "  -g gain  master gain (default 0.125)\n"
+            "  -w wear  M7 wear knob 0..1 (default 0 = idealized reference)\n"
             "  -r rate  sample rate (default 48000)\n"
             "  -t secs  release tail after the last event (default 2)\n"
             "  -o path  output WAV (default render.wav)\n",
@@ -133,7 +134,7 @@ static void usage(const char *argv0) {
 typedef struct {
     const uint8_t *reg;
     int vib, perc, rot;
-    float drive, gain;
+    float drive, gain, wear;
     bool fold;
     float rate;
 } settings_t;
@@ -144,6 +145,7 @@ static double render(const ev_t *ev, size_t nev, const settings_t *s,
     tw_instrument ins;
     tw_instrument_init(&ins, s->rate);
     tw_organ_set_registration(&ins.organ, s->reg);
+    tw_organ_set_wear(&ins.organ, s->wear); /* overrides the init default */
     tw_organ_set_vibrato(&ins.organ, s->vib);
     tw_instrument_set_drive(&ins, s->drive);
     tw_rotary_set_mode(&ins.rotary, s->rot);
@@ -171,13 +173,13 @@ static double render(const ev_t *ev, size_t nev, const settings_t *s,
 
 int main(int argc, char **argv) {
     uint8_t reg[TW_DRAWBARS] = { 8, 8, 8, 0, 0, 0, 0, 0, 0 };
-    settings_t st = { reg, 0, 0, 0, 0.0f, 0.125f, false, 48000.0f };
+    settings_t st = { reg, 0, 0, 0, 0.0f, 0.125f, 0.0f, false, 48000.0f };
     const char *out_path = "render.wav";
     double tail_s = 2.0;
     uint32_t chan_mask = 0xFFFF;
 
     int c;
-    while ((c = getopt(argc, argv, "c:R:v:D:m:p:fg:r:t:o:h")) != -1) {
+    while ((c = getopt(argc, argv, "c:R:v:D:m:p:fg:w:r:t:o:h")) != -1) {
         switch (c) {
         case 'c': {
             chan_mask = 0;
@@ -198,6 +200,7 @@ int main(int argc, char **argv) {
         case 'p': st.perc = atoi(optarg); break;
         case 'f': st.fold = true; break;
         case 'g': st.gain = (float)atof(optarg); break;
+        case 'w': st.wear = (float)atof(optarg); break;
         case 'r': st.rate = (float)atof(optarg); break;
         case 't': tail_s = atof(optarg); break;
         case 'o': out_path = optarg; break;
@@ -304,11 +307,11 @@ int main(int argc, char **argv) {
            tail_s, (double)st.rate);
     static const char *rot_name[4] = { "bypass", "chorale", "tremolo", "brake" };
     printf("  registration %d%d%d%d%d%d%d%d%d, vibrato %d, percussion %s,"
-           " drive %.2f, rotary %s, gain %g%s\n",
+           " drive %.2f, rotary %s, wear %.2f, gain %g%s\n",
            reg[0], reg[1], reg[2], reg[3], reg[4], reg[5], reg[6], reg[7],
            reg[8], st.vib, st.perc ? "on" : "off", (double)st.drive,
            rot_name[st.rot < 0 ? 0 : st.rot > 3 ? 3 : st.rot],
-           (double)st.gain, st.fold ? ", octave-fold" : "");
+           (double)st.wear, (double)st.gain, st.fold ? ", octave-fold" : "");
 
     float *buf = malloc(2 * (size_t)frames * sizeof *buf);
     if (!buf) { fprintf(stderr, "out of memory (%lld frames)\n",
