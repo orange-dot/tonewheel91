@@ -119,6 +119,10 @@ void tw_rotary_init(tw_rotary *r, float sample_rate_hz) {
     r->d_amp = DOP_AMP_S * sample_rate_hz;
 
     tw_drive_init(&r->amp, sample_rate_hz); /* drive 0: exact pass */
+    /* The 40 W ceiling keeps the M5 odd kernel and its 0.5 depth: a
+     * power stage wants a hard bound, not the preamp's derived triode
+     * warmth (docs/warmth-evidence.md; M6 signatures stay intact). */
+    tw_drive_set_kernel(&r->amp, true);
 
     r->mode = TW_ROT_BYPASS; /* the M6 identity default */
     r->balance = 0.5f;

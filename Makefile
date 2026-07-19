@@ -8,7 +8,7 @@ CORE_CFLAGS := $(CFLAGS) -ffreestanding
 
 CORE_OBJS := $(BUILD)/generator.o $(BUILD)/midi.o $(BUILD)/organ.o $(BUILD)/scanner.o $(BUILD)/drive.o $(BUILD)/rotary.o
 
-all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/render_midi $(BUILD)/tw91
+all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_warmth $(BUILD)/render_midi $(BUILD)/tw91
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -46,6 +46,9 @@ $(BUILD)/exhibit_rotary: driver/exhibit_rotary.c $(BUILD)/wav.o $(CORE_OBJS) src
 $(BUILD)/exhibit_wear: driver/exhibit_wear.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/exhibit_wear.c $(BUILD)/wav.o $(CORE_OBJS) -o $@ -lm
 
+$(BUILD)/exhibit_warmth: driver/exhibit_warmth.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+	$(CC) $(CFLAGS) driver/exhibit_warmth.c $(BUILD)/wav.o $(CORE_OBJS) -o $@ -lm
+
 $(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/render_midi.c $(BUILD)/wav.o $(CORE_OBJS) -o $@
 
@@ -65,7 +68,29 @@ exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper
 	./$(BUILD)/exhibit_rotary
 	./$(BUILD)/exhibit_wear
 
+# Dev-side warmth referee (docs/warmth-evidence.md). ngspice is never a
+# build dependency: warmth-ref is run by hand when recalibrating, and
+# warmth only reads whatever sweep files a prior warmth-ref left behind.
+warmth-ref:
+	@command -v ngspice >/dev/null || { echo "ngspice not installed; the reference sweep is optional dev tooling"; exit 1; }
+	mkdir -p $(BUILD)/spice
+	ngspice -b driver/spice/stage1.cir -o $(BUILD)/spice/run.log
+	ngspice -b driver/spice/curve.cir -o $(BUILD)/spice/curve.log
+
+warmth: $(BUILD)/exhibit_warmth
+	./$(BUILD)/exhibit_warmth
+	@echo
+	./$(BUILD)/exhibit_warmth onset-c 0.5
+	@echo
+	@echo "  spice reference sweep (stage1.cir; source amplitude in volts):"
+	@echo "       f0   amp      gain   h2/h1    h3/h1    h4/h1    h5/h1     thd%   vk_mean   vg_mean"
+	@for a in 0.02 0.05 0.1 0.15 0.2 0.3 0.5 0.7 1.0 1.5 2.0 3.0; do ./$(BUILD)/exhibit_warmth spice $(BUILD)/spice/lvl_240_$$a.txt 240 $$a; done
+	./$(BUILD)/exhibit_warmth spice $(BUILD)/spice/freq_120.txt 120 0.3
+	./$(BUILD)/exhibit_warmth spice $(BUILD)/spice/freq_480.txt 480 0.3
+	@echo
+	./$(BUILD)/exhibit_warmth spice-onset $(BUILD)/spice/onset_240_0.5.txt 240 0.5
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test exhibit clean
+.PHONY: all test exhibit warmth warmth-ref clean

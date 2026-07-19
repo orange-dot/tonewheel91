@@ -266,6 +266,9 @@ typedef struct {
     /* constant per-rate factors, computed at init (no libm) */
     float atk_c, rel_c; /* follower one-pole coefficients          */
     float hp_c;         /* highpass tracker coefficient            */
+    /* kernel select, set at init / tw_drive_set_kernel */
+    float depth; /* operating-point shift per unit env             */
+    bool odd;    /* true: the M5 odd tw_sat kernel (rotary amp)    */
     /* control; write via tw_drive_set */
     float drive; /* 0..1                                           */
     float pre;   /* pregain / X_ref = (1 + 7 drive^2) / 8          */
@@ -277,9 +280,23 @@ void tw_drive_init(tw_drive *d, float sample_rate_hz);
 /* Drive knob 0..1; hostile values sanitize (NaN/negative -> 0, cap 1). */
 void tw_drive_set(tw_drive *d, float v);
 
+/* Kernel select. Default (odd = false) is the derived triode curve —
+ * the preamp's warmth voice. odd = true keeps the M5 odd kernel with
+ * its 0.5 bias depth: the rotary's 40 W ceiling, where a power stage
+ * wants a hard bound, not preamp warmth (docs/warmth-evidence.md). */
+void tw_drive_set_kernel(tw_drive *d, bool odd);
+
 /* One sample: pregain -> bias-shifted saturator -> coupling-cap
  * highpass -> makeup. constants.md section 14.1. */
 float tw_drive_tick(tw_drive *d, float x);
+
+/* The drive kernel [derived, warmth pass]: normalized static transfer
+ * of the circuit-true triode reference, monotone C1 Hermite table over
+ * [-8, 8]; exact 0 and unit slope at 0, flat rails at -1.831 / +3.722.
+ * Exposed for tests and the warmth harness (docs/warmth-evidence.md).
+ * The odd tanh-shaped tw_sat below survives as the M5-pinned kernel
+ * (exhibit A/B twin and non-drive uses). */
+float tw_drive_curve(float x);
 
 /* --- rotary speaker: crossover, two rotors, Doppler, AM, stereo
  * (constants.md section 15) --- */

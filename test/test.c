@@ -952,21 +952,28 @@ static void test_drive_follower(void) {
     CHECK(d.hp_lp == 0.0f, "coupling-cap state must snap to exact 0");
     CHECK(tw_drive_tick(&d, 0.0f) == 0.0f, "silent stage must output exact 0");
 
-    /* the operating-point shift: a loud steady tone makes the follower
-     * ride, and the bias drags the shaper's DC image negative — the
-     * mechanism behind the even-harmonic bloom (sec 14.1) */
+    /* the DC image under a loud steady tone: the derived triode curve
+     * is asymmetric (conduction rail +3.72 vs cutoff floor -1.83), so
+     * rectification pushes the shaper's mean POSITIVE — the reference's
+     * rising plate-current mean (its vk_mean climbs; warmth-evidence),
+     * and the coupling cap breathes on exactly this image. Measured as
+     * the tracker's mean over the last 11 whole cycles: a single
+     * end-sample would alias the tracker's ~0.06 fundamental ripple
+     * (the old kernel's -0.02 pass sat inside that ripple). */
     tw_drive_init(&d, 48000.0f);
     tw_drive_set(&d, 0.8f);
-    double ph = 0.0;
+    double ph = 0.0, dc = 0.0;
     for (int i = 0; i < 48000; i++) {
         (void)tw_drive_tick(&d, 2.0f * tw_sin_turns((float)ph));
+        if (i >= 45600) dc += (double)d.hp_lp; /* 2400 = 11 x 220 Hz */
         ph += 220.0 / 48000.0;
         if (ph >= 1.0) ph -= 1.0;
     }
+    dc /= 2400.0;
     CHECK(d.env > 0.5f && d.env < 1.4f,
           "follower must ride the loud tone, env %f", (double)d.env);
-    CHECK(d.hp_lp < -0.02f,
-          "bias must pull the DC image negative, got %f", (double)d.hp_lp);
+    CHECK(dc > 0.02,
+          "rectified DC image must swing positive, got %f", dc);
 }
 
 static float dbuf_a[48000], dbuf_b[48000];
@@ -2044,10 +2051,14 @@ static void test_wear_hum(void) {
 
 /* Pre-M7 baseline signatures of the four scripted renders, captured on
  * the M6 tree (7764 checks) the day M7 landed: wear = 0 must reproduce
- * each bit-for-bit — the M7-7 identity contract. */
+ * each bit-for-bit — the M7-7 identity contract. The DRIVE pin was
+ * re-captured at the warmth pass (docs/warmth-evidence.md): the preamp
+ * kernel changed by derivation, so the driven script legitimately
+ * renders anew (was 0x730ac52bff1f129d); the other three are
+ * drive-free or rotary-only and survive the pass untouched. */
 static const uint64_t PRE_M7_SCRIPT_FNV = 0xf0b4c7c3f7705480u;
 static const uint64_t PRE_M7_VIB_FNV = 0xb01485a1702721a3u;
-static const uint64_t PRE_M7_DRIVE_FNV = 0x730ac52bff1f129du;
+static const uint64_t PRE_M7_DRIVE_FNV = 0xa3c0070288f0a1cdu;
 static const uint64_t PRE_M7_ROTARY_FNV = 0xf1d10bfe4b6cab4du;
 
 static void test_wear_knob(void) {

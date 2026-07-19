@@ -815,7 +815,10 @@ pass (section 16) unless tagged otherwise.
 - Our drive stage is behavioral-stateful by design (bias-excursion
   follower + coupling-cap highpass; see design.md); its curves are
   **tuned at M5** against ear and the odd/even harmonic proxy. No
-  circuit-level tube model unless M5 evidence demands it.
+  circuit-level tube model unless M5 evidence demands it. The demand
+  question now has numbers: docs/warmth-evidence.md scores the stage
+  against a circuit-true triode reference — what warmth asks for is
+  the kernel's even/odd recipe, not a runtime circuit model.
 - Division of nonlinear labor [AS16]: per-wheel pickup distortion is
   IMD-free (section 12); the shared preamp intermodulates everything it
   sums. Keeping the two stages distinct is load-bearing for the sound —
@@ -830,8 +833,20 @@ machine constant: [SM] names the tube lineup but no component values were
 read out of the preamp schematic here. By-ear verdicts against reference
 recordings override any [decision] below; section 16 tracks that.
 
-- **Saturator kernel** [derived, chosen at M5]: the repo-local
-  tanh-shaped waveshaper is the odd rational
+- **Drive kernel** [derived, warmth pass 2026-07-19]: the preamp's
+  saturator is `tw_drive_curve` — the normalized static transfer of
+  the circuit-true triode reference (driver/spice/curve.cir, Koren
+  12AX7 family, fixed-bias cathode), fitted as a monotone C1 cubic
+  Hermite table on uniform knots over [-8, 8], h = 0.25 (worst
+  residual 0.0009; axis 0.72 V/unit from the 1 % THD anchor). Exact 0
+  and unit slope at 0; flat C1 rails at -1.831 (cutoff) / +3.722
+  (grid conduction). Asymmetric on purpose: H2 rides 18-30 dB above
+  H3 through the warmth window, H2/H1 grows ~proportionally to level,
+  and compression follows the reference's near-transparent law
+  (docs/warmth-evidence.md round 2 pins the numbers). No libm.
+- **The M5 odd kernel, retained as `tw_sat`** [derived, chosen at M5]
+  — the rotary's 40 W ceiling (`tw_drive_set_kernel(_, true)`) and the
+  exhibits' bare-shaper twin: the odd rational
   `r(x) = x (27 + x^2) / (27 + 9 x^2)`, input clamped to `|x| <= 3`.
   Derivation: in the family `r(x) = x (A + x^2) / (A + B x^2)` (odd; unit
   slope at 0 automatically), require the +-1 bound to be reached
@@ -854,15 +869,20 @@ recordings override any [decision] below; section 16 tracks that.
   is an **exact bypass**: tick returns its input bit-identically and
   leaves all state untouched (the scanner-OFF discipline), so pre-M5
   renders stay stable.
-- **Bias-excursion follower** [decision, M5]: full-wave `|.|` envelope
-  follower on the shaper input (post-pregain); one-pole attack **5 ms**,
-  release **50 ms** — RC-order figures for a small-tube stage's
-  grid/cathode network (couple-of-ms grid-conduction charge,
-  tens-of-ms leak/bypass discharge), working values only. Operating
-  point shifts toward cutoff by `bias = -0.5 * env` at the shaper input;
-  the 0.5 depth is likewise a working value. The follower is what makes
-  even harmonics bloom and duck with playing level — the audible
-  difference from a bare waveshaper (design.md model-depth doctrine).
+- **Bias-excursion follower**: full-wave `|.|` envelope follower on the
+  shaper input (post-pregain); one-pole attack **5 ms**, release
+  **50 ms** [decision, M5] — RC-order figures for a small-tube stage's
+  grid/cathode network, working values only. Depth forked at the
+  warmth pass: the triode kernel shifts by **-0.037 * env** [derived —
+  the reference's cathode walk per unit envelope at the 1.0-1.5 V
+  anchor; below that the curve's own asymmetry, not the walk, owns the
+  even harmonics], while the odd kernel keeps **-0.5 * env** [decision,
+  M5] — there the walk is what fakes asymmetry, and the rotary ceiling
+  still runs it. With the derived kernel the even-harmonic bloom is
+  instantaneous and level-proportional (the curve), and the follower's
+  job narrows to the slow operating-point breathing (design.md
+  model-depth doctrine, now with the mechanisms in the reference's
+  proportions).
 - **Coupling-cap highpass** [decision, M5]: one pole at **10 Hz**,
   after the shaper. The classic 0.01-0.047 uF into ~1 Mohm interstage
   coupling lands at 3-16 Hz; 10 Hz sits 2.7 octaves under the manual
@@ -1121,7 +1141,7 @@ default the by-ear pass is expected to move.
 | swell curve | M2 shipped x^2 taper; compensation tilt (loudness-style, section 10) **still open — deliberately not cut into M5**, which modeled the drive stage only; lands with a by-ear voicing pass |
 | percussion decay, re-arm, SOFT pad, NORMAL attenuation | **mostly closed by reading [SM]'s prose (section 8), not by ear**: decay tau 1.551 s / 0.375 s from C31 = 0.33 uF through R58 / R57\|\|R58, ratio **4.133 : 1 (the old 3.7 : 1 was the wrong resistors)**; re-arm tau ~34 ms from R55+R56. Still open at M3: **absolute decay seconds are NOT derived** — tau -> audible time needs V7's transfer behavior or a measurement ([SM 4-4] trims it per unit against an audible threshold); pick slow by ear, derive fast = slow / 4.133, mark [decision]. The NORMAL attenuation and SOFT pad are now **derivable** (R50 = 22 ohm as a section 6.1 wire; R46/R59/R51 divider) rather than by-ear. Concept lineage [P44] — but its ~8 notes/s figure is **not** an anchor, it is 4x out |
 | scanner | **components + taps [DAFx16]; depth/rate [P45]; C-mode voicing target [P39]**; **M4 landed**: trapezoidal nodal ladder (no prewarp; edge 6575 Hz at 48 kHz, ~7.1 kHz at 192 kHz), C mix = (dry+wet)/2 [decision], bass bypass as the exact wheel-1..16 split [derived], CC84; measured V3 cyclical depth 1.48% (in band), peak 1.91% with the moving ripple. **Still open**: output level trim and every by-ear verdict (C-mode voicing vs [P39] treble-detune target, ripple strength) |
-| drive curves (bias depth, tilt) | **M5 landed** (section 14.1): saturator kernel [derived, tangent-bound rational], X_ref = 8, pregain 1..8 on drive^2, bias follower 5/50 ms at depth 0.5, coupling cap 10 Hz, CC85 — stage structure and unit behavior test-pinned. **Still open, by ear**: attack/release, bias depth, drive taper, any level trim; a wave-digital triode stage is the named upgrade if the ear demands it |
+| drive curves (bias depth, tilt) | **M5 landed** (section 14.1): saturator kernel [derived, tangent-bound rational], X_ref = 8, pregain 1..8 on drive^2, bias follower 5/50 ms at depth 0.5, coupling cap 10 Hz, CC85 — stage structure and unit behavior test-pinned. **Still open, by ear**: attack/release, bias depth, drive taper, any level trim; a wave-digital triode stage is the named upgrade if the ear demands it. **Warmth measured, then landed** (docs/warmth-evidence.md): round 1 found the deficit in the kernel's H2:H3 recipe (~9 dB spacing vs the triode's 18-28 dB), not in missing circuit state; round 2 derived the kernel from the reference's static transfer (`tw_drive_curve`, matched within ~0.4 dB H2 / ~1.4 dB H3 / ~0.03 dB compression at matched THD) and re-derived bias depth to 0.037; the rotary ceiling keeps the M5 odd kernel via `tw_drive_set_kernel`. **Still open, by ear**: level trim (the derived stage compresses ~10x less — equal-knob renders come out louder; A/B wavs at build/warmth_ab_*.wav), drive-taper feel at the top of the knob, and the WDF rung stays reserved for blocking/sag/power-stage truth |
 | rotary numeric dynamics | **Crossover pinned: 800 Hz, 12 dB/oct, 16 ohm passive** [HX], corroborated by the factory spec sheet [RS] (was a guess). Construction [HX]: motors **mains-synchronous**; drum is **AM-only, ~200-800 Hz — no Doppler on it**. Drive mechanics pinned [RS]: **two motors per rotor** (large = tremolo; small = chorale, which *brakes*), **bass tremolo->chorale 5-8 s** (a service acceptance figure — first sourced inertia number), treble speed is an **installation choice** on a 3-step pulley (centre groove = normal). 50 Hz units run the **same** speed — a distinct 50 Hz pulley compensates; the earlier "50 Hz runs slower" was wrong. Construction now **corroborated by a teardown video [KX]** (two-motor assembly, relay speed-switch, belt drive, 15" woofer + tube amp + compression-driver horn) — second witness, no numbers. **Speeds pinned as [FOLK] working defaults** (tremolo ~400/~340 rpm, chorale ~40-50 rpm, horn spin-up ~1 s) — used for M6, tagged as folklore, **by-ear call overrides**; a [KX] frame-track cross-check confirms the chorale/tremolo *shape* but not the numbers (1x/2x + 30 fps aliasing). **Truly still open for a primary source:** motor pole count + 3-step pulley groove diameters (those derive every speed) and horn radius. [DAFx11]'s 2/6 Hz are its own dial settings, **not corroboration**; its +0.1 Hz mistuning is **withdrawn**, unsupported by [HX]. **M6 landed** on the 15.1 working set: crossover measured -3 dB at 800 Hz both sides, horn FM 50.9 Hz p-p on a 2 kHz tone at tremolo (geometry says 50.3), drum pitch residual 0.33 Hz (AM-only holds), AM floors 0.60 horn / 0.87 drum-mid / 0.97 drum-100 Hz, brake parks exact. **Still open, by ear:** every [FOLK] speed, all four transition taus, both AM depths, the Doppler swing, mic geometry, balance/width laws — the whole 15.1 [decision] column awaits reference recordings |
 | leakage/hum levels, level-profile spread | **M7 landed** (secs 11.1/13.1): level spread +-0.12 + zone trims 0/-0.02/+0.02; bleed 3e-3 shaft / 8e-4 bin per the compartment classes (bleed follows the bin layout — asserted); hum 1e-3 at 60 Hz — all [FOLK] working values pinned to start below the [AS16] -24 dB clearly-audible band and tune upward. Idle-floor evidence render in docs/m7-evidence.md (-30.2 dB at wear 1, -44.5 dB at the shipped default). By-ear verification **still open** |
 | wheel motion-AM depths, pickup alpha, low-register toothing, default `wear` | **M7 landed** (sec 12.1): motion AM max 0.05 x per-wheel draw at each wheel's own rotation rate; alpha = wear x 0.3 ([AS16] — the one measured magnitude) as a DC-free cubic; tooth anchors 0.015/0.03 x 4/teeth; shipped default `wear = 0.2`. `wear = 0` reproduces every pre-M7 render bit-for-bit (pinned signatures in test.c; the M7 exhibit re-derives the m6-evidence transition hash). Every magnitude except alpha is [FOLK]/[decision]; the by-ear verdicts **still open** — the default 0.2 most of all |

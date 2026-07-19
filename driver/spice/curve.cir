@@ -1,0 +1,48 @@
+* tonewheel91 warmth reference -- static (fast-manifold) transfer curve.
+*
+* The same Koren 12AX7 stage as stage1.cir, but with the cathode HELD at
+* its quiescent 1.198993 V (the op-point value stage1.cir reports): an
+* ideally-bypassed cathode, which is what the audio band sees through
+* Ck. Sweeping the grid source then yields the stage's static AC
+* transfer -- near-linear middle, grid-conduction knee on the positive
+* side (through the same 1k source impedance the AC path has), cutoff
+* flattening on the negative side. docs/warmth-evidence.md round 2 fits
+* the drive kernel to this curve; blocking DYNAMICS (coupling-cap
+* charge trapping) are deliberately absent here and stay out of scope.
+
+.subckt t12ax7 p g k
+BU  u  0 V = 600*(0.01 + V(g,k)/sqrt(300 + V(p,k)*V(p,k)))
+RU  u  0 1G
+BE  e1 0 V = V(p,k)/600 * (V(u) > 0 ? V(u) + ln(1+exp(-V(u))) : ln(1+exp(V(u))))
+RE  e1 0 1G
+BGP p  k I = 2*pwr(max(V(e1),0),1.4)/1060
+RCP p  k 1G
+C1  g  k 2.3p
+C2  g  p 2.4p
+C3  p  k 0.9p
+D3  gd k dgrid
+R1  g  gd 2k
+.model dgrid D(IS=1n RS=1 CJO=10p)
+.ends
+
+VBP bp  0 DC 250
+VIN in  0 DC 0
+RS  in  s1 1k
+RIN s1  g  1
+RGL g   0  1meg
+XT  p   g  k t12ax7
+RA  bp  p  100k
+VK  k   0  DC 1.198993
+
+.options reltol=1e-6 abstol=1e-12 vntol=1e-9 noacct
+
+.control
+set wr_singlescale
+set wr_vecnames
+unset askquit
+dc VIN -6 6 0.002
+wrdata build/spice/curve.txt v(p) v(g) v(k)
+quit
+.endc
+
+.end

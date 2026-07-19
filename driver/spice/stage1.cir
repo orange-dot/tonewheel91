@@ -1,0 +1,81 @@
+* tonewheel91 warmth reference -- one 12AX7-family self-bias gain stage.
+*
+* Dev-side referee for the sec 14.1 drive stage (docs/warmth-evidence.md):
+* a circuit-true single triode whose measured warmth signature (H2/H1 and
+* H3/H1 vs level, gain compression, bias trajectory, H2 onset) is the
+* ground truth the behavioral stage is scored against. Never a build
+* dependency -- run by hand via `make warmth-ref` when recalibrating.
+*
+* Tube: Koren triode model with the published 12AX7 parameter set
+* (MU=100 EX=1.4 KG1=1060 KP=600 KVB=300 RGI=2k) -- sec 14 names the
+* 12AX7 family as control-stage flavor; no component values were read
+* from the preamp schematic, so the surrounding network is the generic
+* textbook stage: 250 V supply, 100k plate load, 1.5k/25u self-bias,
+* 22n couplings into 1 Meg. The softplus in BE is the overflow-safe form
+* of the Koren ln(1+exp(.)) so Newton excursions cannot produce inf.
+
+.subckt t12ax7 p g k
+BU  u  0 V = 600*(0.01 + V(g,k)/sqrt(300 + V(p,k)*V(p,k)))
+RU  u  0 1G
+BE  e1 0 V = V(p,k)/600 * (V(u) > 0 ? V(u) + ln(1+exp(-V(u))) : ln(1+exp(V(u))))
+RE  e1 0 1G
+BGP p  k I = 2*pwr(max(V(e1),0),1.4)/1060
+RCP p  k 1G
+C1  g  k 2.3p
+C2  g  p 2.4p
+C3  p  k 0.9p
+D3  gd k dgrid
+R1  g  gd 2k
+.model dgrid D(IS=1n RS=1 CJO=10p)
+.ends
+
+VBP bp  0 DC 250
+VIN in  0 DC 0 SIN(0 0.3 240)
+RS  in  s1 1k
+CIN s1  g  22n
+RGL g   0  1meg
+XT  p   g  k t12ax7
+RA  bp  p  100k
+RK  k   0  1.5k
+CK  k   0  25u
+COUT p  out 22n
+RL  out 0  1meg
+
+.options reltol=1e-4 abstol=1e-12 vntol=1e-9 noacct
+
+.control
+set wr_singlescale
+set wr_vecnames
+unset askquit
+op
+print v(p) v(k) v(g) v(out)
+* Level sweep at 240 Hz: 48000/240 = 200 samples/period exactly, so the
+* analyzer's integer-period DFT windows are leakage-free. tran grid
+* 1/48000 s (linearize target), internal step capped at 2 us; save from
+* 0.4 s -- roughly ten cathode time constants of settling.
+foreach a 0.02 0.05 0.1 0.15 0.2 0.3 0.5 0.7 1.0 1.5 2.0 3.0
+  alter @vin[sin] = [ 0 $a 240 ]
+  tran 20.833333333333u 0.9 0.4 2u
+  linearize v(out) v(k) v(g)
+  wrdata build/spice/lvl_240_{$a}.txt v(out) v(k) v(g)
+  destroy all
+end
+* Frequency-independence check at 0.3 V (48000/120 = 400, 48000/480 = 100).
+foreach f 120 480
+  alter @vin[sin] = [ 0 0.3 $f ]
+  tran 20.833333333333u 0.9 0.4 2u
+  linearize v(out) v(k) v(g)
+  wrdata build/spice/freq_{$f}.txt v(out) v(k) v(g)
+  destroy all
+end
+* Onset: settled quiet, tone starts at t = 0.5 s (SIN delay), capture
+* from 0.45 s -- the H2 rise and the cathode/grid bias walk.
+alter @vin[sin] = [ 0 0.5 240 0.5 ]
+tran 20.833333333333u 1.2 0.45 2u
+linearize v(out) v(k) v(g)
+wrdata build/spice/onset_240_0.5.txt v(out) v(k) v(g)
+destroy all
+quit
+.endc
+
+.end

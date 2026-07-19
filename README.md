@@ -19,7 +19,12 @@ unit), so an idle organ now carries its ~-44 dB noise floor. Every
 depth except the pickup's measured alpha is a [FOLK]/[decision] working
 value (`docs/constants.md` secs 11.1/12.1/13.1) — the by-ear pass
 against reference recordings owns them. Evidence: `docs/m7-evidence.md`
-back through `docs/m1-evidence.md`.
+back through `docs/m1-evidence.md`. Post-M7 warmth pass: the preamp
+drive kernel is now derived from a circuit-true triode reference
+(`docs/warmth-evidence.md`; the rotary's 40 W ceiling keeps the M5 odd
+kernel) — `make warmth` scores the stage against the reference,
+`./build/exhibit_warmth render` bakes A/B wavs of the old vs derived
+voice.
 
     make test      # table-driven checks (8911)
     make exhibit   # renders the evidence WAVs into build/

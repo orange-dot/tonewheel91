@@ -8,8 +8,11 @@
  * evidence render: the idle-organ noise floor itself.
  *
  * The identity anchor: the M6 transition passage re-rendered at wear 0
- * must reproduce the FNV-64 recorded in docs/m6-evidence.md
- * (00eb4c9bf80cb408) bit-for-bit -- wear = 0 IS the pre-M7 instrument.
+ * must reproduce the recorded pre-M7 signature bit-for-bit -- wear = 0
+ * IS the pre-M7 instrument. The anchor was re-captured at the warmth
+ * pass (docs/warmth-evidence.md): the passage runs the preamp at
+ * drive 0.4, and the preamp kernel changed by derivation, so the
+ * m6-evidence value 00eb4c9bf80cb408 retired with the odd kernel.
  *
  * Caveat carried into the evidence doc: every depth here is a [FOLK]
  * or [decision] working value (only the pickup's alpha = 0.3 has a
@@ -107,10 +110,13 @@ int main(void) {
      * carry the docs/m6-evidence.md signature bit-for-bit */
     render_transition(tr_buf, TR_FRAMES, 0.0f);
     uint64_t h_id = tw_fnv1a64(tr_buf, sizeof tr_buf, 0);
-    const uint64_t pre_m7 = 0x00eb4c9bf80cb408u;
+    /* re-pinned at the warmth pass (was 00eb4c9bf80cb408, the
+     * m6-evidence value): the passage drives the preamp at 0.4 and the
+     * kernel changed by derivation -- docs/warmth-evidence.md round 2 */
+    const uint64_t pre_m7 = 0xf961d056e8b12e32u;
     printf("  identity: M6 transition at wear 0: FNV64 %016llx %s\n",
            (unsigned long long)h_id,
-           h_id == pre_m7 ? "== the m6-evidence baseline" : "MISMATCH");
+           h_id == pre_m7 ? "== the recorded pre-M7 baseline" : "MISMATCH");
 
     /* ...and the shipped default is its own render, deterministically */
     render_transition(tr_buf, TR_FRAMES, TW_WEAR_DEFAULT);
