@@ -11,6 +11,13 @@
  * tremolo, brake; CC87 the live speed switch, >= 64 tremolo else chorale;
  * CC88 balance, CC89 width, CC90 rotary drive, each value/127. Velocity
  * -> contact stagger.
+ *
+ * -2 selects the two-manual touch-surface protocol: notes on channels 1
+ * and 2 (upper and lower manual) both land on the one manual the engine
+ * has today, CCs are honored on channel 1 only (the console channel),
+ * and everything else — including channel-2 drawbars, which carry a
+ * lower registration the engine cannot represent yet — is ignored.
+ * Without -2 the driver stays channel-agnostic, byte-for-byte as before.
  */
 #define _DEFAULT_SOURCE 1
 #include <alsa/asoundlib.h>
@@ -35,12 +42,31 @@ static struct {
  * Defaults mirror tw_organ_init's: off, 2nd, fast, NORMAL. */
 static struct { bool on, third, slow, normal; } perc_state = { false, false, false, true };
 
+/* -2: the two-manual touch-surface protocol (channel-aware); see the
+ * header comment. Off by default: channel-agnostic, as always. */
+static bool two_manual;
+
+/* In -2 mode, decide whether a channel message participates at all:
+ * notes on channels 1..2 (0-based 0..1) merge onto the one manual, CCs
+ * count only from channel 1 (the console channel), the rest is dropped. */
+static bool accept_msg(const tw_midi_msg *m) {
+    if (!two_manual) return true;
+    int ch = m->status & 0x0F;
+    switch (m->status & 0xF0) {
+    case 0x90:
+    case 0x80: return ch <= 1;
+    case 0xB0: return ch == 0;
+    default:   return false;
+    }
+}
+
 static void apply_percussion_cc(void) {
     tw_organ_set_percussion(&inst.organ, perc_state.on, perc_state.third,
                             perc_state.slow, perc_state.normal);
 }
 
 static void apply_msg(const tw_midi_msg *m) {
+    if (!accept_msg(m)) return;
     switch (m->status & 0xF0) {
     case 0x90:
         tw_organ_note(&inst.organ, m->d1, true, m->d2);
@@ -121,12 +147,13 @@ static int open_pcm(snd_pcm_t **pcm, const char *dev, unsigned rate,
 static void usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [-d pcm] [-m rawmidi] [-r rate] [-p period]"
-            " [-n periods] [-g gain] [-e demo_secs]\n"
+            " [-n periods] [-g gain] [-e demo_secs] [-2]\n"
             "  -d  ALSA PCM out (default \"default\"; the rig: hw:CARD=AG06AG03)\n"
             "  -m  ALSA rawmidi in, e.g. hw:2,0,0 (none = play the demo or idle)\n"
             "  -r  sample rate (default 48000)\n"
             "  -p  period frames (default 128)   -n  periods (default 3)\n"
-            "  -g  master gain (default 0.0625)  -e  demo chord for N seconds\n",
+            "  -g  master gain (default 0.0625)  -e  demo chord for N seconds\n"
+            "  -2  two-manual protocol: notes ch1+ch2 merge, CCs ch1 only\n",
             argv0);
 }
 
@@ -138,7 +165,7 @@ int main(int argc, char **argv) {
     long demo_secs = 0;
 
     int c;
-    while ((c = getopt(argc, argv, "d:m:r:p:n:g:e:h")) != -1) {
+    while ((c = getopt(argc, argv, "d:m:r:p:n:g:e:2h")) != -1) {
         switch (c) {
         case 'd': pcm_dev = optarg; break;
         case 'm': midi_dev = optarg; break;
@@ -147,6 +174,7 @@ int main(int argc, char **argv) {
         case 'n': nperiods = (unsigned)atoi(optarg); break;
         case 'g': gain = (float)atof(optarg); break;
         case 'e': demo_secs = atol(optarg); break;
+        case '2': two_manual = true; break;
         default: usage(argv[0]); return 2;
         }
     }
@@ -165,8 +193,9 @@ int main(int argc, char **argv) {
         printf("midi: %s (notes 36..96, CC11 swell, CC70-78 drawbars,"
                " CC120/123 panic, CC80-83 percussion on/harmonic/speed/volume,"
                " CC84 vibrato off/V1-V3/C1-C3, CC85 drive, CC86 rotary mode,"
-               " CC87 speed switch, CC88-90 balance/width/rotary drive)\n",
-               midi_dev);
+               " CC87 speed switch, CC88-90 balance/width/rotary drive)%s\n",
+               midi_dev,
+               two_manual ? "; two-manual: notes ch1+ch2, CCs ch1" : "");
     }
 
     tw_instrument_init(&inst, (float)rate);

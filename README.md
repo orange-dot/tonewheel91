@@ -40,6 +40,9 @@ voice.
                    # CC87 rotary speed switch (chorale/tremolo), CC88 balance,
                    # CC89 width, CC90 rotary drive
                    # -r rate -p period -n periods -g gain
+                   # -2 two-manual touch-surface protocol: notes on ch1+ch2
+                   #    (upper+lower) merge onto the one manual, CCs honored
+                   #    on ch1 only; default stays channel-agnostic
 
 ## Layout
 
