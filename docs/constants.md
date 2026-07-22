@@ -829,9 +829,14 @@ pass (section 16) unless tagged otherwise.
 ### 14.1 M5 drive stage — pinned
 
 Every number in this block is behavioral-stage tuning, not a measured
-machine constant: [SM] names the tube lineup but no component values were
-read out of the preamp schematic here. By-ear verdicts against reference
-recordings override any [decision] below; section 16 tracks that.
+machine constant. The circuit-true side now DOES read the schematic: the
+full Hammond AO-28 preamplifier is modelled in driver/spice/ao28.cir with
+real component values off [SM] sheet p.72 (6AU6 pentode inputs + feedback,
+12AX7 driver, 12BH7 output), DC-validated against the sheet's printed node
+voltages (docs/ao28-netlist.md). This behavioral block is fitted to that
+reference's warmth signature, not to the generic stand-in in stage1.cir.
+By-ear verdicts against reference recordings override any [decision] below;
+section 16 tracks that.
 
 - **Drive kernel** [derived, warmth pass 2026-07-19]: the preamp's
   saturator is `tw_drive_curve` — the normalized static transfer of

@@ -1,0 +1,148 @@
+* tonewheel91 -- AO-28 preamplifier tube-model library.
+*
+* Circuit-true R/C values come from the B3/C3 service manual AO-28 sheet
+* (docs/externalDocs/Hammond-Organ-B3-C3-Service-Manual.pdf, p.72). Tube
+* *model parameters* are NOT on that sheet -- they are published Koren
+* parameter sets, then CALIBRATED so each stage lands on the DC plate/
+* screen/cathode voltages the schematic prints (see docs/ao28-netlist.md).
+* That is the honest seam: passives are read, tube params are fitted to
+* the manual's own operating points.
+*
+* All triodes use the same overflow-safe softplus Koren form as
+* driver/spice/stage1.cir: V(u) = KP*(1/MU + Vgk/sqrt(KVB+Vpk^2)), then
+* the Koren cathode current E1 = Vpk/KP * ln(1+exp(V(u))), Ip = 2*E1^EX/KG1.
+* The softplus is ln(1+exp(.)) written in its two overflow-safe branches so
+* Newton excursions can never produce inf.
+
+*========================= 12AX7 (V4A, V4B) =========================*
+* MU=100 EX=1.4 KG1=1060 KP=600 KVB=300 -- the published Koren set.
+.subckt t12ax7 p g k
+BU  u  0 V = 600*(0.01 + V(g,k)/sqrt(300 + V(p,k)*V(p,k)))
+BE  e1 0 V = V(p,k)/600 * (V(u) > 0 ? V(u) + ln(1+exp(-V(u))) : ln(1+exp(V(u))))
+RE  e1 0 1G
+BGP p  k I = 2*pwr(max(V(e1),0),1.4)/1060
+RCP p  k 1G
+C1  g  k 2.3p
+C2  g  p 2.4p
+C3  p  k 0.9p
+D3  gd k dgrid
+R1  g  gd 2k
+.model dgrid D(IS=1n RS=1 CJO=10p)
+.ends
+
+*========================= 12BH7 (V3A scanner drv, V3B output) ======*
+* MU=16.7 EX=1.3 KG1=983 KP=71.5 KVB=300 (published). Medium-mu, stiff:
+* runs the scanner line and the T3 output. 1/MU = 0.0599.
+.subckt t12bh7 p g k
+BU  u  0 V = 71.5*(0.0599 + V(g,k)/sqrt(300 + V(p,k)*V(p,k)))
+BE  e1 0 V = V(p,k)/71.5 * (V(u) > 0 ? V(u) + ln(1+exp(-V(u))) : ln(1+exp(V(u))))
+RE  e1 0 1G
+BGP p  k I = 2*pwr(max(V(e1),0),1.3)/983
+RCP p  k 1G
+C1  g  k 3.2p
+C2  g  p 3.0p
+C3  p  k 1.5p
+D3  gd k dgrid
+R1  g  gd 2k
+.model dgrid D(IS=1n RS=1 CJO=10p)
+.ends
+
+*========================= 12AU7 (V7A, V7B percussion) ==============*
+* MU=21.5 EX=1.3 KG1=1180 KP=84 KVB=300 (published). 1/MU = 0.0465.
+.subckt t12au7 p g k
+BU  u  0 V = 84*(0.0465 + V(g,k)/sqrt(300 + V(p,k)*V(p,k)))
+BE  e1 0 V = V(p,k)/84 * (V(u) > 0 ? V(u) + ln(1+exp(-V(u))) : ln(1+exp(V(u))))
+RE  e1 0 1G
+BGP p  k I = 2*pwr(max(V(e1),0),1.3)/1180
+RCP p  k 1G
+C1  g  k 1.6p
+C2  g  p 1.5p
+C3  p  k 0.5p
+D3  gd k dgrid
+R1  g  gd 2k
+.model dgrid D(IS=1n RS=1 CJO=10p)
+.ends
+
+*========================= 6C4 (V5, V6 percussion) =================*
+* 6C4 is a single medium-mu triode ~ half a 12AU7 section.
+* MU=17.2 EX=1.3 KG1=1180 KP=84 KVB=300. 1/MU = 0.0581.
+.subckt t6c4 p g k
+BU  u  0 V = 84*(0.0581 + V(g,k)/sqrt(300 + V(p,k)*V(p,k)))
+BE  e1 0 V = V(p,k)/84 * (V(u) > 0 ? V(u) + ln(1+exp(-V(u))) : ln(1+exp(V(u))))
+RE  e1 0 1G
+BGP p  k I = 2*pwr(max(V(e1),0),1.3)/1180
+RCP p  k 1G
+C1  g  k 1.8p
+C2  g  p 1.3p
+C3  p  k 0.5p
+D3  gd k dgrid
+R1  g  gd 2k
+.model dgrid D(IS=1n RS=1 CJO=10p)
+.ends
+
+*========================= 6AU6 pentode (V1, V2 main gain) =========*
+* No published Koren card is reproduced here; instead a conservation-form
+* sharp-cutoff pentode: one space-current law E1^EX/KG1 split between plate
+* and screen by a soft knee, so cathode current is exactly Ip+Ig2 (robust,
+* no divide-by-Vg2 singularity).
+*
+* Params [re-fit, warmth re-fit round]: shape-anchored to the GE 6AU6-A
+* datasheet (ET-T916A, docs/externalDocs/6AU6A-GE-datasheet.pdf) -- transfer
+* families at Ec2=50/75 (p.5, the AO-28's starved screen region), the
+* Ib=10uA cutoff specs and the three typical-operation points (p.2), and
+* the plate-knee reads at Ec1=0 (p.4) -- with the AO-28 DC box held exact:
+*   Vgk -1.68 V, Vg2k 59.4 -> Ip 311.6 uA (130 V across R8 470k from +280),
+*                             Ig2 98.4 uA (~219 V across R7 2.2M).
+* The GE-average family sits ~+0.41 V hotter than the box implies (bogey
+* offset, fitted and absorbed -- Hammond's printed voltages are the anchor,
+* the datasheet supplies the SHAPE). Local log-slope at the box is now
+* d(ln Ip)/dVgk = 2.78 /V and d(slope)/dVgk = -2.5 /V^2 (GE family reads
+* ~2.5 /V and ~-1.5..-2.5 /V^2); the previous hand-fit had 0.72 /V -- it
+* held the DC point but was ~3.5x too shallow in exactly the curvature
+* that makes the harmonic content. Family fit lands within ~12 % across
+* Ec2=50/75, typicals within 11 %, 10uA cutoffs within ~2x.
+* MU is the grid->screen amplification (datasheet triode mu 36 -> 38.25
+* fitted); KVB=2100 keeps the cutoff tail from over-flattening at high
+* Vg2 (Koren drive normalization); KG1 pins the box.
+* Plate knee: Ip/Icath = 0.76*tanh(max(Vpk,0)/13) -- 55/83/98 % at
+* 8/15/30 V, matching the p.4 Ec1=0 knees (the old (Vpk-8)/55 form held
+* 32 % of the current at Vpk=0 and reached 90 % only at ~68 V). max(.,0)
+* keeps a hard-bottomed plate from sourcing current. Retained
+* simplification: the screen share stays FSC=0.24 below the knee too, so
+* a bottomed plate starves the cathode sum instead of redistributing to
+* the screen; the box's own share is 98/410 = 0.24 (sheet: 99/311 uA).
+* Nodes: p g2 g k
+.subckt p6au6 p g2 g k
+* screen-referenced Koren drive term (MU=38.25 -> 1/MU=0.02614, KP=239,
+* KVB=2100)
+BU  u  0 V = 239*(0.02614 + V(g,k)/sqrt(2100 + V(g2,k)*V(g2,k)))
+BE  e1 0 V = V(g2,k)/239 * (V(u) > 0 ? V(u) + ln(1+exp(-V(u))) : ln(1+exp(V(u))))
+RE  e1 0 1G
+* total space current; screen takes a near-constant share FSC=0.24, plate
+* takes the rest gated by the tanh knee above. Cathode current = Ip + Ig2
+* exactly in the flat region. KG1=406.5 pins Ispace = 410 uA at the box.
+BIC ic 0 V = pwr(max(V(e1),0),1.52)/406.5
+RIC ic 0 1G
+BKN kn 0 V = tanh(max(V(p,k),0)/13)
+RKN kn 0 1G
+BGP p  k I = V(ic)*0.76*V(kn)
+BSC g2 k I = V(ic)*0.24
+RCP p  k 1G
+RCS g2 k 1G
+* inter-electrode / feedthrough caps (6AU6 datasheet order of magnitude)
+Cin g  k 5.5p
+Cgp g  p 0.0035p
+Cout p  k 5.0p
+D3  gd k dgrid
+R1  g  gd 2k
+.model dgrid D(IS=1n RS=1 CJO=8p)
+.ends
+
+*========================= 6X4 full-wave rectifier (V8) ============*
+* Two indirectly-heated diodes, common cathode. Datasheet-ish forward
+* drop via RS; the reservoir/filter caps live in the deck, not here.
+.model d6x4 D(IS=2n RS=180 CJO=6p BV=1300)
+.subckt r6x4 p1 p2 k
+D1 p1 k d6x4
+D2 p2 k d6x4
+.ends

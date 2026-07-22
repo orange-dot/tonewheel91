@@ -1,0 +1,315 @@
+* tonewheel91 warmth reference -- Hammond AO-28 preamplifier, full model.
+*
+* Re-derived from the real AO-28 schematic (B3/C3 service manual p.72,
+* docs/externalDocs/) instead of the generic textbook triode that
+* driver/spice/stage1.cir used to be. Every R/C and rail here is read off
+* that sheet; tube model params live in ao28.lib and are fitted to the
+* sheet's own DC labels (see docs/ao28-netlist.md for the full BOM and the
+* verified-vs-reconstructed seam).
+*
+* Signal chain (warmth path, vibrato parked):
+*   in -> V1 6AU6 (feedback R4/C2||R5) -> V4A 12AX7 -> V4B 12AX7
+*      -> V3B 12BH7 output -> T3 -> out
+* Great channel V2 6AU6 -> V3A 12BH7 follower -> scanner LC line (node D)
+* is built and biased but driven quiet during a swell-channel warmth run.
+* Percussion V5/V6 6C4 + V7 12AU7 is built and keyed off. Rails come from
+* the V8 6X4 + T7 supply when psu=1, or ideal DC sources when psu=0.
+*
+* Run modes (set at top):
+*   .param psu=0  -> ideal DC rails (topology/DC validation, clean sweeps)
+*   .param psu=1  -> real 6X4 rectifier rails (ripple/sag included)
+*   .param vib=0  -> scanner commutator parked (warmth measurement)
+*   .param drv=0.3 -> swell input drive amplitude (V, grid-referred)
+
+.include driver/spice/ao28.lib
+.param psu=0
+.param vib=0
+.param drv=0.3
+* scan=1 builds the full 18-section LC delay line (architecture/vibrato/DC
+* runs). scan=0 collapses the section inductors (Lsec=0) so the line becomes
+* the pure capacitive tap load node D actually sees -- the high-Q LC ring is
+* what makes the transient stiff, and the line is the quiet great channel
+* that does not touch the V1 warmth measurement. Warmth sweeps use scan=0.
+.param scan=0
+
+*==================== POWER SUPPLY =====================================*
+* psu=1: 6X4 full-wave from T7 (340 Vrms/side, CT grounded), then the
+* printed filter string 375 -> R91 900 -> 335 -> R97 4500 -> 205, with
+* R94/R95/R96 4.7k decoupling to 290/280 and R98 7500 / R99 180 to 37/33.
+* psu=0: the same rail nodes pinned to the printed DC voltages.
+
+* --- rectifier branch (only meaningful when psu=1) ---
+VAC1 ac1 0 SIN(0 481 60)
+VAC2 ac2 0 SIN(0 481 60 0 0 180)
+XREC ac1 ac2 raw r6x4
+C56r raw 0 40u IC=375
+R91  raw n335 900
+C57  n335 0 40u IC=335
+R97  n335 n205r 4500
+C60  n205r 0 50u IC=205
+R98  n205r n37r 7500
+R99  n37r  n33r 180
+R100 n37r 0 2.7k
+R101 n33r 0 2.7k
+R94  n335 n290r 4.7k
+C58  n290r 0 30u IC=290
+R95  n290r n280r 4.7k
+C56b n280r 0 10u IC=280
+
+* --- rail selection: a behavioural source per rail picks the rectifier
+*     node (psu=1) or the printed ideal DC value (psu=0). ---
+BR290 P290 0 V = psu>0.5 ? V(n290r) : 290
+BR280 P280 0 V = psu>0.5 ? V(n280r) : 280
+BR205 P205 0 V = psu>0.5 ? V(n205r) : 205
+BR145 P145 0 V = psu>0.5 ? V(n335) : 145
+BR37  P37  0 V = psu>0.5 ? V(n37r)  : 37
+BR33  P33  0 V = psu>0.5 ? V(n33r)  : 33
+* +145 is the screen feed node R29 330k from +280; pin it as a source when
+* ideal, else derive through R29 in-circuit below.
+
+*==================== SWELL INPUT (warmth drive) ======================*
+* T2 matching transformer folded into the source: drv is grid-referred.
+* Input termination R2 1M || C1 470pF, R1 3.9M to gnd; vibrato-swell switch
+* parked to the dry node A.
+VIN  in 0 DC 0 SIN(0 {drv} 240)
+Rsrc in a 100          ; T2 secondary source impedance (folded)
+R2   a  0 1meg
+C1   a  0 470p
+R1   a  0 3.9meg
+
+*==================== V1  6AU6 swell gain stage =======================*
+* grid <- R6(=RS above) from node a; R3 270k grid leak to gnd; C3 100pF
+* grid-cathode. Plate P1 (~130) load R8 470k to +280. Screen S1 (~60)
+* dropper R7 2.2M to +280, bypass C4 .33. Cathode on the +1.7V rail.
+* Global feedback P1 area -> input a: R4 1.8M + C2 39pF series, || R5 10M.
+R3   a  0 270k
+XV1  P1 S1 g1 kbias p6au6
+R6   a  g1 47k         ; grid series into V1
+C3   g1 kbias 100p
+R8   P1 P280 470k
+R7   S1 P280 2.2meg
+C4   S1 0 0.33u
+* feedback network from the plate-coupled node
+C5   P1 n9  0.01u
+R9   n9 nfb 820k
+R10  nfb 0 3.9meg
+C8   nfb 0 30p
+R4   nfb a 1.8meg
+C2fb nfb a 39p       ; C2 in series with R4 -- see note; modelled || as HF trim
+R5   nfb a 10meg
+
+*==================== shared +1.7V cathode bias rail ==================*
+* V2 self-bias cathode (R17 1.2k, C9 30u) sets ~+1.7V; V1 and V4 cathodes
+* tie here. kbias is that rail.
+* (kbias node is driven by V2's cathode below.)
+
+*==================== GREAT INPUT + V2 6AU6 ===========================*
+* Great channel quiet during a swell warmth run: input B grounded through
+* its termination. V2 makes the +1.7V rail and drives the scanner follower.
+R2b  b 0 1meg
+R1b  b 0 3.9meg
+R16  b g2 470k
+C8g  g2 kbias 100p
+R12  b 0 270k
+XV2  P2 S2 g2 kbias p6au6
+R19  P2 P280 470k
+R20  S2 P280 2.2meg
+C10  S2 0 0.33u
+R17  kbias 0 1.2k
+C9   kbias 0 30u IC=1.7
+* V2 feedback R13 4.7M + C7 24pF || R14 10M + R15 2.7M back to b
+C11  P2 n11 0.0047u
+R13  n11 b 4.7meg
+C7fb n11 b 24p
+R14  n11 nb2 10meg
+R15  nb2 b 2.7meg
+
+*==================== V3A 12BH7 scanner-line follower =================*
+* V2 plate -> C12 -> V3A grid; plate to +290 through R25 100; cathode
+* follower output (R21 1M / R22 820) -> C13 1.0u -> node D (scanner in).
+C12  P2 g3a 0.0047u
+R18a g3a 0 1meg
+XV3A p3a g3a k3a t12bh7
+R25  P290 p3a 100       ; plate fed +290 through R25 100 ohm
+R21  k3a 0 1meg
+R22  k3a k3b2 820
+R23  k3b2 0 22k
+R24  k3b2 0 22k
+C13  k3a nD 1.0u
+
+*==================== VIBRATO SCANNER LC DELAY LINE ===================*
+* 18-section line off node D. Damping R65..R76 and shunt C42..C54 (.004,
+* C54 .001) are printed; the section inductance L is NOT on the sheet --
+* the documented Hammond scanner line value ~700 mH/section is used and
+* flagged in docs/ao28-netlist.md. Commutator parked at tap 9 when vib=0.
+.param Lsec={scan > 0.5 ? 0.7 : 0}
+R77 t18 0 15k          ; far-end image-impedance termination (matches Z0)
+L1  nD  t1  {Lsec}
+L2  t1  t2  {Lsec}
+L3  t2  t3  {Lsec}
+L4  t3  t4  {Lsec}
+L5  t4  t5  {Lsec}
+L6  t5  t6  {Lsec}
+L7  t6  t7  {Lsec}
+L8  t7  t8  {Lsec}
+L9  t8  t9  {Lsec}
+L10 t9  t10 {Lsec}
+L11 t10 t11 {Lsec}
+L12 t11 t12 {Lsec}
+L13 t12 t13 {Lsec}
+L14 t13 t14 {Lsec}
+L15 t14 t15 {Lsec}
+L16 t15 t16 {Lsec}
+L17 t16 t17 {Lsec}
+L18 t17 t18 {Lsec}
+C42 t1 0 4n
+C43 t2 0 4n
+C44 t3 0 4n
+C45 t4 0 4n
+C46 t5 0 4n
+C47 t6 0 4n
+C48 t7 0 4n
+C49 t8 0 4n
+C50 t9 0 4n
+C51 t10 0 4n
+C52 t11 0 4n
+C53 t12 0 4n
+C54 t13 0 1n
+Rt1 t14 0 68k
+Rt2 t15 0 150k
+Rt3 t16 0 180k
+Rt4 t17 0 180k
+Rt5 t18 0 180k
+R65 nD 0 27k
+R44 nscan 0 22k
+* parked commutator: tap 9 feeds the vibrato-return node when vib=0
+Bscan nscan 0 V = V(t9)
+
+*==================== V4A/V4B 12AX7 driver + expression ==============*
+* Forward mix into V4A grid: V1 plate through C15 51pF and C16 .033.
+* Expression/vibrato matrix C18/C20 220pF, R30/R32 1.8M, R34 15M, R31/R33
+* 68k, C19/C21 -- reconstructed as read (see doc). V4A -> V4B via the
+* expression control; V4B plate load R36 330k to +280.
+* Audio coupling into V4A is the .033uF (C16); the 51pF (C15) is only an
+* HF shunt at the grid -- 51pF is ~13 MEG at 240 Hz and cannot be the
+* series audio path. R28 grid leak, R27 to gnd. (Vibrato-matrix cluster:
+* wire-level routing reconstructed at scan-legibility limit, see doc.)
+C16  P1  g4a 0.033u
+C15  g4a 0  51p
+R28  g4a 0  270k
+R27  g4a 0  1.8meg
+XV4A p4a g4a kbias t12ax7
+R29  P280 p4a 330k     ; p4a sits near +145 (screen/plate feed)
+C18  p4a m1 220p
+C20  m1  m2 220p
+R30  p4a m1 1.8meg
+R32  m1  m2 1.8meg
+R31  m1  0  68k
+R33  m2  0  68k
+C19  m1 0 0.0022u
+C21  m2 0 0.001u
+R34  m2 0 15meg
+* expression control tap (parked full-open) -> V4B grid
+Bexpr g4b 0 V = V(m2)
+R35  g4b 0 3.3meg
+XV4B p4b g4b kbias t12ax7
+R36  p4b P280 330k
+* radio-phono summing (quiet) + trimmer C22 into V4B grid region
+C17  rphono g4b 680p
+Vrp  rphono 0 DC 0
+C22  p4a g4b 47p       ; 24-90pF trimmer, mid
+C23  g4b 0 0.033u
+
+*==================== volume / tone / V3B 12BH7 output ===============*
+* V4B plate -> C24 82pF -> volume (parked full) -> tone R40 300k -> V3B
+* output grid. Output V3B: plate 285 into T3 primary to +290, cathode
+* R42 1.2k / C26 30u, grid return R41 100k.
+C24  p4b vol 82p
+R37  vol 0 270k
+R39  vol tone 330k
+R38  tone 0 390k
+R40  tone g3b 300k
+R41  g3b 0 100k
+XV3B pout g3b k3b t12bh7
+R42  k3b 0 1.2k
+C26  k3b 0 30u IC=12
+* T3 output transformer: primary from +290 to plate (coupled), reflected
+* load on the secondary. Ratio not on the sheet -> plausible 25:1 to an
+* 8-ohm-referred load; primary magnetizing Lp. Flagged in the doc.
+Lp   P290 pout 8 IC=0
+Ls   sec  0   0.0128
+Kt3  Lp Ls 0.995
+Rspk sec 0 8
+Bout out 0 V = V(sec)
+
+*==================== PERCUSSION (built, keyed off) ==================*
+* V5 6C4 -> T5 -> V7 12AU7 pair -> T6 -> R61 33k -> percussion node.
+* Keyed off: trigger source held at 0, so the chain is biased but silent.
+Vkey key 0 DC 0
+R48  key g5 470k
+R47  key 0 47k
+C28  key g5 0.047u
+XV5  p5 g5 k5 t6c4
+R49  k5 0 2.2k
+C29  k5 0 100p
+C30  k5 0 25u IC=0
+R50  p5 P205 47k         ; V5 plate load into T5 primary (folded)
+XV7A p7a g7a k7 t12au7
+XV7B p7b g7b k7 t12au7
+Rp7a p7a P205 47k        ; V7A plate load into T6 primary (folded)
+Rp7b p7b P205 47k        ; V7B plate load into T6 primary (folded)
+R58  g7a ndec 4.7meg
+R57  g7b ndec 1.5meg
+R60  ndec P33 30k
+R59  nvol 0 120k
+R55  k7 nvol 82k
+R56  nvol 0 22k
+R51  k7 0 4.7k
+R61  p7a percout 33k
+R62  percout 0 100k
+C32  percout 0 390p
+C34  percout ncc 0.001u
+C33  ncc 0 0.0033u
+C35  ncc 0 150p
+R63  ncc 0 390k
+Rpj  percout 0 1meg     ; percussion mixes at node C (quiet)
+
+.options reltol=1e-4 abstol=1e-11 vntol=1e-8 noacct method=gear
+
+.control
+set wr_singlescale
+set wr_vecnames
+unset askquit
+op
+echo "--- DC operating points vs schematic labels ---"
+print v(P1) v(S1) v(P2) v(S2) v(kbias) v(p4a) v(p4b) v(k3a) v(k3b) v(pout)
+* Warmth signature is generated at the V1 6AU6 input stage (fully DC-
+* verified, real values) and again at the V3B output into T3. Level sweep
+* at 240 Hz: 48000/240 = 200 samples/period exactly -> leakage-free
+* integer-period DFT windows. tran grid 1/48000 s, internal cap 2u.
+* Save window: the slowest settling state is the screen operating-point
+* walk through R7/R20 2.2M against C4/C10 0.33u (tau ~ 0.73 s) -- the
+* old 0.4 s save start sat mid-walk and contaminated the level rows
+* (the re-fit round measured it). Save from 1.55 s (>= 2.1 tau).
+* Save only the analyzed vectors: full-node storage over the 0.5 s
+* window needs ~132 MB per tran and trips ngspice's output-memory
+* check on a small host.
+save v(P1) v(out) v(kbias)
+foreach a 0.02 0.05 0.1 0.15 0.2 0.3 0.5 0.7 1.0 1.5 2.0 3.0
+  alter @vin[sin] = [ 0 $a 240 ]
+  tran 20.833333333333u 2.05 1.55 2u
+  linearize v(P1) v(out) v(kbias)
+  wrdata build/spice/ao28_lvl_240_{$a}.txt v(P1) v(out) v(kbias)
+  destroy all
+end
+* Frequency-independence check at 0.3 V (48000/120 = 400, 48000/480 = 100).
+foreach f 120 480
+  alter @vin[sin] = [ 0 0.3 $f ]
+  tran 20.833333333333u 2.05 1.55 2u
+  linearize v(P1) v(out) v(kbias)
+  wrdata build/spice/ao28_freq_{$f}.txt v(P1) v(out) v(kbias)
+  destroy all
+end
+quit
+.endc
+.end

@@ -1,0 +1,42 @@
+* tonewheel91 warmth reference -- AO-28 V1 6AU6 static (fast-manifold)
+* transfer curve.
+*
+* The 6AU6 analog of curve.cir: the same p6au6 stage as ao28.cir V1, but
+* open-loop (R4/C2/R5 global feedback absent) and with the two slow
+* states HELD at the full-circuit quiescent values ao28.cir reports with
+* the datasheet-anchored p6au6 model:
+*   - cathode at the shared +1.7 V rail value (V2 self-bias): 1.684217 V
+*     -- an ideally-bypassed rail, which is what the audio band sees
+*     through C9.
+*   - screen at its R7/C4 divider point: 61.36232 V -- C4 0.33u holds the
+*     screen there over an audio cycle (tau = 0.73 s against R7 2.2M).
+* Sweeping the grid source through R6 47k (the series impedance the AC
+* path has; Rsrc 100 is negligible) then yields the stage's static AC
+* transfer: exponential-tail curvature on the negative side, grid-
+* conduction knee on the positive side through R6.
+* Slow-state DYNAMICS (screen operating-point walk under drive, cathode
+* rail walk) are deliberately absent here, exactly as blocking dynamics
+* are absent from curve.cir, and stay out of scope for the static fit.
+
+.include driver/spice/ao28.lib
+
+VBP bp  0 DC 280
+VIN in  0 DC 0
+R6  in  g1 47k
+XV1 P1  S1 g1 kbias p6au6
+R8  bp  P1 470k
+VS  S1  0  DC 61.36232
+VK  kbias 0 DC 1.684217
+
+.options reltol=1e-6 abstol=1e-12 vntol=1e-9 noacct
+
+.control
+set wr_singlescale
+set wr_vecnames
+unset askquit
+dc VIN -6 6 0.002
+wrdata build/spice/ao28_curve.txt v(P1) v(g1) v(kbias)
+quit
+.endc
+
+.end

@@ -77,6 +77,14 @@ warmth-ref:
 	ngspice -b driver/spice/stage1.cir -o $(BUILD)/spice/run.log
 	ngspice -b driver/spice/curve.cir -o $(BUILD)/spice/curve.log
 
+# Circuit-true full AO-28 preamplifier sweep (docs/ao28-netlist.md). Reads
+# the real schematic values; heavier and slower than stage1. Same optional,
+# by-hand posture -- never a build dependency.
+ao28-ref:
+	@command -v ngspice >/dev/null || { echo "ngspice not installed; the AO-28 sweep is optional dev tooling"; exit 1; }
+	mkdir -p $(BUILD)/spice
+	ngspice -b driver/spice/ao28.cir -o $(BUILD)/spice/ao28.log
+
 warmth: $(BUILD)/exhibit_warmth
 	./$(BUILD)/exhibit_warmth
 	@echo
@@ -93,4 +101,4 @@ warmth: $(BUILD)/exhibit_warmth
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test exhibit warmth warmth-ref clean
+.PHONY: all test exhibit warmth warmth-ref ao28-ref clean

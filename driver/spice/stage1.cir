@@ -7,12 +7,17 @@
 * dependency -- run by hand via `make warmth-ref` when recalibrating.
 *
 * Tube: Koren triode model with the published 12AX7 parameter set
-* (MU=100 EX=1.4 KG1=1060 KP=600 KVB=300 RGI=2k) -- sec 14 names the
-* 12AX7 family as control-stage flavor; no component values were read
-* from the preamp schematic, so the surrounding network is the generic
-* textbook stage: 250 V supply, 100k plate load, 1.5k/25u self-bias,
-* 22n couplings into 1 Meg. The softplus in BE is the overflow-safe form
-* of the Koren ln(1+exp(.)) so Newton excursions cannot produce inf.
+* (MU=100 EX=1.4 KG1=1060 KP=600 KVB=300 RGI=2k). The surrounding network
+* is a deliberately generic textbook stage -- 250 V supply, 100k plate
+* load, 1.5k/25u self-bias, 22n couplings into 1 Meg -- NOT the AO-28's
+* actual network. This deck is the compact behavioral warmth stand-in.
+*
+* The circuit-true reference now lives in driver/spice/ao28.cir: the full
+* Hammond AO-28 preamplifier read off the B3/C3 service manual schematic
+* (docs/externalDocs/, sheet p.72) -- 6AU6 pentode input stages with
+* feedback, 12AX7 driver, 12BH7 output, real rails. See docs/ao28-netlist.md.
+* The softplus in BE is the overflow-safe form of the Koren ln(1+exp(.))
+* so Newton excursions cannot produce inf.
 
 .subckt t12ax7 p g k
 BU  u  0 V = 600*(0.01 + V(g,k)/sqrt(300 + V(p,k)*V(p,k)))

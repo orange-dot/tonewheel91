@@ -1,0 +1,17 @@
+* 6AU6 pentode DC bring-up: reproduce the AO-28 V1 operating box.
+* Cathode on the +1.7V rail, grid returned to gnd, screen fed 2.2M from
+* +280, plate loaded 470k from +280. Expect Vp~130, Vg2~60, Ip~319u.
+.include driver/spice/ao28.lib
+VP  bp 0 DC 280
+VK  k  0 DC 1.7
+RG  g  0 270k
+RSC bp g2 2.2meg
+RA  bp p  470k
+XV  p g2 g k p6au6
+.control
+set noaskquit
+op
+print v(p) v(g2) v(p,k) v(g2,k) @rsc[i] @ra[i]
+quit
+.endc
+.end
