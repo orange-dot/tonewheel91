@@ -364,9 +364,66 @@ All 549 cells (9 x 61) resolve to exactly one class — no cell is ambiguous.
   (the smoothing constant is what shapes click brightness).
 - Velocity-to-contact-stagger (slow press engages the nine buses over
   ~0-15 ms) [decision — playability model; the machine does this via key
-  travel, MIDI has no continuous key position]. Loudness stays
-  velocity-independent: contact closure is binary [SM 5-32 by
-  construction].
+  travel, and MIDI 1.0 has no continuous key-position message]. Loudness
+  stays velocity-independent: contact closure is binary [SM 5-32 by
+  construction]. Section 7.1 takes the same stack the other way round.
+
+### 7.1 Key depth
+
+The nine springs of a key are a stack, not a switch: they meet their
+busbars at nine points along the travel, so how far a key is held decides
+how many of its frequencies reach the manual [SM 5-32 by construction —
+nine springs at nine heights is what the drawing shows; the machine's own
+players call the resulting sound a half-press]. Section 7 already models
+that stack in *time* (a slow press engages the buses over ~0-15 ms).
+Depth models the same stack in *position*, which is the physically prior
+quantity: velocity stagger is what depth looks like when the only thing
+known about the press is how fast it was.
+
+- **Make-point spacing: even, nine points over the travel** [decision].
+  The stagger model already spreads the buses linearly over the press
+  (`t = span x b / 8`), which is a constant-speed descent through evenly
+  spaced contacts; depth uses the same spacing so the two agree. The real
+  spring heights are not tabulated in [SM]; a factory keybed drawing
+  would upgrade this.
+- **Closure order: bus 0 -> 8**, the same order the stagger walks
+  [decision, following section 7]. Order within the stack is a mechanical
+  fact this edition does not give either.
+- **Make/break band: +-4 of 128** [decision]. A wiping spring contact
+  breaks lower than it makes, so a band is the mechanism and not only a
+  numerical guard — but the width here is chosen for the control problem,
+  not measured: nine steps over a 0..127 travel put the make points ~12.8
+  apart, and a finger parked on one would otherwise chatter its contact
+  at whatever rate the surface reports. The band is ~1/3 of a step,
+  leaving every make point reachable from both directions with margin
+  (full scale 127 makes all nine with 8 counts to spare).
+- **Carrier: poly key pressure (0xA0)** [decision]. MIDI 1.0 has no
+  key-position message; poly pressure is the only per-note continuous
+  channel it has, and this is what it is being used for here. A MIDI 2.0
+  per-note controller is the honest carrier if the transport ever moves
+  (see `docs/gesture-control.md`).
+- Consequences that fall out of the existing model, not added to it:
+  - The section 6/6.1 merge law already folds an arbitrary set of closed
+    contacts per wheel, foldback collisions included, so depth changes
+    **only which cells of the contact matrix are closed**. No new signal
+    path exists for it — asserted by `exhibit_depth`, which measures each
+    made bus passing exactly its full-press contribution.
+  - **The ninth contact is stolen while percussion is on** (section 8):
+    the 1' bus is the trigger-sensing line, so the top step of the travel
+    goes silently out of service for the sustained tone. Depth 8 and
+    depth 9 are then bit-for-bit the same sound — while *also* being the
+    step that fires percussion. With percussion on, the top of the travel
+    is a pure trigger control and nothing else.
+  - **A half-press does not fire percussion**, for the same reason and
+    with no extra rule: section 8's trigger is that contact, and the
+    travel never reached it. The envelope stays armed for whoever does
+    bottom out.
+  - Depth 0 is a held key with every contact open — **not** a note-off.
+    Note-off stays authoritative, and a key that is not held ignores
+    depth entirely.
+- **Open, by ear**: the spacing, the band width, and the feel of the
+  ninth contact now that it both steals the 1' bus and fires percussion.
+  Nothing in this subsection is measured.
 
 ## 8. Percussion
 
@@ -386,6 +443,27 @@ All 549 cells (9 x 61) resolve to exactly one class — no cell is ambiguous.
     -25 V. Hence the quirk: while percussion is enabled the 1' drawbar is
     out of service. Our model mutes the 1' bus contribution when
     percussion is on.
+  - **The trigger is that contact, landed post-M7** [derived from the
+    above]. Until the key-depth pass the model fired the envelope on the
+    note event, which is only the same thing when every press bottoms
+    out. It does not: the nine contacts close over the velocity stagger
+    (~0-15 ms) and the 1' contact closes **last**, and under section 7.1
+    a press may stop short of it entirely. So the state machine now
+    follows that one contact — closing any key's ninth contact grounds K
+    and releases the envelope, and while any of them is closed the grid
+    stays clamped, which *is* the single-trigger rule rather than a
+    separate rule about keys. Three consequences, all measured in
+    `docs/depth-evidence.md`: the trigger arrives at the end of a slow
+    press instead of at its start; a half-press never fires it and
+    leaves the envelope armed; and riding a held key back onto its ninth
+    contact retriggers percussion with no note event at all.
+  - **Re-arm is now modeled, and had to be** [derived]: with the trigger
+    on the sensing line, that line's own contact **bounce** (section 7,
+    <= 3 toggles inside 2 ms) would retrigger the envelope several times
+    per press if recovery were instant. The 34 ms RC below is what makes
+    one press one hit — it sits an order above the bounce window and two
+    orders below a playable staccato gap, so it separates them cleanly.
+    Reading recovery as one tau is [decision].
   - Source signal: the **2nd or 3rd harmonic bus, borrowed pre-drawbar**
     from the upper-manual "B" drawbar group, amplified, with part returned
     to the same drawbar through a third winding on the input transformer
@@ -459,6 +537,11 @@ All 549 cells (9 x 61) resolve to exactly one class — no cell is ambiguous.
     immediate on release, and detachment — not recovery time — is what
     gates the next hit. Note this **kills the [P44] ~8 notes/s (~125 ms)
     figure as an anchor**: that is the ancestor circuit, and it is 4x out.
+    **Landed post-M7**, with the contact-driven trigger above: what was
+    "essentially immediate" is now the actual constant, because the
+    sensing line's own bounce lives at 2 ms and needs separating from a
+    real detachment. Measured threshold: two notes 0/10/20 ms apart give
+    one hit, 40/100 ms apart give two (`exhibit_percussion`).
   - SOFT/NORMAL: level pad on the percussion channel plus the NORMAL-mode
     sustained-tone effect above; a two-position tablet [SM 5-48]. The pad
     parts are now named — **R46 = 12 kohm** switched at PERCUSSION VOLUME,
@@ -1143,6 +1226,8 @@ default the by-ear pass is expected to move.
 | taper resistance classes per (key, bus) | **table pinned in docs (section 6.1) from [MW]**, single secondary source; **wired into the core at M3** (per-(key, bus) classes, dB column as level authority, precomputed gains — no libm); by-ear verification **still open**; a factory chart would still upgrade the provenance |
 | robbing | **a(k) replaced at M3** by the parallel-network ratio law over per-key wires (section 6.1); a(k) survives as its equal-wire special case. All 53 collision sites now rob per their 24-100 ohm classes; the M3 exhibit measures the retired flat model's over-robbing at +0.97..+1.78 dB (mean +1.19). `test.c` asserts the 16'/wheel-13 collision at ~0.7183 absolute — merge_ratio 0.9416 x (0.3162 + 0.4467); the a(2)-**equivalent** is ~1.88 against the old 1.6, but taper puts the actual contribution below 1. By-ear verification of the new robbing **still open** |
 | bounce count/window, smoothing constant | M2 shipped defaults (<= 3 toggles / 2 ms, tau 0.25 ms, stagger 0-15 ms, release 3 ms); final by ear |
+| key depth: make-point spacing, closure order, make/break band | **Landed post-M7** (section 7.1): nine make points evenly over a 0..127 travel, closing bus 0 -> 8 as the stagger does, with a +-4 band so a parked finger cannot chatter a contact; carried on poly key pressure (0xA0). Every one of those three numbers is a **[decision]** — [SM] tabulates neither the spring heights nor their order, and the band is sized for the control problem, not measured. The feature is inert without a depth message: every percussion-off signature, including the M7 wear identity anchor and the whole-song `renders.md` hashes, reproduces bit-for-bit (docs/depth-evidence.md). **Still open**: all three numbers by ear, and the feel of the ninth contact now that it both steals the 1' bus and fires percussion |
+| percussion trigger source, re-arm timing | **Landed post-M7** with key depth (section 8): the trigger follows the **1' contact**, not the note event, which is what the sensing-line reading said all along — the old note-driven form was only equivalent when every press bottomed out, and section 7.1 makes that false. The 34 ms R55/R56 recovery is now modeled too, because the sensing line's own 2 ms bounce would otherwise retrigger the envelope several times per press. Measured: trigger lands at the end of a slow press, not its start; bounce gives one hit per press; the detachment threshold sits between 20 and 40 ms; a half-press fires nothing. **This moved the percussion-on baselines** — `exhibit_percussion` and `exhibit_drive` re-pinned in docs/depth-evidence.md; nothing percussion-off moved. **Still open, by ear**: whether one tau is the right reading of recovery, and the absolute decay seconds that were already open above |
 | swell curve | M2 shipped x^2 taper; compensation tilt (loudness-style, section 10) **still open — deliberately not cut into M5**, which modeled the drive stage only; lands with a by-ear voicing pass |
 | percussion decay, re-arm, SOFT pad, NORMAL attenuation | **mostly closed by reading [SM]'s prose (section 8), not by ear**: decay tau 1.551 s / 0.375 s from C31 = 0.33 uF through R58 / R57\|\|R58, ratio **4.133 : 1 (the old 3.7 : 1 was the wrong resistors)**; re-arm tau ~34 ms from R55+R56. Still open at M3: **absolute decay seconds are NOT derived** — tau -> audible time needs V7's transfer behavior or a measurement ([SM 4-4] trims it per unit against an audible threshold); pick slow by ear, derive fast = slow / 4.133, mark [decision]. The NORMAL attenuation and SOFT pad are now **derivable** (R50 = 22 ohm as a section 6.1 wire; R46/R59/R51 divider) rather than by-ear. Concept lineage [P44] — but its ~8 notes/s figure is **not** an anchor, it is 4x out |
 | scanner | **components + taps [DAFx16]; depth/rate [P45]; C-mode voicing target [P39]**; **M4 landed**: trapezoidal nodal ladder (no prewarp; edge 6575 Hz at 48 kHz, ~7.1 kHz at 192 kHz), C mix = (dry+wet)/2 [decision], bass bypass as the exact wheel-1..16 split [derived], CC84; measured V3 cyclical depth 1.48% (in band), peak 1.91% with the moving ripple. **Still open**: output level trim and every by-ear verdict (C-mode voicing vs [P39] treble-detune target, ripple strength) |

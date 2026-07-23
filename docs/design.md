@@ -72,8 +72,10 @@ Three physical domains, deliberately modeled at different depths:
 - **Mechanics — physics from the start.** Gear-train frequencies and
   shared-wheel phase coherence; contacts switching a live signal through
   deterministic bounce; the scanner sweeping real taps; rotors with
-  per-direction inertia. One planned refinement: velocity -> contact stagger
-  (the nine contacts engage over ~0-15 ms on a slow press).
+  per-direction inertia. Velocity -> contact stagger landed at M2 (the nine
+  contacts engage over ~0-15 ms on a slow press); the post-M7 depth pass
+  addresses the same stack by key *position* instead of press speed
+  (constants sec 7.1), which is the physically prior quantity.
 - **Electronics — calibrated behavior, one named deep-modeling candidate.**
   Taper/robbing/drawbar-step tables; static per-wheel level and harmonic
   profiles. The tube stages (preamp, rotary amp) get a stateful
@@ -129,9 +131,11 @@ soft/normal), `vibrato` (off | V1..V3 | C1..C3), `drive`, `wear`. Rotary:
 `mode` (bypass | chorale | tremolo | brake), `balance`, `width`, `drive`.
 
 MIDI: notes 36..=96 (61-key compass; outside notes ignored and counted),
-velocity -> contact stagger only, CC11 swell, nine CCs for the drawbars
-(nine-fader surfaces map 1:1), one control for rotary speed as a live
-performance switch. The exact CC map is pinned at M2.
+velocity -> contact stagger only, poly key pressure -> per-note key depth
+(constants sec 7.1: how far the key is held, deciding how many of its nine
+contacts are made), CC11 swell, nine CCs for the drawbars (nine-fader
+surfaces map 1:1), one control for rotary speed as a live performance
+switch. The exact CC map is pinned at M2.
 
 ## Determinism
 

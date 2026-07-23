@@ -10,6 +10,23 @@ static constexpr float STAGGER_MAX_S = 0.015f; /* slow press, nine buses */
 static constexpr float RELEASE_STAGGER_S = 0.003f;
 static constexpr float BOUNCE_WINDOW_S = 0.002f; /* <= 3 toggles inside */
 
+/* Key depth (sec 7.1): the nine make points sit evenly over the 0..127
+ * travel, each carrying a +-band. A wiping spring contact breaks lower
+ * than it makes, so the band is the mechanism as well as the guard that
+ * keeps a finger parked on a boundary from chattering its contact. */
+static constexpr int DEPTH_HYST = 4;
+
+static int make_point(int i) { return (i + 1) * 128 / (TW_DRAWBARS + 1); }
+
+/* Walk the made-contact count to the one the travel commands: rising
+ * needs the make point plus the band, falling the one below it minus
+ * the band, so a position inside a band holds whatever it reached. */
+static int depth_made(int made, int depth) {
+    while (made < TW_DRAWBARS && depth >= make_point(made) + DEPTH_HYST) made++;
+    while (made > 0 && depth < make_point(made - 1) - DEPTH_HYST) made--;
+    return made;
+}
+
 static uint64_t rng_next(uint64_t *s) { return tw_splitmix64(s); }
 
 /* Taper: six resistance-wire classes per (key, bus), dB-ladder order
@@ -50,6 +67,13 @@ static int taper_class(int key, int bus) { /* key 0-based */
  * R57||R58 (1.137 Mohm), ratio 4.133:1. constants.md section 8. */
 static constexpr float PERC_TAU_SLOW_S = 1.551f;
 static constexpr float PERC_TAU_FAST_S = 0.375f;
+
+/* Re-arm: C31 recharges through R55 + R56 = 104 kohm, tau ~= 34 ms
+ * (sec 8, derived). Reading recovery as one tau is [decision]. What the
+ * constant has to do is separate a detached attack from the 2 ms of
+ * contact bounce on the same sensing line -- it sits two orders below a
+ * playable staccato gap and one order above the bounce window. */
+static constexpr float PERC_REARM_S = 0.034f;
 
 /* Shipped wear default (design.md: nonzero — tolerance effects exist on
  * a factory-new unit; wear = 0 stays the idealized test reference).
@@ -116,18 +140,6 @@ static void refold_all(tw_organ *o) {
     for (int w = TW_WHEEL_MIN; w <= TW_WHEEL_MAX; w++) refold_wheel(o, w);
 }
 
-static void apply_contact(tw_organ *o, int key, int bus, bool closed) {
-    if (o->contact[key][bus] == closed) return;
-    o->contact[key][bus] = closed;
-    refold_wheel(o, tw_wheel_index(key + 1, bus));
-}
-
-static bool any_held(const tw_organ *o) {
-    for (int k = 0; k < TW_KEYS; k++)
-        if (o->held[k]) return true;
-    return false;
-}
-
 /* Percussion tap (sec 4/8): 2nd harmonic = 4' bus, 3rd = 2-2/3' bus,
  * pre-drawbar -- the wheel choice and its peak amplitude never depend on
  * that bus's registration digit. Refolds the old and new tapped wheel so
@@ -141,6 +153,36 @@ static void percussion_trigger(tw_organ *o, int key) {
         PERC_PEAK_GAIN * (o->perc.normal ? 1.0f : PERC_SOFT_PAD);
     if (old && old != w) refold_wheel(o, old);
     refold_wheel(o, w);
+}
+
+/* The trigger-sensing line (sec 8): the 1' bus sits at about -25 V, and
+ * closing any key's ninth contact grounds it through the generator
+ * filters, which isolates the control-tube grid and lets C31 start
+ * drifting -- the envelope. So percussion follows that one contact, not
+ * the key event: a press that stops short of it never fires, and while
+ * any of them is closed the grid stays clamped, which is the
+ * single-trigger rule. Opening the last one starts the R55/R56 recovery,
+ * whose 34 ms is what makes a detached attack detached; a re-close
+ * inside that window (the next legato key, or this contact's own bounce)
+ * abandons it. */
+static void sense_contact(tw_organ *o, int key, bool closed) {
+    if (closed) {
+        o->perc.sense_n++;
+        o->perc.rearm_at = 0;
+        if (o->perc.armed) {
+            if (o->perc.on) percussion_trigger(o, key);
+            o->perc.armed = false;
+        }
+    } else if (--o->perc.sense_n == 0) {
+        o->perc.rearm_at = o->now + (int64_t)(o->rate * PERC_REARM_S);
+    }
+}
+
+static void apply_contact(tw_organ *o, int key, int bus, bool closed) {
+    if (o->contact[key][bus] == closed) return;
+    o->contact[key][bus] = closed;
+    if (bus == TW_DRAWBARS - 1) sense_contact(o, key, closed);
+    refold_wheel(o, tw_wheel_index(key + 1, bus));
 }
 
 void tw_organ_init(tw_organ *o, float sample_rate_hz) {
@@ -166,18 +208,18 @@ void tw_organ_init(tw_organ *o, float sample_rate_hz) {
     tw_organ_set_wear(o, TW_WEAR_DEFAULT);
 }
 
-static void schedule_key(tw_organ *o, int key, bool down, int velocity) {
-    int span;
-    if (down) {
-        int v = velocity < 1 ? 1 : velocity > 127 ? 127 : velocity;
-        span = (int)(o->rate * STAGGER_MAX_S * (float)(127 - v) / 126.0f);
-    } else {
-        span = (int)(o->rate * RELEASE_STAGGER_S);
-    }
+/* Carry a key to `target` contacts made (bus order 0..8), the transitions
+ * spread over `span` frames with per-contact bounce. target = 9 is a full
+ * press, 0 a full release, in between is key depth. Only buses that must
+ * actually move are scheduled, and the pending list is rewritten from the
+ * contacts as they stand, so a target arriving mid-flight takes over from
+ * the one before it without leaving a contact behind. */
+static void schedule_key(tw_organ *o, int key, int target, int span) {
     int bounce_w = (int)(o->rate * BOUNCE_WINDOW_S);
     tw_contact_ev *ev = o->pend[key];
     int n = 0;
     for (int b = 0; b < TW_DRAWBARS; b++) {
+        bool down = b < target;
         if (o->contact[key][b] == down) continue;
         int64_t t = o->now + 1 + (int64_t)span * b / (TW_DRAWBARS - 1);
         ev[n++] = (tw_contact_ev){ t, (uint8_t)b, down };
@@ -213,21 +255,36 @@ void tw_organ_note(tw_organ *o, int midi_note, bool down, int velocity) {
     int key = midi_note - TW_NOTE_MIN;
     if (o->held[key] == down) return;
     o->held[key] = down;
-    schedule_key(o, key, down, velocity);
-
-    /* Single-trigger + re-arm (sec 8): fires only on the first key of a
-     * legato phrase; re-arms only once every key is back up. Re-arm's own
-     * ~34 ms RC is not modeled -- constants.md calls it "essentially
-     * immediate on release" next to the much slower decay/playing tempo,
-     * so armed flips the instant the last key releases. RNG untouched. */
+    int span;
     if (down) {
-        if (o->perc.armed) {
-            if (o->perc.on) percussion_trigger(o, key);
-            o->perc.armed = false;
-        }
-    } else if (!any_held(o)) {
-        o->perc.armed = true;
+        int v = velocity < 1 ? 1 : velocity > 127 ? 127 : velocity;
+        span = (int)(o->rate * STAGGER_MAX_S * (float)(127 - v) / 126.0f);
+    } else {
+        span = (int)(o->rate * RELEASE_STAGGER_S);
     }
+    o->made[key] = down ? TW_DRAWBARS : 0; /* a press bottoms out (sec 7.1) */
+    schedule_key(o, key, o->made[key], span);
+    /* Percussion is not touched here: its trigger is the 1' contact
+     * (sec 8, sense_contact), which this press has only scheduled. */
+}
+
+/* The travel of one held key (sec 7.1). The position stream is itself
+ * the stagger — each message moves the contacts it has to and no
+ * others — so the transitions go out with zero span and keep only their
+ * bounce. A position that lands on the count already made changes
+ * nothing at all, RNG included: a surface may stream at any rate. */
+void tw_organ_note_depth(tw_organ *o, int midi_note, int depth) {
+    if (midi_note < TW_NOTE_MIN || midi_note > TW_NOTE_MAX) {
+        o->out_of_compass++;
+        return;
+    }
+    int key = midi_note - TW_NOTE_MIN;
+    if (!o->held[key]) return; /* note-off stays authoritative */
+    int d = depth < 0 ? 0 : depth > 127 ? 127 : depth;
+    int made = depth_made(o->made[key], d);
+    if (made == o->made[key]) return;
+    o->made[key] = (uint8_t)made;
+    schedule_key(o, key, made, 0);
 }
 
 void tw_organ_set_registration(tw_organ *o, const uint8_t digits[TW_DRAWBARS]) {
@@ -272,15 +329,24 @@ void tw_organ_panic(tw_organ *o) {
         o->pend_n[k] = 0;
         o->pend_i[k] = 0;
         o->held[k] = false;
+        o->made[k] = 0;
         for (int b = 0; b < TW_DRAWBARS; b++) o->contact[k][b] = false;
     }
     for (int w = 0; w < TW_WHEELS; w++) o->gen.perc_target[w] = 0.0f;
     o->perc.wheel = 0;
-    o->perc.armed = true;
+    o->perc.armed = true; /* the contacts went with the keys, so does K */
+    o->perc.sense_n = 0;
+    o->perc.rearm_at = 0;
     refold_all(o);
 }
 
 float tw_organ_tick(tw_organ *o) {
+    /* The grid finishing its R55/R56 recovery (sec 8). One scalar test
+     * against a bank loop that already runs 61 wide. */
+    if (o->perc.rearm_at && o->now >= o->perc.rearm_at) {
+        o->perc.armed = true;
+        o->perc.rearm_at = 0;
+    }
     for (int k = 0; k < TW_KEYS; k++) {
         while (o->pend_i[k] < o->pend_n[k]
                && o->pend[k][o->pend_i[k]].frame <= o->now) {

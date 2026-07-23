@@ -8,7 +8,7 @@ CORE_CFLAGS := $(CFLAGS) -ffreestanding
 
 CORE_OBJS := $(BUILD)/generator.o $(BUILD)/midi.o $(BUILD)/organ.o $(BUILD)/scanner.o $(BUILD)/drive.o $(BUILD)/rotary.o
 
-all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_warmth $(BUILD)/render_midi $(BUILD)/tw91
+all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/render_midi $(BUILD)/tw91
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -46,6 +46,9 @@ $(BUILD)/exhibit_rotary: driver/exhibit_rotary.c $(BUILD)/wav.o $(CORE_OBJS) src
 $(BUILD)/exhibit_wear: driver/exhibit_wear.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/exhibit_wear.c $(BUILD)/wav.o $(CORE_OBJS) -o $@ -lm
 
+$(BUILD)/exhibit_depth: driver/exhibit_depth.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+	$(CC) $(CFLAGS) driver/exhibit_depth.c $(BUILD)/wav.o $(CORE_OBJS) -o $@ -lm
+
 $(BUILD)/exhibit_warmth: driver/exhibit_warmth.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/exhibit_warmth.c $(BUILD)/wav.o $(CORE_OBJS) -o $@ -lm
 
@@ -58,7 +61,7 @@ $(BUILD)/tw91: driver/main.c $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 test: $(BUILD)/test
 	./$(BUILD)/test
 
-exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear
+exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth
 	./$(BUILD)/exhibit_phase
 	./$(BUILD)/exhibit_contacts
 	./$(BUILD)/exhibit_taper
@@ -67,6 +70,7 @@ exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper
 	./$(BUILD)/exhibit_drive
 	./$(BUILD)/exhibit_rotary
 	./$(BUILD)/exhibit_wear
+	./$(BUILD)/exhibit_depth
 
 # Dev-side warmth referee (docs/warmth-evidence.md). ngspice is never a
 # build dependency: warmth-ref is run by hand when recalibrating, and

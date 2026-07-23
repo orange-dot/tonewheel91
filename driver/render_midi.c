@@ -1,6 +1,7 @@
 /* render_midi — offline renderer: Standard MIDI File in, stereo WAV out.
  * Hosted (driver layer); the deterministic twin of the live path for
- * whole songs: the same channel-message map as tw91 (CC11 swell,
+ * whole songs: the same channel-message map as tw91 (poly key pressure
+ * = per-note key depth, CC11 swell,
  * CC70-78 drawbars, CC80-83 percussion, CC84 vibrato, CC85 drive,
  * CC86-90 rotary mode/speed-switch/balance/width/drive, CC120/123
  * panic), the same core, no real-time clock — event ticks convert to
@@ -65,7 +66,7 @@ static int fold_note(int n) {
 }
 
 static struct {
-    unsigned long notes, ccs, folded;
+    unsigned long notes, depths, ccs, folded;
 } stats;
 
 /* The tw91 channel-message map, minus the rawmidi plumbing. */
@@ -73,7 +74,8 @@ static struct { bool on, third, slow, normal; } perc_state = { false, false, fal
 
 static void apply_msg(tw_instrument *ins, uint8_t status, uint8_t d1, uint8_t d2,
                       bool fold) {
-    int note = (fold && (status & 0xF0) <= 0x90) ? fold_note(d1) : d1;
+    /* depth folds with its note or the two would address different keys */
+    int note = (fold && (status & 0xF0) <= 0xA0) ? fold_note(d1) : d1;
     if (fold && note != d1) stats.folded++;
     switch (status & 0xF0) {
     case 0x90:
@@ -83,6 +85,10 @@ static void apply_msg(tw_instrument *ins, uint8_t status, uint8_t d1, uint8_t d2
     case 0x80:
         tw_organ_note(&ins->organ, note, false, d2);
         stats.notes++;
+        break;
+    case 0xA0:
+        tw_organ_note_depth(&ins->organ, note, d2);
+        stats.depths++;
         break;
     case 0xB0:
         stats.ccs++;
@@ -269,7 +275,7 @@ int main(int argc, char **argv) {
                 int two = typ != 0xC0 && typ != 0xD0;
                 if (two) d2 = d[i + 1];
                 i += two ? 2 : 1;
-                if ((typ == 0x80 || typ == 0x90 || typ == 0xB0)
+                if ((typ == 0x80 || typ == 0x90 || typ == 0xA0 || typ == 0xB0)
                     && (chan_mask & 1u << ch))
                     ev[nev++] = (ev_t){ tick, seq++, run, d1, d2 };
             }
@@ -324,8 +330,9 @@ int main(int argc, char **argv) {
     uint64_t h1 = tw_fnv1a64(buf, 2 * (size_t)frames * sizeof *buf, 0);
     peak = render(ev, nev, &st, buf, frames, ev_frame, &ooc);
     uint64_t h2 = tw_fnv1a64(buf, 2 * (size_t)frames * sizeof *buf, 0);
-    printf("  applied: %lu notes, %lu ccs, %lu folded, %u out-of-compass\n",
-           stats.notes, stats.ccs, stats.folded, ooc);
+    printf("  applied: %lu notes, %lu depths, %lu ccs, %lu folded,"
+           " %u out-of-compass\n",
+           stats.notes, stats.depths, stats.ccs, stats.folded, ooc);
     printf("  peak %.3f, FNV64 %016llx %s\n", peak, (unsigned long long)h1,
            h1 == h2 ? "(two runs identical)" : "MISMATCH");
 

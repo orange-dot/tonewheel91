@@ -185,21 +185,33 @@ typedef struct {
 
 /* Four independent tablets, not one enum (sec 8): on/off, harmonic
  * (false=2nd/4' tap, true=3rd/2-2/3' tap), decay speed (false=fast,
- * true=slow), volume (false=soft, true=normal). armed/wheel are the
- * trigger state machine, not user controls: armed = ready to fire on the
- * next first-key-of-a-phrase; wheel = the last-tapped wheel, 0 = none. */
+ * true=slow), volume (false=soft, true=normal). The rest is the trigger
+ * state machine, not user controls. It follows the 1' contacts, not the
+ * keys: that bus is the sensing line, so closing any key's ninth contact
+ * grounds terminal K and releases the envelope, and the grid recovers
+ * only once every one of them is open again. armed = the grid has
+ * recovered; wheel = the last-tapped wheel, 0 = none; sense_n = how many
+ * ninth contacts are closed; rearm_at = the frame recovery completes,
+ * 0 = not recovering. */
 typedef struct {
     bool on, third, slow, normal;
     bool armed;
     int wheel;
+    uint8_t sense_n;
+    int64_t rearm_at;
 } tw_percussion;
 
 typedef struct {
     tw_generator gen;
     int64_t now;
-    uint64_t rng; /* fixed-seed; advanced only at note events */
+    uint64_t rng; /* fixed-seed; advanced only at note and depth events */
     float rate;
     bool held[TW_KEYS];
+    uint8_t made[TW_KEYS];   /* contacts the key travel commands, 0..9
+                              * (sec 7.1); a held key stands at 9 until a
+                              * depth message moves it. contact[][] below
+                              * is where they actually are, bounce and
+                              * stagger included. */
     bool contact[TW_KEYS][TW_DRAWBARS];
     tw_percussion perc;
     tw_scanner scan;
@@ -222,6 +234,18 @@ void tw_organ_init(tw_organ *o, float sample_rate_hz);
  * vel 127 ~ 0 ms, vel 1 ~ 15 ms across the nine buses. down with
  * velocity 0 is note-off. */
 void tw_organ_note(tw_organ *o, int midi_note, bool down, int velocity);
+
+/* How far one held key is down, 0..127 over the travel (section 7.1):
+ * the position decides how many of that key's nine contacts are made,
+ * in bus order 0..8 — the same spring-stack order the velocity stagger
+ * walks. The nine make points are evenly spaced and carry a
+ * break-below-make band, so a finger parked on one cannot chatter its
+ * contact. Depth 0 is a held key with every contact open, not a
+ * release: note-off stays authoritative, and a key that is not held
+ * ignores depth entirely (out-of-compass notes still count). A key
+ * presses full-depth on note-on, so an instrument that never sends
+ * depth behaves exactly as before. */
+void tw_organ_note_depth(tw_organ *o, int midi_note, int depth);
 
 void tw_organ_set_registration(tw_organ *o, const uint8_t digits[TW_DRAWBARS]);
 void tw_organ_set_drawbar(tw_organ *o, int drawbar, int digit);

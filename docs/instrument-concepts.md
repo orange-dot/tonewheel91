@@ -123,6 +123,12 @@ the finger.
 - Grounding: MIDI Polyphonic Expression and continuous-keyboard research; born
   directly from the engine's own contact/bounce model, so part of the substrate
   already exists.
+- **Status: the first rung landed** (post-M7 depth pass, constants sec 7.1;
+  `docs/depth-evidence.md`). The engine now takes a per-note depth and makes
+  that many of the key's nine contacts, so a half-press and the smear that
+  follows it are real. What stays speculative here is the rest of the idea:
+  a *trajectory* rather than a position — press shape, per-contact timing under
+  the finger, and a surface able to sense any of it.
 
 ## Prior-art ledger (honesty)
 

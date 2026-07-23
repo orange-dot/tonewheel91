@@ -24,14 +24,29 @@ drive kernel is now derived from a circuit-true triode reference
 (`docs/warmth-evidence.md`; the rotary's 40 W ceiling keeps the M5 odd
 kernel) — `make warmth` scores the stage against the reference,
 `./build/exhibit_warmth render` bakes A/B wavs of the old vs derived
-voice.
+voice. Post-M7 depth pass: a key's nine contacts are now addressable by
+**how far the key is held down**, not only by how fast it was struck
+(`docs/depth-evidence.md`) — poly key pressure carries the travel,
+nine make points with a break-below-make band, and the section 6.1
+merge law folds the partial contact set with no new DSP. Depth also
+corrected the percussion trigger, which now follows the 1' contact —
+the sensing line the sources always described — instead of the note
+event, with the 34 ms re-arm RC modeled so the sensing line's own
+bounce cannot retrigger it. A half-press therefore fires no percussion,
+and a held key's travel can fire it with no note event at all. That
+moved the percussion-on baselines and nothing else: every
+percussion-off signature, the M7 wear identity anchor included,
+reproduces bit-for-bit.
 
-    make test      # table-driven checks (8911)
+    make test      # table-driven checks (9242)
     make exhibit   # renders the evidence WAVs into build/
     make           # also builds the live driver
 
     ./build/tw91 -d hw:CARD=AG06AG03 -e 4      # demo chord on the rig
     ./build/tw91 -d hw:CARD=AG06AG03 -m hw:X,Y,Z   # live: amidi -l
+                   # poly key pressure (0xA0) = per-note key depth:
+                   #   how far the key is held, 0..127 over the travel,
+                   #   deciding how many of its nine contacts are made
                    # CC11 swell, CC70..78 drawbars, CC120/123 panic,
                    # CC80..83 percussion (on/off, 2nd/3rd, fast/slow, soft/normal)
                    # CC84 vibrato/chorus (value/19: off, V1..V3, C1..C3)
@@ -40,9 +55,10 @@ voice.
                    # CC87 rotary speed switch (chorale/tremolo), CC88 balance,
                    # CC89 width, CC90 rotary drive
                    # -r rate -p period -n periods -g gain
-                   # -2 two-manual touch-surface protocol: notes on ch1+ch2
-                   #    (upper+lower) merge onto the one manual, CCs honored
-                   #    on ch1 only; default stays channel-agnostic
+                   # -2 two-manual touch-surface protocol: notes and key
+                   #    depth on ch1+ch2 (upper+lower) merge onto the one
+                   #    manual, CCs honored on ch1 only; default stays
+                   #    channel-agnostic
 
 ## Layout
 

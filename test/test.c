@@ -318,6 +318,14 @@ static double organ_rms(tw_organ *o, int frames) {
     return sqrt(acc / frames);
 }
 
+/* Tick past whatever a step schedules. 4800 frames (100 ms) clears the
+ * slowest press stagger, the bounce window, and the 34 ms percussion
+ * recovery; smaller counts are used where a test is watching one of
+ * those happen. */
+static void settle(tw_organ *o, int frames) {
+    for (int i = 0; i < frames; i++) (void)tw_organ_tick(o);
+}
+
 static void run_script(float *dst, int frames, float wear) {
     tw_organ o;
     tw_organ_init(&o, 48000.0f);
@@ -427,6 +435,15 @@ static void test_organ(void) {
 static const double PERC_TAU_FAST = 0.375, PERC_TAU_SLOW = 1.551; /* ratio 4.133:1 */
 static const double PERC_SOFT_PAD = 0.5;              /* [decision] */
 static const double PERC_NORMAL_ATTEN = 5.0 / (5.0 + 22.0); /* R_SRC / (R_SRC+R50), [derived] */
+static const double PERC_REARM_S = 0.034; /* C31 through R55+R56, [derived] */
+
+/* The trigger is the 1' contact, not the key event (sec 8), so it lands
+ * somewhere on the contact timeline. Tick until it fires; returns the
+ * tapped wheel, or 0 if nothing ever grounded the sensing line. */
+static int perc_await_trigger(tw_organ *o, int frames) {
+    for (int i = 0; i < frames && o->perc.wheel == 0; i++) (void)tw_organ_tick(o);
+    return o->perc.wheel;
+}
 
 static void test_percussion_trigger(void) {
     tw_organ o;
@@ -437,6 +454,8 @@ static void test_percussion_trigger(void) {
     int w60 = tw_wheel_index(60 - TW_NOTE_MIN + 1, 3); /* 2nd harmonic = 4' tap */
     int w67 = tw_wheel_index(67 - TW_NOTE_MIN + 1, 3);
 
+    /* Each step settles past the press stagger, the bounce window, and
+     * the 34 ms recovery before the state machine is read. */
     static const struct { int note; bool down; bool armed_after; } seq[6] = {
         { 60, true,  false }, /* first key of the phrase: triggers        */
         { 64, true,  false }, /* legato add: no retrigger, stays disarmed */
@@ -448,6 +467,7 @@ static void test_percussion_trigger(void) {
     int expect_wheel[6] = { w60, w60, w60, w60, w67, w67 };
     for (int i = 0; i < 6; i++) {
         tw_organ_note(&o, seq[i].note, seq[i].down, 100);
+        settle(&o, 4800);
         CHECK(o.perc.armed == seq[i].armed_after,
               "step %d (note %d %s): armed %d, expected %d", i, seq[i].note,
               seq[i].down ? "down" : "up", o.perc.armed, seq[i].armed_after);
@@ -455,24 +475,73 @@ static void test_percussion_trigger(void) {
               "step %d: wheel %d, expected %d", i, o.perc.wheel, expect_wheel[i]);
     }
 
-    /* Percussion off: the state machine still tracks phrase edges, but no
-     * trigger ever fires (wheel never picked). */
+    /* The trigger waits for the ninth contact. At the slowest press the
+     * nine buses take ~15 ms, and the envelope fires at the end of that
+     * travel, not at the note event. */
+    tw_organ_init(&o, 48000.0f);
+    tw_organ_set_percussion(&o, true, false, false, true);
+    tw_organ_note(&o, 60, true, 1); /* ~15 ms of stagger */
+    settle(&o, 240);                /* 5 ms in: the 1' contact is not there yet */
+    CHECK(o.perc.armed && o.perc.wheel == 0,
+          "the trigger must wait for the 1' contact: armed %d, wheel %d",
+          o.perc.armed, o.perc.wheel);
+    settle(&o, 1200);               /* past the full travel */
+    CHECK(!o.perc.armed && o.perc.wheel == w60,
+          "the 1' contact must fire it: armed %d, wheel %d",
+          o.perc.armed, o.perc.wheel);
+
+    /* Bounce on the sensing line cannot retrigger: the recovery is an
+     * order above the 2 ms bounce window, so one press is one hit. */
+    tw_organ_init(&o, 48000.0f);
+    tw_organ_set_percussion(&o, true, false, false, true);
+    tw_organ_note(&o, 60, true, 1);
+    double prev = 0.0;
+    int rises = 0;
+    for (int i = 0; i < 4800; i++) {
+        (void)tw_organ_tick(&o);
+        double now = (double)o.gen.perc_target[w60 - 1];
+        if (now > prev + 1e-9) rises++;
+        prev = now;
+    }
+    CHECK(rises == 1, "one press through its own bounce fired %d times", rises);
+
+    /* Detachment is what gates the next hit (sec 8): a gap longer than
+     * the recovery retriggers, a shorter one does not. */
+    static const int gap[2] = { 480, 4800 }; /* 10 ms, 100 ms vs 34 ms */
+    for (int g = 0; g < 2; g++) {
+        tw_organ_init(&o, 48000.0f);
+        tw_organ_set_percussion(&o, true, false, false, true);
+        tw_organ_note(&o, 60, true, 100);
+        settle(&o, 4800);
+        tw_organ_note(&o, 60, false, 0);
+        settle(&o, gap[g]);
+        tw_organ_note(&o, 64, true, 100);
+        settle(&o, 4800);
+        int want = g ? tw_wheel_index(64 - TW_NOTE_MIN + 1, 3) : w60;
+        CHECK(o.perc.wheel == want,
+              "%d ms gap: wheel %d, expected %d (recovery is %.0f ms)",
+              gap[g] / 48, o.perc.wheel, want, PERC_REARM_S * 1000.0);
+    }
+
+    /* Percussion off: the state machine still tracks the sensing line,
+     * but no trigger ever fires (wheel never picked). */
     tw_organ_init(&o, 48000.0f);
     tw_organ_set_percussion(&o, false, false, false, true);
     tw_organ_note(&o, 60, true, 100);
+    settle(&o, 4800);
     CHECK(!o.perc.armed && o.perc.wheel == 0,
-          "percussion off: disarms on first key but never picks a wheel");
+          "percussion off: the sensing line still disarms, but picks no wheel");
 
     /* Wheel selection follows the harmonic switch (sec 4/8). */
     tw_organ_init(&o, 48000.0f);
     tw_organ_set_percussion(&o, true, false, false, true); /* 2nd */
     tw_organ_note(&o, 60, true, 100);
-    CHECK(o.perc.wheel == tw_wheel_index(60 - TW_NOTE_MIN + 1, 3),
+    CHECK(perc_await_trigger(&o, 4800) == tw_wheel_index(60 - TW_NOTE_MIN + 1, 3),
           "2nd harmonic must tap the 4' bus, got wheel %d", o.perc.wheel);
     tw_organ_init(&o, 48000.0f);
     tw_organ_set_percussion(&o, true, true, false, true); /* 3rd */
     tw_organ_note(&o, 60, true, 100);
-    CHECK(o.perc.wheel == tw_wheel_index(60 - TW_NOTE_MIN + 1, 4),
+    CHECK(perc_await_trigger(&o, 4800) == tw_wheel_index(60 - TW_NOTE_MIN + 1, 4),
           "3rd harmonic must tap the 2-2/3' bus, got wheel %d", o.perc.wheel);
 
     /* Hostile setter arguments clamp through the bool parameter conversion. */
@@ -488,7 +557,7 @@ static long perc_decay_samples(bool slow, double frac) {
     tw_organ_init(&o, 48000.0f);
     tw_organ_set_percussion(&o, true, false, slow, true);
     tw_organ_note(&o, 60, true, 100);
-    int w = o.perc.wheel;
+    int w = perc_await_trigger(&o, 4800);
     double peak = (double)o.gen.perc_target[w - 1];
     long n = 0;
     while ((double)o.gen.perc_target[w - 1] > peak * frac && n < 10L * 48000) {
@@ -541,8 +610,10 @@ static void test_percussion_levels(void) {
     int w4 = tw_wheel_index(60 - TW_NOTE_MIN + 1, 3);
     double base = (double)o.gen.keyed_target[w4 - 1];
 
+    /* 100 ms between the release and the next attack: the trigger needs a
+     * real detachment now, not just a note-off (sec 8 recovery). */
     tw_organ_note(&o, 60, false, 0);
-    for (int i = 0; i < 480; i++) (void)tw_organ_tick(&o);
+    settle(&o, 4800);
     tw_organ_set_percussion(&o, true, false, false, true); /* NORMAL */
     tw_organ_note(&o, 60, true, 127);
     for (int i = 0; i < 9600; i++) (void)tw_organ_tick(&o);
@@ -551,7 +622,7 @@ static void test_percussion_levels(void) {
           "NORMAL attenuation ratio %f, expected %f", normal / base, PERC_NORMAL_ATTEN);
 
     tw_organ_note(&o, 60, false, 0);
-    for (int i = 0; i < 480; i++) (void)tw_organ_tick(&o);
+    settle(&o, 4800);
     tw_organ_set_percussion(&o, true, false, false, false); /* SOFT */
     tw_organ_note(&o, 60, true, 127);
     for (int i = 0; i < 9600; i++) (void)tw_organ_tick(&o);
@@ -563,13 +634,304 @@ static void test_percussion_levels(void) {
     tw_organ_init(&o, 48000.0f);
     tw_organ_set_percussion(&o, true, false, false, true); /* NORMAL */
     tw_organ_note(&o, 60, true, 100);
-    double peak_normal = (double)o.gen.perc_target[o.perc.wheel - 1];
+    double peak_normal = (double)o.gen.perc_target[perc_await_trigger(&o, 4800) - 1];
     tw_organ_init(&o, 48000.0f);
     tw_organ_set_percussion(&o, true, false, false, false); /* SOFT */
     tw_organ_note(&o, 60, true, 100);
-    double peak_soft = (double)o.gen.perc_target[o.perc.wheel - 1];
+    double peak_soft = (double)o.gen.perc_target[perc_await_trigger(&o, 4800) - 1];
     CHECK(fabs(peak_soft / peak_normal - PERC_SOFT_PAD) < 1e-6,
           "SOFT peak ratio %f, expected %f", peak_soft / peak_normal, PERC_SOFT_PAD);
+}
+
+/* --- key depth: the per-note travel (constants.md section 7.1) --- */
+
+/* Depth oracle — the test's own copies of organ.c's make points and band. */
+static const int DEPTH_HYST = 4;
+static int make_point(int i) { return (i + 1) * 128 / (TW_DRAWBARS + 1); }
+
+/* A position that forces exactly n made contacts from any prior count:
+ * the midpoint between make points n-1 and n sits inside the plateau
+ * [make(n-1)+band, make(n)-band), where both walks stop at n. */
+static int depth_forcing(int n) {
+    if (n <= 0) return 0;
+    if (n >= TW_DRAWBARS) return 127;
+    return (make_point(n - 1) + make_point(n)) / 2;
+}
+
+static int contacts_made(const tw_organ *o, int key) {
+    int n = 0;
+    for (int b = 0; b < TW_DRAWBARS; b++) n += o->contact[key][b];
+    return n;
+}
+
+/* Contact machinery, so every organ here is the idealized reference
+ * (wear 0) — the shipped default's idle floor would mask silence. */
+static void depth_organ(tw_organ *o, const uint8_t *reg) {
+    tw_organ_init(o, 48000.0f);
+    tw_organ_set_wear(o, 0.0f);
+    if (reg) tw_organ_set_registration(o, reg);
+}
+
+/* run_script above, with an optional depth stream laid over it: same
+ * organ, same notes, same drawbar move, same wear. */
+static void run_depth_script(float *dst, int frames, bool send_depth) {
+    tw_organ o;
+    tw_organ_init(&o, 48000.0f);
+    tw_organ_set_wear(&o, 0.0f);
+    for (int i = 0; i < frames; i++) {
+        if (i == 4800) tw_organ_note(&o, 60, true, 90);
+        if (send_depth && i > 4800 && i % 240 == 0)
+            tw_organ_note_depth(&o, 60, 64 + (i / 240 % 5) * 12);
+        if (i == 9600) tw_organ_set_drawbar(&o, 4, 6);
+        if (i == 14400) tw_organ_note(&o, 60, false, 0);
+        dst[i] = tw_organ_tick(&o);
+    }
+}
+
+static void test_key_depth(void) {
+    static const uint8_t all8[TW_DRAWBARS] = { 8, 8, 8, 8, 8, 8, 8, 8, 8 };
+    tw_organ o;
+
+    /* A press bottoms out: nine contacts, all nine buses, as before. */
+    depth_organ(&o, all8);
+    tw_organ_note(&o, 60, true, 127);
+    settle(&o, 4800);
+    CHECK(o.made[24] == TW_DRAWBARS && contacts_made(&o, 24) == TW_DRAWBARS,
+          "note-on must bottom out, made %d contacts %d",
+          o.made[24], contacts_made(&o, 24));
+
+    /* Every step of the travel makes exactly its contacts, in bus order
+     * 0..8 — walked down and back up, so both hysteresis directions run. */
+    for (int pass = 0; pass < 2; pass++)
+        for (int i = 0; i <= TW_DRAWBARS; i++) {
+            int n = pass ? i : TW_DRAWBARS - i;
+            tw_organ_note_depth(&o, 60, depth_forcing(n));
+            settle(&o, 480);
+            CHECK(o.made[24] == n && contacts_made(&o, 24) == n,
+                  "depth %d: made %d contacts %d, expected %d",
+                  depth_forcing(n), o.made[24], contacts_made(&o, 24), n);
+            for (int b = 0; b < TW_DRAWBARS; b++)
+                CHECK(o.contact[24][b] == (b < n),
+                      "depth %d bus %d %s, contacts must close in bus order",
+                      n, b, o.contact[24][b] ? "closed" : "open");
+        }
+
+    /* The band itself: one position, two answers, depending on approach.
+     * Make point 4 sits at 64 — the travel's midpoint. */
+    depth_organ(&o, all8);
+    tw_organ_note(&o, 60, true, 127);
+    settle(&o, 4800);
+    tw_organ_note_depth(&o, 60, make_point(4));
+    CHECK(o.made[24] == 5, "arriving at the make point from above holds 5, got %d",
+          o.made[24]);
+    tw_organ_note_depth(&o, 60, 0);
+    tw_organ_note_depth(&o, 60, make_point(4));
+    CHECK(o.made[24] == 4, "arriving at the make point from below holds 4, got %d",
+          o.made[24]);
+
+    /* Chatter: a finger dithering inside the band must not toggle a
+     * contact, and must not draw from the RNG either. */
+    settle(&o, 480);
+    uint64_t rng_before = o.rng;
+    int before = contacts_made(&o, 24);
+    int jitter = DEPTH_HYST - 1;
+    for (int i = 0; i < 200; i++)
+        tw_organ_note_depth(&o, 60, make_point(4) + (i % 2 ? jitter : -jitter));
+    CHECK(o.rng == rng_before && o.made[24] == 4 && contacts_made(&o, 24) == before,
+          "dithering on a make point chattered: made %d, rng %s",
+          o.made[24], o.rng == rng_before ? "held" : "advanced");
+
+    /* Depth changes which contacts are closed and nothing else: a made
+     * bus passes exactly what it passes on a full press — taper, merge
+     * law, drawbar gain and all — and an unmade one passes exactly zero.
+     * Key 25's nine taps land on nine distinct wheels, so each bus is
+     * read off its own wheel. Bit-exact, not approximate: the same
+     * closed set through the same law is the same float. */
+    const int key60 = 60 - TW_NOTE_MIN + 1;
+    double full[TW_DRAWBARS];
+    depth_organ(&o, all8);
+    tw_organ_note(&o, 60, true, 127);
+    settle(&o, 4800);
+    for (int b = 0; b < TW_DRAWBARS; b++)
+        full[b] = (double)o.gen.keyed_target[tw_wheel_index(key60, b) - 1];
+    CHECK(full[0] > 0.0 && full[TW_DRAWBARS - 1] > 0.0,
+          "the full-press reference must sound on every bus");
+    for (int n = TW_DRAWBARS; n >= 0; n--) {
+        tw_organ_note_depth(&o, 60, depth_forcing(n));
+        settle(&o, 4800);
+        for (int b = 0; b < TW_DRAWBARS; b++) {
+            double want = b < n ? full[b] : 0.0;
+            double got = (double)o.gen.keyed_target[tw_wheel_index(key60, b) - 1];
+            CHECK(got == want, "depth %d bus %d: target %.9f, expected %.9f",
+                  n, b, got, want);
+        }
+    }
+
+    /* Depth 0 is a held key with every contact open — not a note-off.
+     * It must fall silent and come back without a new note-on. */
+    depth_organ(&o, all8);
+    tw_organ_note(&o, 60, true, 127);
+    settle(&o, 4800);
+    tw_organ_note_depth(&o, 60, 0);
+    settle(&o, 4800);
+    CHECK(o.held[24] && o.made[24] == 0,
+          "depth 0 must leave the key held, held %d made %d",
+          o.held[24], o.made[24]);
+    CHECK(organ_rms(&o, 4800) < 1e-6, "a fully-open held key must be silent");
+    tw_organ_note_depth(&o, 60, 127);
+    settle(&o, 4800);
+    CHECK(organ_rms(&o, 4800) > 0.1, "the same held key must sound again");
+
+    /* Depth takes over mid-stagger, and note-off after it still empties
+     * the key: the pending list is rewritten from the contacts as they
+     * stand, never from the target that scheduled them. */
+    depth_organ(&o, all8);
+    tw_organ_note(&o, 60, true, 1); /* slowest press, ~15 ms of stagger */
+    settle(&o, 240);                /* 5 ms in, mid-flight */
+    CHECK(contacts_made(&o, 24) > 0 && contacts_made(&o, 24) < TW_DRAWBARS,
+          "the stagger should be mid-flight here, %d contacts",
+          contacts_made(&o, 24));
+    tw_organ_note_depth(&o, 60, depth_forcing(5));
+    settle(&o, 4800);
+    CHECK(contacts_made(&o, 24) == 5, "depth mid-stagger settled at %d, expected 5",
+          contacts_made(&o, 24));
+    for (int b = 0; b < TW_DRAWBARS; b++)
+        CHECK(o.contact[24][b] == (b < 5), "bus %d survived the takeover", b);
+    tw_organ_note(&o, 60, false, 0);
+    settle(&o, 4800);
+    CHECK(contacts_made(&o, 24) == 0 && !o.held[24],
+          "note-off after depth left %d contacts", contacts_made(&o, 24));
+    CHECK(organ_rms(&o, 4800) < 1e-6, "note-off after depth must reach silence");
+
+    /* A key that is not held ignores depth entirely, before and after. */
+    depth_organ(&o, all8);
+    tw_organ_note_depth(&o, 60, 127);
+    settle(&o, 4800);
+    CHECK(!o.held[24] && contacts_made(&o, 24) == 0 && organ_rms(&o, 4800) < 1e-6,
+          "depth on an untouched key must do nothing");
+    tw_organ_note(&o, 60, true, 127);
+    settle(&o, 4800);
+    tw_organ_note(&o, 60, false, 0);
+    settle(&o, 4800);
+    tw_organ_note_depth(&o, 60, 127); /* a late message from the surface */
+    settle(&o, 4800);
+    CHECK(!o.held[24] && contacts_made(&o, 24) == 0 && organ_rms(&o, 4800) < 1e-6,
+          "depth after note-off must not resurrect the key");
+
+    /* Out-of-compass depth is ignored and counted, like an out-of-compass
+     * note. */
+    depth_organ(&o, all8);
+    tw_organ_note_depth(&o, 35, 100);
+    tw_organ_note_depth(&o, 97, 100);
+    CHECK(o.out_of_compass == 2, "compass counter, got %u", o.out_of_compass);
+
+    /* Ninth-drawbar theft (sec 8): with percussion on, the 1' bus is the
+     * trigger-sensing line, so the top step of the travel is out of
+     * service — depth 8 and depth 9 are the same sound, exactly. */
+    static float d8[TW_WHEELS], d9[TW_WHEELS];
+    depth_organ(&o, all8);
+    tw_organ_set_percussion(&o, true, false, false, true);
+    tw_organ_note(&o, 60, true, 127);
+    settle(&o, 4800);
+    tw_organ_note_depth(&o, 60, depth_forcing(8));
+    settle(&o, 4800);
+    memcpy(d8, o.gen.keyed_target, sizeof d8);
+    tw_organ_note_depth(&o, 60, depth_forcing(9));
+    settle(&o, 4800);
+    memcpy(d9, o.gen.keyed_target, sizeof d9);
+    CHECK(memcmp(d8, d9, sizeof d8) == 0,
+          "percussion on: the ninth contact must be silent");
+    tw_organ_set_percussion(&o, false, false, false, true);
+    settle(&o, 4800);
+    memcpy(d9, o.gen.keyed_target, sizeof d9);
+    CHECK(memcmp(d8, d9, sizeof d8) != 0,
+          "percussion off: the ninth contact must return");
+
+    /* Percussion follows the 1' contact (sec 8), so a press that stops
+     * short of the ninth contact never fires it — and leaves the envelope
+     * armed for whoever does bottom out. The depth message arrives inside
+     * a slow press, which is what a surface actually sends. */
+    const int w60 = tw_wheel_index(60 - TW_NOTE_MIN + 1, 3);
+    depth_organ(&o, all8);
+    tw_organ_set_percussion(&o, true, false, false, true);
+    tw_organ_note(&o, 60, true, 1); /* ~15 ms of travel to intercept */
+    settle(&o, 240);
+    tw_organ_note_depth(&o, 60, depth_forcing(5));
+    settle(&o, 4800);
+    CHECK(o.perc.armed && o.perc.wheel == 0,
+          "a half-press must not fire percussion: armed %d, wheel %d",
+          o.perc.armed, o.perc.wheel);
+
+    /* Pushing the same held key the rest of the way down fires it, with
+     * no new note event anywhere. */
+    tw_organ_note_depth(&o, 60, 127);
+    settle(&o, 480);
+    CHECK(!o.perc.armed && o.perc.wheel == w60,
+          "bottoming out must fire it: armed %d, wheel %d",
+          o.perc.armed, o.perc.wheel);
+
+    /* And riding back off the ninth contact and onto it again retriggers,
+     * once the recovery has passed — the travel is a percussion control
+     * in its own right. */
+    tw_organ_note_depth(&o, 60, depth_forcing(8));
+    settle(&o, 4800);
+    CHECK(o.perc.armed, "lifting off the ninth contact must re-arm");
+    double quiet = (double)o.gen.perc_target[w60 - 1];
+    tw_organ_note_depth(&o, 60, 127);
+    settle(&o, 48);
+    CHECK((double)o.gen.perc_target[w60 - 1] > quiet,
+          "riding back onto it must retrigger without a note event");
+
+    /* Panic clears the travel and the sensing line with everything else. */
+    depth_organ(&o, all8);
+    tw_organ_note(&o, 60, true, 127);
+    settle(&o, 4800);
+    tw_organ_note_depth(&o, 60, depth_forcing(5));
+    settle(&o, 480);
+    tw_organ_panic(&o);
+    CHECK(o.made[24] == 0 && !o.held[24] && contacts_made(&o, 24) == 0,
+          "panic must clear the travel, made %d", o.made[24]);
+    CHECK(o.perc.armed && o.perc.sense_n == 0 && o.perc.rearm_at == 0,
+          "panic must un-ground the sensing line, armed %d sense %u",
+          o.perc.armed, o.perc.sense_n);
+
+    /* The sensing-line count is derived state, and percussion now leans
+     * on it. Hammer it: overlapping notes at mixed velocities, depth
+     * moves across the ninth make point, panics mid-flight — and after
+     * every single tick it must still equal the closed 1' contacts.
+     * (A stuck count would silently arm or disarm percussion forever.) */
+    depth_organ(&o, all8);
+    tw_organ_set_percussion(&o, true, false, false, true);
+    uint64_t seed = 0x5eed1234u;
+    int bad = 0;
+    for (int i = 0; i < 24000; i++) {
+        uint64_t r = tw_splitmix64(&seed);
+        int note = 48 + (int)(r % 12);
+        switch ((r >> 8) % 5) {
+        case 0: tw_organ_note(&o, note, true, 1 + (int)((r >> 16) % 127)); break;
+        case 1: tw_organ_note(&o, note, false, 0); break;
+        case 2: tw_organ_note_depth(&o, note, (int)((r >> 24) % 128)); break;
+        case 3: tw_organ_note_depth(&o, note, 127); break;
+        default: if ((r >> 32) % 400 == 0) tw_organ_panic(&o); break;
+        }
+        (void)tw_organ_tick(&o);
+        int closed = 0;
+        for (int k = 0; k < TW_KEYS; k++) closed += o.contact[k][TW_DRAWBARS - 1];
+        if (o.perc.sense_n != closed) bad++;
+    }
+    CHECK(bad == 0, "sense_n drifted from the closed 1' contacts on %d ticks", bad);
+
+    /* Determinism: the depth stream is an event stream like any other,
+     * and a stream that is never sent leaves the render untouched. */
+    static float r1[19200], r2[19200], plain[19200], base[19200];
+    run_depth_script(r1, 19200, true);
+    run_depth_script(r2, 19200, true);
+    CHECK(memcmp(r1, r2, sizeof r1) == 0, "depth script runs differ");
+    run_depth_script(plain, 19200, false);
+    run_script(base, 19200, 0.0f);
+    CHECK(memcmp(plain, base, sizeof base) == 0,
+          "no depth message must render the pre-depth organ bit-for-bit");
+    CHECK(memcmp(r1, plain, sizeof r1) != 0, "the depth stream must be audible");
 }
 
 /* --- M4: vibrato/chorus scanner (constants.md section 9) --- */
@@ -2136,6 +2498,7 @@ int main(void) {
     test_percussion_trigger();
     test_percussion_decay();
     test_percussion_levels();
+    test_key_depth();
     test_scanner_line();
     test_scanner_sweep();
     test_scanner_modes();

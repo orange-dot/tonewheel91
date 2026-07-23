@@ -2,7 +2,8 @@
  * One thread, synchronous; snd_pcm_writei is the loop's clock.
  * The one permitted dependency: libasound (see docs/design.md).
  *
- * MIDI map: notes 36..96; CC11 swell; CC70..78 drawbars 1..9 (M2, value ->
+ * MIDI map: notes 36..96; poly key pressure (0xA0) is per-note key depth,
+ * 0..127 over the travel; CC11 swell; CC70..78 drawbars 1..9 (M2, value ->
  * digit 0..8); CC120/CC123 panic (M2). Percussion (M3), value >= 64 is the
  * "on" position of each toggle: CC80 on/off, CC81 2nd/3rd harmonic, CC82
  * fast/slow decay, CC83 soft/normal volume. Vibrato/chorus (M4): CC84,
@@ -12,9 +13,10 @@
  * CC88 balance, CC89 width, CC90 rotary drive, each value/127. Velocity
  * -> contact stagger.
  *
- * -2 selects the two-manual touch-surface protocol: notes on channels 1
- * and 2 (upper and lower manual) both land on the one manual the engine
- * has today, CCs are honored on channel 1 only (the console channel),
+ * -2 selects the two-manual touch-surface protocol: notes and key depth
+ * on channels 1 and 2 (upper and lower manual) both land on the one manual
+ * the engine has today, CCs are honored on channel 1 only (the console
+ * channel),
  * and everything else — including channel-2 drawbars, which carry a
  * lower registration the engine cannot represent yet — is ignored.
  * Without -2 the driver stays channel-agnostic, byte-for-byte as before.
@@ -34,7 +36,7 @@ static void on_signal(int sig) { (void)sig; stop_flag = 1; }
 static tw_instrument inst; /* ~100 KB of fixed state; static by design */
 
 static struct {
-    unsigned long notes, ccs, xruns;
+    unsigned long notes, depths, ccs, xruns;
 } stats;
 
 /* tw_organ_set_percussion takes all four tablets at once; CCs toggle one
@@ -48,13 +50,16 @@ static bool two_manual;
 
 /* In -2 mode, decide whether a channel message participates at all:
  * notes on channels 1..2 (0-based 0..1) merge onto the one manual, CCs
- * count only from channel 1 (the console channel), the rest is dropped. */
+ * count only from channel 1 (the console channel), the rest is dropped.
+ * Key depth is a manual gesture, not a console control, so it rides the
+ * note gate and not the CC one. */
 static bool accept_msg(const tw_midi_msg *m) {
     if (!two_manual) return true;
     int ch = m->status & 0x0F;
     switch (m->status & 0xF0) {
     case 0x90:
-    case 0x80: return ch <= 1;
+    case 0x80:
+    case 0xA0: return ch <= 1;
     case 0xB0: return ch == 0;
     default:   return false;
     }
@@ -75,6 +80,10 @@ static void apply_msg(const tw_midi_msg *m) {
     case 0x80:
         tw_organ_note(&inst.organ, m->d1, false, m->d2);
         stats.notes++;
+        break;
+    case 0xA0:
+        tw_organ_note_depth(&inst.organ, m->d1, m->d2);
+        stats.depths++;
         break;
     case 0xB0:
         stats.ccs++;
@@ -153,7 +162,7 @@ static void usage(const char *argv0) {
             "  -r  sample rate (default 48000)\n"
             "  -p  period frames (default 128)   -n  periods (default 3)\n"
             "  -g  master gain (default 0.0625)  -e  demo chord for N seconds\n"
-            "  -2  two-manual protocol: notes ch1+ch2 merge, CCs ch1 only\n",
+            "  -2  two-manual protocol: notes+depth ch1+ch2 merge, CCs ch1 only\n",
             argv0);
 }
 
@@ -190,12 +199,13 @@ int main(int argc, char **argv) {
             fprintf(stderr, "rawmidi open %s: %s\n", midi_dev, snd_strerror(err));
             return 1;
         }
-        printf("midi: %s (notes 36..96, CC11 swell, CC70-78 drawbars,"
+        printf("midi: %s (notes 36..96, poly key pressure = key depth,"
+               " CC11 swell, CC70-78 drawbars,"
                " CC120/123 panic, CC80-83 percussion on/harmonic/speed/volume,"
                " CC84 vibrato off/V1-V3/C1-C3, CC85 drive, CC86 rotary mode,"
                " CC87 speed switch, CC88-90 balance/width/rotary drive)%s\n",
                midi_dev,
-               two_manual ? "; two-manual: notes ch1+ch2, CCs ch1" : "");
+               two_manual ? "; two-manual: notes+depth ch1+ch2, CCs ch1" : "");
     }
 
     tw_instrument_init(&inst, (float)rate);
@@ -261,8 +271,9 @@ int main(int argc, char **argv) {
     snd_pcm_drain(pcm);
     snd_pcm_close(pcm);
     if (midi) snd_rawmidi_close(midi);
-    printf("\nstopped: %.1f s rendered, %lu note events, %lu ccs, %lu xruns,"
-           " %u out-of-compass\n", (double)frame / rate, stats.notes, stats.ccs,
-           stats.xruns, inst.organ.out_of_compass);
+    printf("\nstopped: %.1f s rendered, %lu note events, %lu depth events,"
+           " %lu ccs, %lu xruns, %u out-of-compass\n", (double)frame / rate,
+           stats.notes, stats.depths, stats.ccs, stats.xruns,
+           inst.organ.out_of_compass);
     return 0;
 }
