@@ -11,9 +11,9 @@ CORE_OBJS := $(BUILD)/generator.o $(BUILD)/midi.o $(BUILD)/organ.o $(BUILD)/scan
 # The electric-piano line (docs/piano-backlog.md part 1). Sibling core, not
 # a fork: ep_voice.c includes epiano.h, which includes tonewheel.h for the
 # shared kernels. No organ object depends on it.
-EP_OBJS := $(BUILD)/ep_voice.o
+EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
-all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/exhibit_viz $(BUILD)/exhibit_ep_voice $(BUILD)/render_midi $(BUILD)/tw91
+all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/exhibit_viz $(BUILD)/exhibit_ep_voice $(BUILD)/exhibit_ep_restrike $(BUILD)/render_midi $(BUILD)/tw91 $(BUILD)/ep73
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -21,7 +21,7 @@ $(BUILD):
 $(BUILD)/%.o: src/%.c src/tonewheel.h | $(BUILD)
 	$(CC) $(CORE_CFLAGS) -c $< -o $@
 
-$(BUILD)/ep_voice.o: src/ep_voice.c src/epiano.h src/tonewheel.h | $(BUILD)
+$(BUILD)/ep_voice.o $(BUILD)/ep_piano.o: $(BUILD)/%.o: src/%.c src/epiano.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CORE_CFLAGS) -c $< -o $@
 
 $(BUILD)/wav.o: driver/wav.c driver/wav.h | $(BUILD)
@@ -69,16 +69,22 @@ $(BUILD)/exhibit_viz: driver/exhibit_viz.c $(BUILD)/viz.o $(CORE_OBJS) src/tonew
 $(BUILD)/exhibit_ep_voice: driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) src/epiano.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) -o $@ -lm
 
-$(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
-	$(CC) $(CFLAGS) driver/render_midi.c $(BUILD)/wav.o $(CORE_OBJS) -o $@
+$(BUILD)/exhibit_ep_restrike: driver/exhibit_ep_restrike.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) src/epiano.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CFLAGS) driver/exhibit_ep_restrike.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) -o $@ -lm
+
+$(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) src/tonewheel.h src/epiano.h | $(BUILD)
+	$(CC) $(CFLAGS) driver/render_midi.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) -o $@
 
 $(BUILD)/tw91: driver/main.c $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/main.c $(CORE_OBJS) -o $@ -lasound
 
+$(BUILD)/ep73: driver/ep73.c $(EP_OBJS) $(CORE_OBJS) src/epiano.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CFLAGS) driver/ep73.c $(EP_OBJS) $(CORE_OBJS) -o $@ -lasound
+
 test: $(BUILD)/test
 	./$(BUILD)/test
 
-exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_ep_voice
+exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_ep_voice $(BUILD)/exhibit_ep_restrike
 	./$(BUILD)/exhibit_phase
 	./$(BUILD)/exhibit_contacts
 	./$(BUILD)/exhibit_taper
@@ -89,6 +95,7 @@ exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper
 	./$(BUILD)/exhibit_wear
 	./$(BUILD)/exhibit_depth
 	./$(BUILD)/exhibit_ep_voice
+	./$(BUILD)/exhibit_ep_restrike
 
 # Dev-side warmth referee (docs/warmth-evidence.md). ngspice is never a
 # build dependency: warmth-ref is run by hand when recalibrating, and

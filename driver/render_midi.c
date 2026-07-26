@@ -22,6 +22,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "../src/tonewheel.h"
+#include "../src/epiano.h"
 #include "wav.h"
 
 typedef struct {
@@ -62,6 +63,13 @@ static int cmp_tempo(const void *a, const void *b) {
 static int fold_note(int n) {
     while (n < TW_NOTE_MIN) n += 12;
     while (n > TW_NOTE_MAX) n -= 12;
+    return n;
+}
+
+/* The same, into the ep73 compass. */
+static int fold_note_ep(int n) {
+    while (n < EP_NOTE_MIN) n += 12;
+    while (n > EP_NOTE_MAX) n -= 12;
     return n;
 }
 
@@ -119,9 +127,41 @@ static void apply_msg(tw_instrument *ins, uint8_t status, uint8_t d1, uint8_t d2
     }
 }
 
+/* The ep73 channel-message map (docs/ep-constants.md sec 10.1). The organ
+ * options above are inert here and the piano's are inert there; the two
+ * instruments share this file's SMF reader and nothing else. */
+static void apply_msg_ep(ep_piano *p, uint8_t status, uint8_t d1, uint8_t d2,
+                         bool fold) {
+    int note = (fold && (status & 0xF0) <= 0xA0) ? fold_note_ep(d1) : d1;
+    if (fold && note != d1) stats.folded++;
+    switch (status & 0xF0) {
+    case 0x90:
+        ep_piano_note(p, note, d2 > 0, d2);
+        stats.notes++;
+        break;
+    case 0x80:
+        ep_piano_note(p, note, false, 0);
+        stats.notes++;
+        break;
+    case 0xA0:
+        ep_piano_key_pressure(p, note, d2); /* parsed, ignored, counted */
+        stats.depths++;
+        break;
+    case 0xB0:
+        stats.ccs++;
+        if (d1 == 64) ep_piano_set_sustain(p, d2 >= 64);
+        else if (d1 == 120 || d1 == 123) ep_piano_panic(p);
+        else stats.ccs--;
+        break;
+    default:
+        break;
+    }
+}
+
 static void usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [options] in.mid\n"
+            "  -I name  instrument: organ (default) or ep73\n"
             "  -c list  MIDI channels to render, e.g. 0,4 (default: all)\n"
             "  -R digits  registration, nine digits (default 888000000)\n"
             "  -v mode  vibrato 0..6 = off,V1..V3,C1..C3 (default 0)\n"
@@ -141,9 +181,35 @@ typedef struct {
     const uint8_t *reg;
     int vib, perc, rot;
     float drive, gain, wear;
-    bool fold;
+    bool fold, ep;
     float rate;
 } settings_t;
+
+/* The ep73 twin of render(). Mono in, written to both channels, so the
+ * buffer, the WAV and the two-run FNV contract are the organ's unchanged. */
+static double render_ep(const ev_t *ev, size_t nev, const settings_t *s,
+                        float *buf, int64_t frames, const int64_t *ev_frame,
+                        uint32_t *out_of_compass) {
+    ep_piano p;
+    ep_piano_init(&p, s->rate);
+    memset(&stats, 0, sizeof stats);
+
+    size_t next = 0;
+    float peak = 0.0f;
+    for (int64_t i = 0; i < frames; i++) {
+        while (next < nev && ev_frame[next] <= i) {
+            apply_msg_ep(&p, ev[next].status, ev[next].d1, ev[next].d2, s->fold);
+            next++;
+        }
+        float y = ep_piano_tick(&p) * s->gain;
+        buf[2 * i] = y;
+        buf[2 * i + 1] = y;
+        float a = tw_fabsf(y);
+        if (a > peak) peak = a;
+    }
+    *out_of_compass = p.bank.out_of_compass;
+    return (double)peak;
+}
 
 static double render(const ev_t *ev, size_t nev, const settings_t *s,
                      float *buf, int64_t frames, const int64_t *ev_frame,
@@ -179,14 +245,18 @@ static double render(const ev_t *ev, size_t nev, const settings_t *s,
 
 int main(int argc, char **argv) {
     uint8_t reg[TW_DRAWBARS] = { 8, 8, 8, 0, 0, 0, 0, 0, 0 };
-    settings_t st = { reg, 0, 0, 0, 0.0f, 0.125f, 0.0f, false, 48000.0f };
+    settings_t st = { reg, 0, 0, 0, 0.0f, 0.125f, 0.0f, false, false, 48000.0f };
     const char *out_path = "render.wav";
     double tail_s = 2.0;
     uint32_t chan_mask = 0xFFFF;
 
     int c;
-    while ((c = getopt(argc, argv, "c:R:v:D:m:p:fg:w:r:t:o:h")) != -1) {
+    while ((c = getopt(argc, argv, "I:c:R:v:D:m:p:fg:w:r:t:o:h")) != -1) {
         switch (c) {
+        case 'I':
+            if (!strcmp(optarg, "ep73")) st.ep = true;
+            else if (strcmp(optarg, "organ")) { usage(argv[0]); return 2; }
+            break;
         case 'c': {
             chan_mask = 0;
             for (const char *p = optarg; *p;) {
@@ -312,12 +382,16 @@ int main(int argc, char **argv) {
            chan_mask, nev, (double)(nev ? ev_frame[nev - 1] : 0) / st.rate,
            tail_s, (double)st.rate);
     static const char *rot_name[4] = { "bypass", "chorale", "tremolo", "brake" };
-    printf("  registration %d%d%d%d%d%d%d%d%d, vibrato %d, percussion %s,"
-           " drive %.2f, rotary %s, wear %.2f, gain %g%s\n",
-           reg[0], reg[1], reg[2], reg[3], reg[4], reg[5], reg[6], reg[7],
-           reg[8], st.vib, st.perc ? "on" : "off", (double)st.drive,
-           rot_name[st.rot < 0 ? 0 : st.rot > 3 ? 3 : st.rot],
-           (double)st.wear, (double)st.gain, st.fold ? ", octave-fold" : "");
+    if (st.ep)
+        printf("  instrument ep73, compass 28..100, gain %g%s\n",
+               (double)st.gain, st.fold ? ", octave-fold" : "");
+    else
+        printf("  registration %d%d%d%d%d%d%d%d%d, vibrato %d, percussion %s,"
+               " drive %.2f, rotary %s, wear %.2f, gain %g%s\n",
+               reg[0], reg[1], reg[2], reg[3], reg[4], reg[5], reg[6], reg[7],
+               reg[8], st.vib, st.perc ? "on" : "off", (double)st.drive,
+               rot_name[st.rot < 0 ? 0 : st.rot > 3 ? 3 : st.rot],
+               (double)st.wear, (double)st.gain, st.fold ? ", octave-fold" : "");
 
     float *buf = malloc(2 * (size_t)frames * sizeof *buf);
     if (!buf) { fprintf(stderr, "out of memory (%lld frames)\n",
@@ -326,13 +400,16 @@ int main(int argc, char **argv) {
     /* two-run FNV: the repo's determinism contract, applied to songs;
      * hashed over the interleaved stereo buffer since M6 */
     uint32_t ooc = 0;
-    double peak = render(ev, nev, &st, buf, frames, ev_frame, &ooc);
+    double (*paint)(const ev_t *, size_t, const settings_t *, float *, int64_t,
+                    const int64_t *, uint32_t *) = st.ep ? render_ep : render;
+    double peak = paint(ev, nev, &st, buf, frames, ev_frame, &ooc);
     uint64_t h1 = tw_fnv1a64(buf, 2 * (size_t)frames * sizeof *buf, 0);
-    peak = render(ev, nev, &st, buf, frames, ev_frame, &ooc);
+    peak = paint(ev, nev, &st, buf, frames, ev_frame, &ooc);
     uint64_t h2 = tw_fnv1a64(buf, 2 * (size_t)frames * sizeof *buf, 0);
-    printf("  applied: %lu notes, %lu depths, %lu ccs, %lu folded,"
+    printf("  applied: %lu notes, %lu %s, %lu ccs, %lu folded,"
            " %u out-of-compass\n",
-           stats.notes, stats.depths, stats.ccs, stats.folded, ooc);
+           stats.notes, stats.depths, st.ep ? "key pressures" : "depths",
+           stats.ccs, stats.folded, ooc);
     printf("  peak %.3f, FNV64 %016llx %s\n", peak, (unsigned long long)h1,
            h1 == h2 ? "(two runs identical)" : "MISMATCH");
 

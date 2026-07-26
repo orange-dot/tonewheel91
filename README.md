@@ -43,12 +43,15 @@ electric piano (`docs/piano-backlog.md`). It is a sibling core, not a
 framework — 73 struck voices of three clamped-free tine modes each, a
 per-voice asymmetric pickup, and velocity that scales loudness and timbre
 for the first time in this codebase. EP0 pins its constants
-(`docs/ep-constants.md`) and EP1 lands the voice bank offline
-(`docs/ep1-evidence.md`); dampers, the sustain pedal, and a live binary are
-EP2. No organ translation unit is shared or edited, and the organ's pinned
-signatures run untouched in the same test binary.
+(`docs/ep-constants.md`), EP1 lands the voice bank offline
+(`docs/ep1-evidence.md`), and EP2 adds dampers, the sustain pedal, panic,
+the live `ep73` binary and an instrument switch on `render_midi`
+(`docs/ep2-evidence.md`) — its restrike law is still an open A/B and it has
+not been played on the rig yet. No organ translation unit is shared or
+edited, the instrument switch defaults to the organ, and the organ's pinned
+signatures — the whole-song render hashes included — reproduce bit-for-bit.
 
-    make test      # table-driven checks (9286)
+    make test      # table-driven checks (9322)
     make exhibit   # renders the evidence WAVs into build/
     make viz       # renders the evidence PNGs into docs/viz/
     make           # also builds the live driver
@@ -66,6 +69,13 @@ signatures run untouched in the same test binary.
                    # CC87 rotary speed switch (chorale/tremolo), CC88 balance,
                    # CC89 width, CC90 rotary drive
                    # -r rate -p period -n periods -g gain
+
+    ./build/ep73 -d hw:CARD=AG06AG03 -e 4       # the electric piano
+                   # notes 28..100, velocity -> loudness and timbre
+                   # CC64 sustain pedal, CC120/123 panic
+                   # CC85/91/92/93 reserved: drive, tremolo, cabinet,
+                   #   condition — counted, not yet wired
+    ./build/render_midi -I ep73 ...             # its offline twin
                    # -2 two-manual touch-surface protocol: notes and key
                    #    depth on ch1+ch2 (upper+lower) merge onto the one
                    #    manual, CCs honored on ch1 only; default stays

@@ -2803,6 +2803,239 @@ static void test_ep_bank(void) {
           "a hostile sample rate must fall back to 48 kHz");
 }
 
+/* --- EP2: dampers, the sustain pedal, and the restrike law (sec 5.4, 8) --- */
+
+static const double EPO_DAMP_T60_E1 = 0.35, EPO_DAMP_RATIO = 0.981119;
+
+static double epo_damp_t60(int key) {
+    return EPO_DAMP_T60_E1 * pow(EPO_DAMP_RATIO, key);
+}
+
+/* Samples until a mode's amplitude falls to 1e-3 of where it started. */
+static long ep_fall_to_t60(ep_bank *b, int key, int mode, long limit) {
+    float a0 = b->amp[mode][key];
+    long n = 0;
+    while (b->amp[mode][key] > a0 * 1e-3f && n < limit) {
+        ep_bank_tick_gated(b);
+        n++;
+    }
+    return n;
+}
+
+static void test_ep_damper(void) {
+    CHECK(ep_damp_t60_s(-1) == 0.0f && ep_damp_t60_s(EP_KEYS) == 0.0f,
+          "out-of-range damped t60 must return 0");
+    CHECK(ep_damp_t60_s(0) == 0.35f, "E1 damped t60 must be the pinned 0.35 s");
+    int bad = 0;
+    for (int k = 0; k < EP_KEYS; k++)
+        if (fabs(ep_damp_t60_s(k) / epo_damp_t60(k) - 1.0) > 1e-5) bad++;
+    CHECK(bad == 0, "damped t60 table off the oracle at %d keys", bad);
+
+    /* sec 8: the felt sets the rate and does not care which mode it stops,
+     * so unlike the free table this one carries no per-mode factor. */
+    ep_bank b;
+    ep_bank_init(&b, (float)EP_RATE);
+    int modey = 0;
+    for (int k = 0; k < EP_KEYS; k++)
+        for (int m = 1; m < EP_MODES; m++)
+            if (b.dec_damp[m][k] != b.dec_damp[0][k]) modey++;
+    CHECK(modey == 0, "the damped decrement must be per key only, %d differ", modey);
+
+    /* At rest the dampers are on; a strike lifts them; damping puts them
+     * back. The live decrement is the whole of it. */
+    int k = 36;
+    CHECK(b.dec[0][k] == b.dec_damp[0][k], "a bank at rest must be damped");
+    ep_bank_strike(&b, k + EP_NOTE_MIN, 100);
+    CHECK(b.dec[0][k] == b.dec_free[0][k], "a strike must lift the damper");
+    ep_bank_damp(&b, k + EP_NOTE_MIN);
+    CHECK(b.dec[0][k] == b.dec_damp[0][k], "damping must restore the damped rate");
+    ep_bank_undamp(&b, k + EP_NOTE_MIN);
+    CHECK(b.dec[0][k] == b.dec_free[0][k], "undamping must restore the free rate");
+
+    /* The rendered damped decay against the pinned table. */
+    ep_bank_init(&b, (float)EP_RATE);
+    ep_bank_strike(&b, k + EP_NOTE_MIN, 127);
+    ep_bank_damp(&b, k + EP_NOTE_MIN);
+    double meas = ep_fall_to_t60(&b, k, 0, 10L * (long)EP_RATE) / EP_RATE;
+    CHECK(fabs(meas / ep_damp_t60_s(k) - 1.0) < 0.01,
+          "measured damped t60 %.4f s must match the pinned %.4f s", meas,
+          (double)ep_damp_t60_s(k));
+
+    /* And that it is very much faster than free decay. */
+    CHECK(ep_damp_t60_s(k) < 0.05f * ep_t60_s(k, 0),
+          "the damper must stop a tine far faster than free decay");
+}
+
+static void test_ep_piano_keys(void) {
+    ep_piano p;
+    ep_piano_init(&p, (float)EP_RATE);
+
+    double e = 0.0;
+    for (int i = 0; i < 480; i++) e += fabs(ep_piano_tick(&p));
+    CHECK(e == 0.0, "an untouched piano must be silent");
+
+    /* A release with the pedal up damps; with the pedal down it does not. */
+    ep_piano_note(&p, 64, true, 100);
+    CHECK(p.held[36] && p.bank.dec[0][36] == p.bank.dec_free[0][36],
+          "a held key must ring freely");
+    ep_piano_note(&p, 64, false, 0);
+    CHECK(!p.held[36] && p.bank.dec[0][36] == p.bank.dec_damp[0][36],
+          "a release with the pedal up must damp");
+
+    ep_piano_init(&p, (float)EP_RATE);
+    ep_piano_set_sustain(&p, true);
+    ep_piano_note(&p, 64, true, 100);
+    ep_piano_note(&p, 64, false, 0);
+    CHECK(p.bank.dec[0][36] == p.bank.dec_free[0][36],
+          "a release with the pedal down must keep the free rate");
+    ep_piano_set_sustain(&p, false);
+    CHECK(p.bank.dec[0][36] == p.bank.dec_damp[0][36],
+          "letting the pedal go must damp a key that is not held");
+
+    /* Catching the pedal late under a note already dying on its damper. */
+    ep_piano_init(&p, (float)EP_RATE);
+    ep_piano_note(&p, 64, true, 100);
+    ep_piano_note(&p, 64, false, 0);
+    for (int i = 0; i < 480; i++) ep_piano_tick(&p);
+    CHECK(p.bank.dec[0][36] == p.bank.dec_damp[0][36], "should be damping");
+    ep_piano_set_sustain(&p, true);
+    CHECK(p.bank.dec[0][36] == p.bank.dec_free[0][36],
+          "catching the pedal late must lift the damper off a dying note");
+
+    /* A held key is unaffected by the pedal going up. */
+    ep_piano_init(&p, (float)EP_RATE);
+    ep_piano_set_sustain(&p, true);
+    ep_piano_note(&p, 64, true, 100);
+    ep_piano_set_sustain(&p, false);
+    CHECK(p.bank.dec[0][36] == p.bank.dec_free[0][36],
+          "a still-held key must not be damped by the pedal going up");
+
+    /* Note-on with velocity 0 is a note-off. */
+    ep_piano_init(&p, (float)EP_RATE);
+    ep_piano_note(&p, 64, true, 100);
+    ep_piano_note(&p, 64, true, 0);
+    CHECK(!p.held[36] && p.bank.dec[0][36] == p.bank.dec_damp[0][36],
+          "note-on at velocity 0 must act as a note-off");
+
+    /* Panic drops dampers rather than hard-muting: still ringing, but on
+     * the damped rate, with the pedal let go. */
+    ep_piano_init(&p, (float)EP_RATE);
+    ep_piano_set_sustain(&p, true);
+    for (int n = 60; n <= 67; n++) ep_piano_note(&p, n, true, 110);
+    ep_piano_panic(&p);
+    int held = 0, undamped = 0;
+    for (int i = 0; i < EP_KEYS; i++) {
+        if (p.held[i]) held++;
+        if (p.bank.dec[0][i] != p.bank.dec_damp[0][i]) undamped++;
+    }
+    double after = 0.0;
+    for (int i = 0; i < 48; i++) after += fabs(ep_piano_tick(&p));
+    CHECK(!p.sustain && held == 0 && undamped == 0,
+          "panic must drop every damper and the pedal (%d held, %d undamped)",
+          held, undamped);
+    CHECK(after > 0.0, "panic must silence in the damper tau, not hard-mute");
+
+    /* Compass and poly key pressure, sec 10.1. */
+    ep_piano_init(&p, (float)EP_RATE);
+    ep_piano_note(&p, EP_NOTE_MIN - 1, true, 100);
+    ep_piano_note(&p, EP_NOTE_MAX + 1, false, 0);
+    ep_piano_key_pressure(&p, EP_NOTE_MAX + 1, 64);
+    ep_piano_key_pressure(&p, 64, 64);
+    CHECK(p.bank.out_of_compass == 3 && p.pressure == 1,
+          "out-of-compass %u and pressure %u must both be counted",
+          p.bank.out_of_compass, p.pressure);
+    double q = 0.0;
+    for (int i = 0; i < 480; i++) q += fabs(ep_piano_tick(&p));
+    CHECK(q == 0.0, "key pressure must not make a sound");
+}
+
+static void test_ep_restrike(void) {
+    /* The default is the law EP1 ran, and every EP1 render is pinned on
+     * it, so setting it explicitly must be bit-identical. */
+    ep_bank a, b;
+    ep_bank_init(&a, (float)EP_RATE);
+    ep_bank_init(&b, (float)EP_RATE);
+    CHECK(a.amp_law == EP_AMP_REPLACE && a.phase_law == EP_PHASE_CONTINUE,
+          "the default restrike law must be replace/continue");
+    ep_bank_set_restrike(&b, EP_AMP_REPLACE, EP_PHASE_CONTINUE);
+    int diff = 0;
+    for (long i = 0; i < (long)EP_RATE; i++) {
+        if (i % 6000 == 0) {
+            ep_bank_strike(&a, 64, 70);
+            ep_bank_strike(&b, 64, 70);
+        }
+        float xa = ep_bank_tick_gated(&a), xb = ep_bank_tick_gated(&b);
+        if (memcmp(&xa, &xb, sizeof xa) != 0) diff++;
+    }
+    CHECK(diff == 0, "the explicit default must render identically, %d differ", diff);
+
+    ep_bank_set_restrike(&b, 99, -3);
+    CHECK(b.amp_law == EP_AMP_REPLACE && b.phase_law == EP_PHASE_CONTINUE,
+          "hostile restrike laws must clamp to the defaults");
+
+    /* replace never reaches the ceiling, so it stays exactly the EP1 law;
+     * add is bounded by the hardest single blow (sec 5.4). */
+    ep_bank c;
+    ep_bank_init(&c, (float)EP_RATE);
+    int over = 0;
+    for (int v = 1; v <= 127; v += 6) {
+        ep_bank_strike(&c, 64, v);
+        for (int m = 0; m < EP_MODES; m++)
+            if (c.amp[m][36] > c.ceiling[m][36]) over++;
+    }
+    CHECK(over == 0, "replace must never reach the ceiling, %d did", over);
+
+    ep_bank_init(&c, (float)EP_RATE);
+    ep_bank_set_restrike(&c, EP_AMP_ADD, EP_PHASE_CONTINUE);
+    for (int i = 0; i < 60; i++) {
+        ep_bank_strike(&c, 64, 127);
+        for (int j = 0; j < 120; j++) ep_bank_tick_gated(&c);
+    }
+    over = 0;
+    for (int m = 0; m < EP_MODES; m++)
+        if (c.amp[m][36] > c.ceiling[m][36]) over++;
+    CHECK(over == 0, "add must respect the ceiling under stacked blows, %d over", over);
+    CHECK(c.amp[0][36] > 0.9f * c.ceiling[0][36],
+          "stacked ff blows should actually reach the ceiling");
+
+    /* The phase axis does what it says on a ringing mode. */
+    ep_bank_init(&c, (float)EP_RATE);
+    ep_bank_set_restrike(&c, EP_AMP_REPLACE, EP_PHASE_RESET);
+    ep_bank_strike(&c, 64, 100);
+    for (int i = 0; i < 200; i++) ep_bank_tick_gated(&c);
+    CHECK(c.phase[0][36] != 0.0f, "the phase should have advanced");
+    ep_bank_strike(&c, 64, 100);
+    CHECK(c.phase[0][36] == 0.0f, "phase reset must restart a ringing mode");
+
+    ep_bank_set_restrike(&c, EP_AMP_REPLACE, EP_PHASE_CONTINUE);
+    for (int i = 0; i < 200; i++) ep_bank_tick_gated(&c);
+    float kept = c.phase[0][36];
+    ep_bank_strike(&c, 64, 100);
+    CHECK(c.phase[0][36] == kept, "phase continue must leave a ringing mode alone");
+
+    /* The section 5.3 invariant has to survive all four laws, or the two
+     * bank layouts stop being bit-identical and decision D4 comes undone. */
+    for (int law = 0; law < 4; law++) {
+        ep_bank adv, gat;
+        ep_bank_init(&adv, (float)EP_RATE);
+        ep_bank_init(&gat, (float)EP_RATE);
+        ep_bank_set_restrike(&adv, law / 2, law % 2);
+        ep_bank_set_restrike(&gat, law / 2, law % 2);
+        int bad = 0;
+        for (long i = 0; i < (long)EP_RATE; i++) {
+            if (i % 3000 == 0) {
+                int n = 40 + 3 * (int)(i / 3000);
+                ep_bank_strike(&adv, n, 30 + 8 * (int)(i / 3000));
+                ep_bank_strike(&gat, n, 30 + 8 * (int)(i / 3000));
+            }
+            float xa = ep_bank_tick(&adv), xg = ep_bank_tick_gated(&gat);
+            if (memcmp(&xa, &xg, sizeof xa) != 0) bad++;
+        }
+        CHECK(bad == 0, "layouts must stay identical under law %d, %d differ",
+              law, bad);
+    }
+}
+
 int main(void) {
     test_frequency_table();
     test_foldback();
@@ -2848,6 +3081,9 @@ int main(void) {
     test_ep_strike();
     test_ep_pickup();
     test_ep_bank();
+    test_ep_damper();
+    test_ep_piano_keys();
+    test_ep_restrike();
     printf("%d checks, %d failures\n", checks, fails);
     return fails ? 1 : 0;
 }

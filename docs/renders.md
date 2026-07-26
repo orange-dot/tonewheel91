@@ -542,3 +542,41 @@ fills the harmonics in under a chorale-then-tremolo Leslie; at 198 s the
 drawbars snap to 888800000 and the solo lights the upper spectrum up with
 the drive at the ceiling. A brand-new song for the log — nothing prior to
 leave alone.
+
+## 2026-07-26 — ep73: the first whole-song render of the electric-piano line
+
+Not an organ entry, and deliberately not a baseline to A/B against
+anything: the first proof that `render_midi -I ep73` carries a whole song
+through the new instrument's key, damper and pedal path, and that the
+deterministic twin still holds on it.
+
+The source is an organ transcription played on a piano, which is exactly
+the wrong music for the instrument and exactly the right test for the
+plumbing — four voices, wide compass, long held pedal notes that a
+struck, decaying voice cannot sustain the way an organ does. It sounds
+like a four-part fugue on an electric piano, and it is here to be
+listened to for *defects* — dampers cutting wrong, dropped notes,
+clicks — not for tone. EP3 owns tone.
+
+- Input: `renders/Toccata-and-Fugue-Dm-leslie.mid`, md5
+  `0341038e41e6bac5f932e7e8334a183f` — the same file as the organ entries
+  above, channels 0,1,2,3.
+- Engine: EP2 (`0a8be7c` plus the EP2 working tree), `make test` 9322
+  checks green. Compass 28..100, so only 24 notes fold, against 234 on
+  the organ's 61 keys. The file carries no CC64, so **every note is
+  stopped by its damper on release** — the pedal path exists and is
+  simply never asked for here.
+- Settings: octave-fold, gain 0.080, 48 kHz, 6 s tail. No drive, no
+  tremolo, no cabinet — none of them exist yet.
+
+    ./build/render_midi -I ep73 -c 0,1,2,3 -f -g 0.080 -t 6 \
+        -o renders/ep73-ep2-20260726-toccata.wav renders/Toccata-and-Fugue-Dm-leslie.mid
+    # peak 0.682, FNV64 28a8aead10a6895d
+    #   applied: 7588 notes, 0 key pressures, 6 ccs, 24 folded (two runs identical)
+
+510 seconds of audio rendered in 9.8 s wall clock, about 52x realtime —
+the active-gated bank layout decision D4 closed on, doing what it was
+chosen for. The organ path is untouched by the instrument switch: the
+`ke9` emerson take above re-renders to `6e56f252d97c240c` on this build,
+bit-for-bit.
+

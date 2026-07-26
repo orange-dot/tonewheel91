@@ -345,9 +345,33 @@ and leaves the phase of a still-ringing mode alone [decision]. The first
 half is physically plain — a tine at rest has no phase worth preserving —
 and it has a useful consequence: the always-advance and active-gated bank
 layouts of section 9 then produce bit-identical output, so D4 is decided on
-cost alone. The second half is provisional; **D5 owns the restrike law**
-(amplitude replace versus add, phase continue versus reset) and closes it at
-EP2 by A/B exhibit. EP1 runs `amplitude replaces, phase continues`.
+cost alone. The second half is section 5.4's business.
+
+### 5.4 Restrike — D5
+
+What a blow does to a tine that is already ringing. Two independent axes,
+four combinations, all four implemented at EP2 so the A/B exhibit can
+render them side by side:
+
+- **amplitude** — `replace` sets the mode to what the new blow alone would
+  produce; `add` sums it onto what is there.
+- **phase** — `continue` lets the tine ride through the blow; `reset`
+  restarts it.
+
+The phase rule of section 5.3 stands above both: a mode at exactly zero
+always resets, whichever way D5 goes. That is what keeps the two bank
+layouts bit-identical, so D5 must not be allowed to break it.
+
+`add` needs a bound, or a fast repeated note grows without limit. The bound
+is not a new constant: **a restrike may not push a mode past the amplitude
+its own hardest single blow would give it** [decision] — the hammer has a
+maximum and the tine has an escapement and a pickup gap in front of it.
+Under `replace` the ceiling is never reached, so the two laws stay exactly
+comparable and `replace` remains bit-identical to every EP1 render.
+
+Defaults are `replace` and `continue`, the provisional law EP1 ran.
+**EP2 closes D5 by ear on the A/B; the losing combinations are then
+deleted, not left as options.**
 
 ## 6. Pickup nonlinearity
 
@@ -459,11 +483,19 @@ grading, no times; EP3 owns the numbers]:
   [derived: same `f^-q` shape as section 4 with `q = 0.33`, giving 0.0887 s
   at E7 — a bass damper has a long heavy tine to stop, a treble damper has
   almost nothing].
-- Release swaps the mode's decrement to the damped one; nothing else changes.
-- Sustain pedal (CC64, `>= 64` = down) defers damper engagement. A release
-  with the pedal down keeps the free-decay rate; dampers apply on pedal-up.
-- Panic (CC120/123) drops all dampers immediately; the instrument silences
-  in the damper tau rather than by a hard mute.
+- The damped t60 carries **no per-mode factor**, unlike the free one: the
+  felt sets the rate and does not care which mode it is stopping.
+- One rule covers the whole damper surface: **the damper is off when the
+  key is held or the pedal is down, and on otherwise.** Release, pedal
+  down, pedal up, catching the pedal late under a note already decaying
+  under its damper, and letting the pedal go while keys are still held all
+  fall out of it. A strike lifts the damper by itself, because the hammer
+  does — the bridle strap pulls the damper arm down as the hammer swings
+  [EP-SM 4-5].
+- Sustain pedal: CC64, `>= 64` = down (section 10.1).
+- Panic (CC120/123) drops all dampers and lets go of the pedal; the
+  instrument silences in the damper tau rather than by a hard mute. The
+  bank's hard mute stays available for tests, not for performance.
 - Half-pedalling is **not** modelled [decision — deferred; there is no
   continuous-position source for this action and no EP milestone owns it].
 
@@ -517,8 +549,39 @@ panel control.
   has already thrown its hammer.
 - CC11 unassigned; a volume assignment is [decision D6], not a default.
   The instrument has no expression pedal.
-- **The exact CC map pins at EP2**, following the organ's convention of
-  doing it at the first playable milestone.
+
+### 10.1 The CC map — pinned at EP2, D6 closed
+
+Numbers are chosen so one controller can drive both instruments without
+remapping: the organ's map occupies CC11, CC70-78 and CC80-90, so the
+piano takes CC64 (where the sustain pedal already lives by MIDI
+convention), reuses CC85 for drive, and continues upward from CC91.
+
+    CC64    sustain pedal        >= 64 is down          EP2, wired
+    CC85    drive                value / 127            EP5
+    CC91    tremolo              value / 127, 0 = off   EP4
+    CC92    cabinet              value / 127, 0 = bypass EP6
+    CC93    condition            value / 127            EP7
+    CC120   all sound off        drops all dampers      EP2, wired
+    CC123   all notes off        drops all dampers      EP2, wired
+
+Everything from CC85 upward is reserved, not implemented: the milestone
+named beside it wires it, and until then the message is parsed and
+ignored like any other. Each reserved control's zero is its bit-exact
+bypass, so wiring one later cannot move an earlier render.
+
+Deliberately unassigned:
+
+- **CC11** — the organ's swell. This instrument has no expression pedal
+  and no swell stage, so an assignment here would be an output-gain trim
+  with nothing physical behind it [decision D6]. If the operator wants a
+  volume pedal it lands here, and that is his call, not a default.
+- **Poly key pressure (0xA0)** — parsed, ignored, counted. The organ uses
+  it for key depth, which has no analogue here: a key that is down has
+  already thrown its hammer, and the tine no longer knows where the key
+  is.
+- Note-on with velocity 0 is a note-off, per the MIDI convention the
+  organ's parser already follows.
 
 Identity defaults, each a bit-exact bypass (the scanner-OFF discipline):
 `condition = 0`, tremolo off, `drive = 0`, cabinet bypass. The pickup

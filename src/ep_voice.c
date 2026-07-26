@@ -30,6 +30,8 @@ static constexpr float EP_SEMI[12] = {
 
 static constexpr float T60_E1 = 17.0f;         /* sec 4 [EP-P61]         */
 static constexpr float T60_RATIO = 0.980099f;  /* per semitone, sec 4    */
+static constexpr float DAMP_T60_E1 = 0.35f;    /* sec 8 [FOLK]           */
+static constexpr float DAMP_T60_RATIO = 0.981119f; /* per semitone, sec 8 */
 static constexpr float NYQUIST_GUARD = 0.45f;  /* sec 3.1                */
 static constexpr float LN1000 = 6.907755f;     /* t60 -> amplitude tau   */
 static constexpr float AMP_EPS = 1e-9f;        /* denormal-safe snap      */
@@ -75,6 +77,13 @@ float ep_t60_s(int key, int mode) {
     return t * EP_MODE_T60[mode];
 }
 
+float ep_damp_t60_s(int key) {
+    if (key < 0 || key >= EP_KEYS) return 0.0f;
+    float t = DAMP_T60_E1;
+    for (int i = 0; i < key; i++) t *= DAMP_T60_RATIO;
+    return t;
+}
+
 float ep_mode_weight(int key, int mode, int velocity) {
     if (key < 0 || key >= EP_KEYS || mode < 0 || mode >= EP_MODES) return 0.0f;
     if (velocity < 1) velocity = 1;
@@ -103,10 +112,36 @@ void ep_bank_init(ep_bank *b, float sample_rate_hz) {
             bool voiced = f < guard;
             b->gate[m][k] = voiced ? 1.0f : 0.0f;
             b->step[m][k] = voiced ? f / sample_rate_hz : 0.0f;
-            b->dec[m][k] = decay_coeff(sample_rate_hz, ep_t60_s(k, m));
+            b->dec_free[m][k] = decay_coeff(sample_rate_hz, ep_t60_s(k, m));
+            b->dec_damp[m][k] = decay_coeff(sample_rate_hz, ep_damp_t60_s(k));
+            b->dec[m][k] = b->dec_damp[m][k]; /* at rest the dampers are on */
+            /* sec 5.4: the hardest single blow this mode can take, which is
+             * also the ceiling a restrike may not push it past. */
+            b->ceiling[m][k] = ep_mode_weight(k, m, 127) * b->gate[m][k];
         }
     }
     b->relist = true;
+}
+
+void ep_bank_set_restrike(ep_bank *b, int amp_law, int phase_law) {
+    b->amp_law = (amp_law == EP_AMP_ADD) ? EP_AMP_ADD : EP_AMP_REPLACE;
+    b->phase_law = (phase_law == EP_PHASE_RESET) ? EP_PHASE_RESET
+                                                 : EP_PHASE_CONTINUE;
+}
+
+static void set_decrements(ep_bank *b, int key, bool damped) {
+    for (int m = 0; m < EP_MODES; m++)
+        b->dec[m][key] = damped ? b->dec_damp[m][key] : b->dec_free[m][key];
+}
+
+void ep_bank_damp(ep_bank *b, int midi_note) {
+    if (midi_note < EP_NOTE_MIN || midi_note > EP_NOTE_MAX) return;
+    set_decrements(b, midi_note - EP_NOTE_MIN, true);
+}
+
+void ep_bank_undamp(ep_bank *b, int midi_note) {
+    if (midi_note < EP_NOTE_MIN || midi_note > EP_NOTE_MAX) return;
+    set_decrements(b, midi_note - EP_NOTE_MIN, false);
 }
 
 void ep_bank_strike(ep_bank *b, int midi_note, int velocity) {
@@ -119,11 +154,15 @@ void ep_bank_strike(ep_bank *b, int midi_note, int velocity) {
     int k = midi_note - EP_NOTE_MIN;
     float level = (float)velocity * (1.0f / 127.0f); /* sec 5.1, gamma = 1 */
     for (int m = 0; m < EP_MODES; m++) {
-        /* sec 5.3: a mode at rest has no phase worth keeping; a ringing one
-         * keeps it (D5 owns the restrike law and closes at EP2). */
-        if (b->amp[m][k] == 0.0f) b->phase[m][k] = 0.0f;
-        b->amp[m][k] = level * ep_mode_weight(k, m, velocity) * b->gate[m][k];
+        float have = b->amp[m][k];
+        /* sec 5.3: a mode at rest has no phase worth keeping, whatever D5
+         * settles for a ringing one — the layout identity rests on it. */
+        if (have == 0.0f || b->phase_law == EP_PHASE_RESET) b->phase[m][k] = 0.0f;
+        float want = level * ep_mode_weight(k, m, velocity) * b->gate[m][k];
+        float a = (b->amp_law == EP_AMP_ADD) ? have + want : want;
+        b->amp[m][k] = (a > b->ceiling[m][k]) ? b->ceiling[m][k] : a;
     }
+    set_decrements(b, k, false); /* the hammer lifts the damper, sec 8 */
     b->relist = true;
 }
 
@@ -132,6 +171,7 @@ void ep_bank_silence(ep_bank *b) {
         for (int k = 0; k < EP_KEYS; k++) {
             b->amp[m][k] = 0.0f;
             b->phase[m][k] = 0.0f;
+            b->dec[m][k] = b->dec_damp[m][k]; /* back to rest */
         }
     b->live_n = 0;
     b->relist = false;
