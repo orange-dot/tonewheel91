@@ -580,3 +580,98 @@ chosen for. The organ path is untouched by the instrument switch: the
 `ke9` emerson take above re-renders to `6e56f252d97c240c` on this build,
 bit-for-bit.
 
+## 2026-07-26 — ep73 against a reference loop library
+
+Twenty short MIDI loops for the tine electric piano, rendered through
+`render_midi -I ep73`. Unlike every entry above, this set arrives with its
+own **reference audio**: the library ships a rendered WAV beside each MIDI,
+recorded from the instrument the loops were written for. That makes it the
+first material in this repo where the electric-piano line can be heard
+directly against the thing it models, on identical notes — which is what
+`piano-backlog.md` names as the precondition for EP3 and what the EP1
+evidence recorded as an open item.
+
+- Input: an operator-supplied loop library, unpacked into gitignored
+  `renders/rhodes-loops-tl/`. Twenty format-0 single-track MIDI files, all
+  on channel 0, at 90 BPM except one at 85.
+- Compass 38..94, so the whole set sits **inside** the 73-key ep73 compass
+  with nothing folded and nothing out of range. No `-f` needed.
+- Seven of the twenty carry **CC64**, 8 to 20 events each, so the EP2
+  damper and sustain-pedal path is exercised by real material rather than
+  only by tests.
+- Engine: EP2 working tree, `make test` 9322 checks green. No drive, no
+  tremolo, no cabinet, `condition` does not exist yet — this is the bare
+  voice bank through its dampers.
+
+    ./build/render_midi -I ep73 -r 44100 -t 6 -g 0.135 \
+        -o renders/rhodes-loops-tl/ep73/ep73-<name>.wav <name>.mid
+
+Rendered at **44.1 kHz**, not the house default 48 kHz, to match the
+reference loops so an A/B needs no resampling in the middle. One
+consequence is pinned in `ep-constants.md` sec 3.1 and is not a defect:
+at 44.1 kHz the third tine mode silences from MIDI 86 rather than 87.
+
+Gain 0.135 is **one value for the whole set**, calibrated so the loudest
+loop peaks at 0.691 and the quietest at 0.206. Relative loudness between
+loops is therefore the model's velocity law, not a per-file normalisation
+— which is the point, since the velocity-to-loudness law is exactly what
+EP3 has to judge.
+
+Per-loop peaks and FNV-64 signatures, all two-run identical, are in
+`renders/rhodes-loops-tl/AB-manifest.txt` together with the reference each
+render should be compared against. Nineteen of the twenty pair to a
+reference by key and length; `90_C_RhodesDust` has none, and the `Dm` and
+`Fm` pairs are marked doubtful (different tempo, and a 1.4 s length
+disagreement, respectively).
+
+Two observations about the source material, neither of them ours.
+`90_BMaj7_RhodesDust_01.mid` and `90_Gm_RhodesDust.mid` differ as files but
+render to the same signature `53ca0687889a37e1`, so they carry the same
+event stream under two different key names — one of the two labels is
+wrong. And the `Dm` MIDI is named for a different patch than the `Dm`
+reference and runs at a different tempo, so it is probably not the same
+material at all.
+
+**These renders are not a baseline and nothing is pinned to them.** They
+exist to be listened to beside the references, and the constants they will
+move — the velocity-to-timbre tables, the pickup alpha, the mode weights —
+are all EP3's, still carrying their [FOLK] and [decision] tags in
+`ep-constants.md`.
+
+### What the measurement says about the references themselves
+
+A third-octave long-term-average comparison of the twenty pairs, before
+any listening:
+
+    band   200  400  800 1008 1270 1600 2016 2540 3200 4032 5080 8063 12800
+    diff   0.7 -3.0 -1.8  2.3  4.3  9.2 20.7 23.5 25.7 23.7 18.5 22.0  20.2
+
+ep73 minus reference, dB. Below 800 Hz the two agree within 3 dB, which is
+the fundamental region and the part of the model that is derived rather
+than fitted. Above a knee near 1.6 kHz the difference jumps to a **flat
+plateau of 20-25 dB across three octaves**.
+
+Flat is the informative part. A missing loudspeaker or cabinet rolloff
+would make the difference *grow* with frequency; a difference that stays
+level means both spectra fall at the same rate up there and ours simply
+sits 22 dB higher — a high shelf, not a slope.
+
+Two readings fit that, and they belong to different milestones. Either the
+[FOLK] mode weights of `ep-constants.md` section 5.2 are far too high,
+which is EP3's business, or the reference chain carries a treatment this
+model does not have, which is EP6's.
+
+The reference set cannot settle that, because it is not a clean recording
+of the instrument. The patches are named for their production — dust, tape
+— and they measure like it: the references themselves fall about 16 dB per
+octave above 2 kHz and hold a steady 0.80 channel correlation, which is a
+lowpassed, stereo-widened, produced sound rather than a close-miked
+instrument. Calibrating the voice's spectral identity against them would
+bake somebody's production EQ into constants that are supposed to describe
+a tine and a pickup.
+
+So the set is **good evidence for mechanism and bad evidence for tone**.
+It is worth keeping and listening to for dampers cutting wrong, dropped
+notes, pedal behaviour and clicks. EP3 still needs what it always needed:
+dry, close-miked single notes across the compass and across the dynamic
+range.
