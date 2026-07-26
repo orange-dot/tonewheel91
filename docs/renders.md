@@ -375,3 +375,170 @@ Probe: this denser four-part sum with no drive to compress it runs hot —
 it hit peak 1.459 at gain 0.040, so the gain was scaled linearly down to
 0.021 to land a safe 0.766. FNV is the tool's two-run signature over the
 interleaved stereo buffer.
+
+## 2026-07-23 — Karn Evil 9 emerson, re-rendered on the post-M7 depth pass
+
+Not a new baseline — an **identity re-render**: the same emerson take run
+through today's engine to show the post-M7 depth pass left this whole
+song bit-for-bit unchanged. It reproduces the 2026-07-19 M7 wear-0.2
+emerson entry exactly.
+
+- Input: `renders/ke9-emerson-automation.mid`, md5
+  `b799d70c3fb8698d24cb4017afd13007` — the same CC87-automation file and
+  channels (2,3) as the M6/M7 emerson entries above.
+- Engine: post-M7 depth pass (`b0604f3`), `make test` 9242 checks green.
+  Two stages landed since the M7 wear entry — per-note **key depth** on
+  poly key pressure (0xA0), and the percussion trigger moved onto the 1'
+  contact with its 34 ms re-arm RC (`docs/constants.md` secs 7.1/8;
+  `docs/depth-evidence.md`). Both are inert here by construction: this
+  file carries **no 0xA0** (the render reports `0 depths`) so depth never
+  engages, and it plays **percussion off** (`render_midi` defaults
+  `-p 0`) where the trigger change moves nothing. The note sum, drive,
+  scanner and rotary stages are all untouched.
+- Settings identical to the 2026-07-19 M7 wear-0.2 emerson take, so the
+  only variable is the engine version: registration 888888888, vibrato
+  off, drive 0, rotary chorale (`-m 1`), wear 0.2, octave-fold, gain
+  0.030, 48 kHz. 10182 notes, 8 CCs (the CC87 flips), 0 depths, 0 folded,
+  0 out-of-compass.
+
+    ./build/render_midi -c 2,3 -R 888888888 -v 0 -D 0 -m 1 -w 0.2 -g 0.030 -f \
+        -o renders/ke9-depth-20260723-wear020-emerson.wav renders/ke9-emerson-automation.mid
+    # peak 0.738, FNV64 6e56f252d97c240c
+    #   (== the 2026-07-19 M7 wear-0.2 emerson entry, bit-for-bit)
+
+The signature matches `6e56f252d97c240c` from the M7 entry and recomputes
+bit-for-bit from the new WAV's `data` chunk — a whole-song confirmation
+of the `docs/depth-evidence.md` claim that nothing percussion-off moves,
+alongside the pinned exhibit and test signatures. The earlier emerson
+renders are left in place; this is a new dated file beside them.
+
+## 2026-07-23 — Bach Toccata & Fugue (BWV 565), Leslie, re-rendered on the post-M7 depth pass
+
+The second identity re-render on today's engine — a four-part
+arrangement rather than the two-manual ELP scream, so the whole-song
+check covers a denser sum and the octave-fold path (234 folded notes).
+It reproduces the 2026-07-19 M7 Leslie-clean entry bit-for-bit.
+
+- Input: `renders/Toccata-and-Fugue-Dm-leslie.mid`, md5
+  `0341038e41e6bac5f932e7e8334a183f` — the same file and channels
+  (0,1,2,3) as the M7 Leslie no-drive entry above.
+- Engine: post-M7 depth pass (`b0604f3`), `make test` 9242 green. Inert
+  here for the same two reasons as the ke9 re-render above: the file
+  carries **no 0xA0** (`0 depths`) and plays **percussion off**
+  (`render_midi` `-p 0`), so neither key depth nor the contact-driven
+  trigger engages (`docs/constants.md` secs 7.1/8; `docs/depth-evidence.md`).
+- Settings identical to the 2026-07-19 take, engine version the only
+  variable: registration 888888888, vibrato off, drive 0, rotary chorale
+  (`-m 1`), wear 0.2, octave-fold, gain 0.021, 48 kHz. 7588 notes, 10
+  CCs, 234 folded (the pedal/manual extremes reach past the 61-key
+  compass), 0 depths, 0 out-of-compass.
+
+    ./build/render_midi -c 0,1,2,3 -R 888888888 -v 0 -D 0 -m 1 -w 0.2 -g 0.021 -f \
+        -o renders/toccata-depth-20260723-leslie-nodrive.wav renders/Toccata-and-Fugue-Dm-leslie.mid
+    # peak 0.766, FNV64 e983aea2ca6ecaf2
+    #   (== the 2026-07-19 M7 Leslie no-drive entry, bit-for-bit)
+
+The signature matches `e983aea2ca6ecaf2` from that entry and recomputes
+bit-for-bit from the new WAV's `data` chunk. The earlier Leslie render is
+left in place; this is a new dated file beside it.
+
+## 2026-07-23 — full-engine automation: the depth pass, actually used
+
+The two re-renders above proved the post-M7 depth pass is *inert* on the
+old automation (no 0xA0, percussion off). These two are the opposite —
+the first renders that **exercise** the new engine: per-note key depth on
+poly key pressure (0xA0) and the contact-driven percussion trigger,
+alongside the whole console (percussion tablets, vibrato, drive, rotary
+speed/balance/width/drive, swell) driven from one automation track. So
+their signatures are new by design; they are listening demos, not
+cross-milestone A/Bs.
+
+- Tool: `renders/fullauto.py` (successor to `rotoauto.py`) — realizes a
+  timed automation *script* and, for a `depth` directive, scans the
+  parsed note windows and lays a shaped 0..127 press curve (pull / dip /
+  swell / smear) on the actual sustained notes it finds, on each note's
+  own channel. The scripts and injected MIDIs are kept beside the tool so
+  the takes reproduce; both renders are two-run FNV-identical.
+- Engine: post-M7 depth pass (`b0604f3`), `make test` 9242 green.
+- Both start from the **clean base** transcriptions (no prior CC87), so
+  the automation owns the whole console.
+
+Bach Toccata & Fugue — `Toccata-and-Fugue-Dm.mid`
+(md5 `3b852a14d155c8ca87c17baeb0aa0c84`), channels 0,1,2,3. Automation
+`renders/toccata-full.script.json` -> `renders/toccata-full-automation.mid`
+(md5 `2bd59e7eaf093985e6528b995ca7cd6d`): emerson rotary flips, percussion
+on the detached toccata figuration (2nd->3rd->slow), C3 chorus in the
+fugue, drive and rotary-amp swells at the two climaxes, a swell/width
+contour, and **five key-depth gestures** — a "pull" darkening the iconic
+opening, a "smear" contact-chop on the fugue pedal, a "dip" on the fugue
+climax, a "swell" building the closing pedal from thin to full, and a
+final "dip". 6464 depth events on 40 held notes.
+
+    ./build/render_midi -c 0,1,2,3 -R 888888888 -v 0 -D 0 -m 1 -w 0.2 -g 0.028 -f \
+        -o renders/toccata-fullengine-20260723.wav renders/toccata-full-automation.mid
+    # peak 0.767, FNV64 c92c194216228d37
+    #   applied: 7588 notes, 6464 depths, 1861 ccs, 1323 folded
+
+Karn Evil 9 — `karn_evil_9.mid`
+(md5 `7c08654a78168b89d0b58ef9847de303`), channels 2,3. Automation
+`renders/ke9-full.script.json` -> `renders/ke9-full-emerson-automation.mid`
+(md5 `7b251efe105e81df085da68cace553bd`): the logged emerson flips, drive
+up from the downbeat, C3/V3 chorus, percussion through the busy sections,
+balance/width/rotary-drive moves, and **five key-depth gestures** — a
+"pull", a "swell", two "dip"s, and the showcase: a "smear" over the 9 s
+held chord *with percussion live*, so each contact re-close on the 1'
+sensing line re-fires the envelope (the two new features interacting).
+2083 depth events on the held chords.
+
+    ./build/render_midi -c 2,3 -R 888888888 -v 0 -D 0 -m 1 -w 0.2 -g 0.042 -f \
+        -o renders/ke9-fullengine-20260723-emerson.wav renders/ke9-full-emerson-automation.mid
+    # peak 0.771, FNV64 07ba0d054583e048
+    #   applied: 10182 notes, 2083 depths, 1443 ccs, 0 folded
+
+Both gain-matched to ~0.77 peak against the earlier takes. astats vs the
+inert renders: RMS drops a touch (depth thinning removes upper drawbars —
+Toccata -22.0 -> -23.6 dB, KE9 -22.6 -> -24.8 dB) while the RMS-peak
+rises (drive and percussion transients punch harder). Spectrograms show
+the depth gestures directly: the closing pedal's harmonics build from the
+bottom up over ~6 s (the swell), and the KE9 held chord's upper harmonics
+are rhythmically gated ~6x (the smear crossing make points). The earlier
+renders are untouched; these are new dated files beside them.
+
+## 2026-07-23 — Deep Purple "Lazy": the Jon Lord voicing, full engine
+
+The natural home for a full-engine take: "Lazy" (Machine Head, 1972) is
+one long Hammond feature. Voiced from Jon Lord's documented setup rather
+than guessed — an **overdriven Hammond through a Marshall into a Leslie**
+[Wikipedia; thehighwaystar.com]; drawbars **888272773** for the singing
+intro/solo, pulled to **888000000** with percussion off for the riff (the
+"rhythmical technique"), and the Leslie held **slow for the "lovely
+initial swirl"** before switching fast [organforum.com; Jon Lord
+interviews]. The automation drives all of that live.
+
+- Input: `renders/LAZY.MID`, md5 `3597775a6f58385543cd7afb82aa9fb7` — a
+  labelled GEMAR (1997) sequence; the organ is Jon Lord's part split
+  across channels 0 (intro), 10 (intro double), 6 (accompaniment), 7
+  (solo). Rendered `-c 0,6,7,10`; drums/bass/guitar/vocals/harmonica
+  dropped. Structure: unaccompanied Hammond intro 0-78 s, riff/verse
+  78-198 s, organ solo 198-244 s, verses to 428 s, final held chord.
+- Tool: `renders/fullauto.py`, now with a **`drawbars`** directive
+  (CC70-78) so the registration moves live. Automation
+  `renders/lazy-full.script.json` -> `renders/lazy-full-automation.mid`
+  (md5 `bc7b57ad3c18b2cb65527ceb9470f34f`): the drawbar pulls above, a
+  chorale->tremolo Leslie following the intro swirl and the solo,
+  overdrive up to the ceiling in the solo, percussion on for the intro
+  and solo / off for the riff, C3 chorus, swell-pedal contour, and depth
+  gestures blooming the long intro notes (the 12 s / 8.9 s / 7.7 s
+  opening holds) and the 6.8 s final chord. 4464 depth events, 1964 ccs.
+
+    ./build/render_midi -c 0,6,7,10 -R 888272773 -v 0 -D 0 -m 1 -w 0.2 -g 0.080 -f \
+        -o renders/lazy-fullengine-20260723.wav renders/lazy-full-automation.mid
+    # peak 0.757, FNV64 d2c11c5c593820ea
+    #   applied: 5680 notes, 4464 depths, 1964 ccs, 171 folded (two runs identical)
+
+Gain 0.080 (higher than the 888888888 takes — Lazy's thinner registration
+runs a lower raw peak). Spectrograms: the intro blooms as the depth swell
+fills the harmonics in under a chorale-then-tremolo Leslie; at 198 s the
+drawbars snap to 888800000 and the solo lights the upper spectrum up with
+the drive at the ceiling. A brand-new song for the log — nothing prior to
+leave alone.
