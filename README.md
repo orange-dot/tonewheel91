@@ -38,7 +38,17 @@ moved the percussion-on baselines and nothing else: every
 percussion-off signature, the M7 wear identity anchor included,
 reproduces bit-for-bit.
 
-    make test      # table-driven checks (9242)
+A second instrument shares the repo and the kernels: **ep73**, a tine
+electric piano (`docs/piano-backlog.md`). It is a sibling core, not a
+framework — 73 struck voices of three clamped-free tine modes each, a
+per-voice asymmetric pickup, and velocity that scales loudness and timbre
+for the first time in this codebase. EP0 pins its constants
+(`docs/ep-constants.md`) and EP1 lands the voice bank offline
+(`docs/ep1-evidence.md`); dampers, the sustain pedal, and a live binary are
+EP2. No organ translation unit is shared or edited, and the organ's pinned
+signatures run untouched in the same test binary.
+
+    make test      # table-driven checks (9286)
     make exhibit   # renders the evidence WAVs into build/
     make viz       # renders the evidence PNGs into docs/viz/
     make           # also builds the live driver
@@ -65,7 +75,9 @@ reproduces bit-for-bit.
 
     src/     freestanding core (no OS, no libm, no allocation): generator,
              contacts, percussion, vibrato/chorus scanner, preamp drive,
-             rotary speaker, MIDI byte parser
+             rotary speaker, MIDI byte parser; and the ep73 struck-voice
+             bank, which includes the organ's header for the shared kernels
+             and is included by nothing in the organ
     driver/  hosted layer: WAV and PNG writers, offline exhibits, and
              render_midi (SMF in -> stereo WAV out, the live driver's
              deterministic twin for whole songs; renders logged in

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../src/tonewheel.h"
+#include "../src/epiano.h"
 
 static int fails, checks;
 static const double TAU_D = 6.283185307179586;
@@ -2484,6 +2485,324 @@ static void test_wear_knob(void) {
           rejoin_bad);
 }
 
+/* --- EP1: the ep73 struck-voice bank (ep-constants.md 2-6, 9) --- */
+
+/* The test's own copies of the pinned constants: an oracle in double
+ * precision, not a second reference to the implementation's tables. */
+static const double EPO_F_E1 = 41.203444614108747;                /* sec 2   */
+static const double EPO_RATIO[3] = { 1.0, 6.2669, 17.5475 };      /* sec 3   */
+static const double EPO_MODE_T60[3] = { 1.0, 0.18480, 0.05535 };  /* sec 4   */
+static const double EPO_BASE_W[3] = { 1.0, 0.55, 0.18 };          /* sec 5.2 */
+static const double EPO_CORNER[5] = { 1800.0, 2600.0, 3600.0, 5000.0, 7000.0 };
+static const double EPO_T60_E1 = 17.0, EPO_T60_RATIO = 0.980099;
+static const double EPO_ALPHA = 1.1;                              /* sec 6   */
+static const double EP_RATE = 48000.0;
+
+static int epo_zone(int midi) {
+    return midi <= 50 ? 0 : midi <= 60 ? 1 : midi <= 70 ? 2 : midi <= 84 ? 3 : 4;
+}
+
+static double epo_freq(int key) { return EPO_F_E1 * pow(2.0, key / 12.0); }
+
+static double epo_t60(int key, int mode) {
+    return EPO_T60_E1 * pow(EPO_T60_RATIO, key) * EPO_MODE_T60[mode];
+}
+
+static double epo_weight(int key, int mode, int velocity) {
+    double f1 = epo_freq(key), fm = f1 * EPO_RATIO[mode];
+    double c0 = EPO_CORNER[epo_zone(key + EP_NOTE_MIN)];
+    double fc2 = c0 * c0 * sqrt(velocity / 127.0);
+    return EPO_BASE_W[mode] * (fc2 + f1 * f1) / (fc2 + fm * fm);
+}
+
+/* Hann-windowed amplitude of the bin at f; ratios between bins read
+ * directly as harmonic ratios. */
+static double ep_bin(const float *x, int n, double f) {
+    double w = TAU_D * f / EP_RATE, sr = 0.0, si = 0.0, wsum = 0.0;
+    for (int i = 0; i < n; i++) {
+        double win = 0.5 - 0.5 * cos(TAU_D * i / (n - 1));
+        sr += x[i] * win * cos(w * i);
+        si -= x[i] * win * sin(w * i);
+        wsum += win;
+    }
+    return sqrt(sr * sr + si * si) / wsum;
+}
+
+static void test_ep_note_map(void) {
+    CHECK(ep_key_freq_hz(-1) == 0.0f && ep_key_freq_hz(EP_KEYS) == 0.0f,
+          "out-of-range key must return 0");
+    int bad = 0;
+    for (int k = 0; k < EP_KEYS; k++)
+        if (fabs(ep_key_freq_hz(k) / epo_freq(k) - 1.0) > 2e-6) bad++;
+    CHECK(bad == 0, "equal-temperament table off the oracle at %d keys", bad);
+
+    /* The compass endpoints and the tuning anchor, sec 2. */
+    CHECK(fabs(ep_key_freq_hz(0) - 41.2034) < 1e-3, "E1 must be 41.2034 Hz");
+    CHECK(fabs(ep_key_freq_hz(72) - 2637.02) < 1e-2, "E7 must be 2637.02 Hz");
+    CHECK(fabs(ep_key_freq_hz(69 - EP_NOTE_MIN) - 440.0) < 1e-3,
+          "MIDI 69 must land on A440");
+
+    /* Hammer-hardness zone boundaries, sec 5.2 [EP-SM 4-3]. */
+    CHECK(ep_zone(28) == 0 && ep_zone(50) == 0 && ep_zone(51) == 1, "zone 0/1 edge");
+    CHECK(ep_zone(60) == 1 && ep_zone(61) == 2 && ep_zone(70) == 2, "zone 1/2 edge");
+    CHECK(ep_zone(71) == 3 && ep_zone(84) == 3 && ep_zone(85) == 4, "zone 3/4 edge");
+
+    /* Out-of-compass notes are ignored and counted, as in the organ. */
+    ep_bank b;
+    ep_bank_init(&b, (float)EP_RATE);
+    ep_bank_strike(&b, EP_NOTE_MIN - 1, 100);
+    ep_bank_strike(&b, EP_NOTE_MAX + 1, 100);
+    double e = 0.0;
+    for (int i = 0; i < 480; i++) e += fabs(ep_bank_tick(&b));
+    CHECK(b.out_of_compass == 2 && e == 0.0,
+          "out-of-compass strikes must count (%u) and stay silent (%g)",
+          b.out_of_compass, e);
+}
+
+static void test_ep_modes(void) {
+    /* sec 3: the clamped-free cantilever eigenvalues, squared. */
+    double b1 = 1.8751041, b2 = 4.6940911, b3 = 7.8547574;
+    CHECK(fabs(EP_MODE_RATIO[1] - (b2 / b1) * (b2 / b1)) < 1e-3,
+          "mode 2 ratio must be the clamped-free value, got %g", (double)EP_MODE_RATIO[1]);
+    CHECK(fabs(EP_MODE_RATIO[2] - (b3 / b1) * (b3 / b1)) < 1e-3,
+          "mode 3 ratio must be the clamped-free value, got %g", (double)EP_MODE_RATIO[2]);
+
+    /* sec 3.1: a mode at or above 0.45 fs renders at gain zero — silence,
+     * not foldback — and its step is parked at 0. */
+    ep_bank b;
+    ep_bank_init(&b, (float)EP_RATE);
+    int gate_bad = 0, step_bad = 0;
+    for (int k = 0; k < EP_KEYS; k++)
+        for (int m = 0; m < EP_MODES; m++) {
+            double f = epo_freq(k) * EPO_RATIO[m];
+            float want = f < 0.45 * EP_RATE ? 1.0f : 0.0f;
+            if (b.gate[m][k] != want) gate_bad++;
+            if (want == 0.0f ? b.step[m][k] != 0.0f
+                             : fabs(b.step[m][k] - f / EP_RATE) > 1e-6) step_bad++;
+        }
+    CHECK(gate_bad == 0 && step_bad == 0,
+          "Nyquist gating wrong: %d gates, %d steps", gate_bad, step_bad);
+
+    CHECK(b.gate[2][87 - EP_NOTE_MIN] == 0.0f && b.gate[2][86 - EP_NOTE_MIN] == 1.0f,
+          "at 48 kHz mode 3 must silence from MIDI 87");
+    CHECK(b.gate[1][EP_KEYS - 1] == 1.0f,
+          "at 48 kHz mode 2 must survive the whole compass");
+
+    ep_bank_init(&b, 44100.0f);
+    CHECK(b.gate[2][86 - EP_NOTE_MIN] == 0.0f && b.gate[2][85 - EP_NOTE_MIN] == 1.0f,
+          "at 44.1 kHz mode 3 must silence from MIDI 86");
+
+    /* A muted mode must stay silent however hard it is struck. */
+    ep_bank_init(&b, (float)EP_RATE);
+    ep_bank_strike(&b, 100, 127);
+    CHECK(b.amp[2][72] == 0.0f, "a Nyquist-muted mode must take no energy");
+}
+
+static void test_ep_decay(void) {
+    CHECK(ep_t60_s(-1, 0) == 0.0f && ep_t60_s(0, EP_MODES) == 0.0f,
+          "out-of-range t60 must return 0");
+
+    /* The two sourced anchors, sec 4 [EP-P61]: 17 s at the bottom, and the
+     * patent's 3-5 s band at the top. */
+    CHECK(ep_t60_s(0, 0) == 17.0f, "E1 t60 must be the pinned 17 s exactly");
+    CHECK(ep_t60_s(72, 0) > 3.0f && ep_t60_s(72, 0) < 5.0f,
+          "E7 t60 must land in the patent's 3-5 s band, got %g",
+          (double)ep_t60_s(72, 0));
+
+    int bad = 0;
+    for (int k = 0; k < EP_KEYS; k++)
+        for (int m = 0; m < EP_MODES; m++)
+            if (fabs(ep_t60_s(k, m) / epo_t60(k, m) - 1.0) > 1e-5) bad++;
+    CHECK(bad == 0, "t60 table off the oracle at %d (key, mode) pairs", bad);
+
+    /* The rendered decay, not the table: strike the top note and time the
+     * -60 dB crossing of mode 1's amplitude state. */
+    ep_bank b;
+    ep_bank_init(&b, (float)EP_RATE);
+    ep_bank_strike(&b, 100, 127);
+    float a0 = b.amp[0][72];
+    long n = 0;
+    while (b.amp[0][72] > a0 * 1e-3f && n < 40L * (long)EP_RATE) {
+        ep_bank_tick_gated(&b);
+        n++;
+    }
+    double meas = n / EP_RATE;
+    CHECK(fabs(meas / ep_t60_s(72, 0) - 1.0) < 0.01,
+          "measured t60 %.3f s must match the pinned %.3f s", meas,
+          (double)ep_t60_s(72, 0));
+
+    /* sec 4.1: the epsilon snap must reach exact silence, so a decayed
+     * voice never enters denormal territory. */
+    while (b.live_n > 0 && n < 400L * (long)EP_RATE) {
+        ep_bank_tick_gated(&b);
+        n++;
+    }
+    CHECK(b.amp[0][72] == 0.0f && b.amp[1][72] == 0.0f && b.amp[2][72] == 0.0f,
+          "a decayed voice must snap to exact zero");
+    CHECK(ep_bank_tick_gated(&b) == 0.0f && ep_bank_tick(&b) == 0.0f,
+          "a silent bank must render exact zero in both layouts");
+}
+
+static void test_ep_strike(void) {
+    int bad = 0;
+    for (int k = 0; k < EP_KEYS; k += 7)
+        for (int m = 0; m < EP_MODES; m++)
+            for (int v = 1; v <= 127; v += 9)
+                if (fabs(ep_mode_weight(k, m, v) / epo_weight(k, m, v) - 1.0) > 1e-5)
+                    bad++;
+    CHECK(bad == 0, "mode weight off the oracle in %d cases", bad);
+
+    /* sec 5.2: the roll-off is normalised at mode 1, so velocity moves
+     * loudness and timbre through separate laws. */
+    int norm_bad = 0;
+    for (int k = 0; k < EP_KEYS; k++)
+        for (int v = 1; v <= 127; v += 13)
+            if (ep_mode_weight(k, 0, v) != EP_BASE_W[0]) norm_bad++;
+    CHECK(norm_bad == 0, "mode 1 weight must be exactly EP_BASE_W[0], %d off", norm_bad);
+
+    /* A harder blow may only ever brighten. */
+    int mono_bad = 0;
+    for (int k = 0; k < EP_KEYS; k += 5)
+        for (int m = 1; m < EP_MODES; m++)
+            for (int v = 2; v <= 127; v++)
+                if (ep_mode_weight(k, m, v) < ep_mode_weight(k, m, v - 1)) mono_bad++;
+    CHECK(mono_bad == 0, "mode weight must rise with velocity, %d inversions", mono_bad);
+
+    CHECK(ep_mode_weight(-1, 0, 100) == 0.0f && ep_mode_weight(0, EP_MODES, 100) == 0.0f,
+          "hostile key/mode must return 0");
+    CHECK(ep_mode_weight(30, 1, 0) == ep_mode_weight(30, 1, 1) &&
+          ep_mode_weight(30, 1, 999) == ep_mode_weight(30, 1, 127),
+          "hostile velocity must clamp into 1..127");
+
+    /* sec 5.1: gamma = 1, so mode 1's struck amplitude is linear in
+     * velocity — the level law, isolated by mode 1's flat weight. */
+    ep_bank b;
+    ep_bank_init(&b, (float)EP_RATE);
+    ep_bank_strike(&b, 64, 40);
+    float a40 = b.amp[0][36];
+    ep_bank_silence(&b);
+    ep_bank_strike(&b, 64, 80);
+    float a80 = b.amp[0][36];
+    CHECK(fabs((double)a80 / a40 - 2.0) < 1e-5,
+          "doubling velocity must double mode 1's amplitude, got %g",
+          (double)a80 / a40);
+
+    /* sec 5.3: a mode at rest has its phase reset, a ringing one keeps it. */
+    ep_bank_silence(&b);
+    for (int i = 0; i < 100; i++) ep_bank_tick(&b);
+    ep_bank_strike(&b, 64, 100);
+    CHECK(b.phase[0][36] == 0.0f, "a strike on a silent mode must reset its phase");
+    for (int i = 0; i < 100; i++) ep_bank_tick(&b);
+    float held = b.phase[0][36];
+    ep_bank_strike(&b, 64, 100);
+    CHECK(b.phase[0][36] == held, "a strike on a ringing mode must keep its phase");
+}
+
+static void test_ep_pickup(void) {
+    CHECK(ep_pickup(0.0f, 0.0f) == 0.0f, "the pickup must pass zero at zero");
+
+    /* sec 6: monotone for every alpha — the property the organ's small
+     * alpha made moot and this line cannot assume. */
+    int mono_bad = 0;
+    float prev = ep_pickup(-4.0f, 0.0f);
+    for (int i = -3999; i <= 4000; i++) {
+        float y = ep_pickup(i * 0.001f, 0.0f);
+        if (y <= prev) mono_bad++;
+        prev = y;
+    }
+    CHECK(mono_bad == 0, "the pickup kernel must be monotone, %d inversions", mono_bad);
+
+    /* The closed form of section 6 against a rendered sine. */
+    static float buf[8192];
+    struct { double a; } cases[] = { { 1.0 }, { 0.5 }, { 0.125 } };
+    double f = 500.0;
+    for (int c = 0; c < 3; c++) {
+        double a = cases[c].a;
+        for (int i = 0; i < 8192; i++)
+            buf[i] = ep_pickup((float)(a * sin(TAU_D * f * i / EP_RATE)),
+                               (float)(a * a * 0.5));
+        double h1 = ep_bin(buf, 8192, f);
+        double h2 = ep_bin(buf, 8192, 2 * f);
+        double h3 = ep_bin(buf, 8192, 3 * f);
+        double aa = EPO_ALPHA * EPO_ALPHA * a * a;
+        double w2 = (EPO_ALPHA * a / 4.0) / (1.0 + aa / 8.0);
+        double w3 = (aa / 24.0) / (1.0 + aa / 8.0);
+        CHECK(fabs(20 * log10(h2 / h1) - 20 * log10(w2)) < 0.1,
+              "H2/H1 at A=%g: %.2f dB vs %.2f dB predicted", a,
+              20 * log10(h2 / h1), 20 * log10(w2));
+        CHECK(fabs(20 * log10(h3 / h1) - 20 * log10(w3)) < 0.1,
+              "H3/H1 at A=%g: %.2f dB vs %.2f dB predicted", a,
+              20 * log10(h3 / h1), 20 * log10(w3));
+    }
+
+    /* The mean-square term is what keeps a decaying voice from dragging a
+     * DC thump behind it: the bus must stay centred while a note dies. */
+    ep_bank b;
+    ep_bank_init(&b, (float)EP_RATE);
+    ep_bank_strike(&b, 64, 127);
+    double sum = 0.0, sq = 0.0;
+    long n = (long)EP_RATE;
+    for (long i = 0; i < n; i++) {
+        double x = ep_bank_tick(&b);
+        sum += x;
+        sq += x * x;
+    }
+    double mean = sum / n, rms = sqrt(sq / n);
+    CHECK(fabs(mean) < 0.02 * rms,
+          "pickup DC residual %.5f must stay under 2%% of rms %.5f", mean, rms);
+}
+
+static void test_ep_bank(void) {
+    /* sec 9: the two layouts differ in cost, never in output — which is
+     * what lets decision D4 rest on measurement alone. */
+    ep_bank adv, gat;
+    ep_bank_init(&adv, (float)EP_RATE);
+    ep_bank_init(&gat, (float)EP_RATE);
+    uint64_t ha = 0, hg = 0;
+    int diff = 0;
+    long n = (long)EP_RATE;
+    for (long i = 0; i < n; i++) {
+        if (i % 4800 == 0) {
+            int s = (int)(i / 4800);
+            ep_bank_strike(&adv, 34 + 6 * s, 15 + 11 * s);
+            ep_bank_strike(&gat, 34 + 6 * s, 15 + 11 * s);
+        }
+        float xa = ep_bank_tick(&adv), xg = ep_bank_tick_gated(&gat);
+        if (memcmp(&xa, &xg, sizeof xa) != 0) diff++;
+        ha = tw_fnv1a64(&xa, sizeof xa, ha);
+        hg = tw_fnv1a64(&xg, sizeof xg, hg);
+    }
+    CHECK(diff == 0 && ha == hg,
+          "the two bank layouts must be bit-identical: %d samples differ", diff);
+
+    /* Same input, same binary, same bits. */
+    ep_bank_init(&adv, (float)EP_RATE);
+    uint64_t h2 = 0;
+    for (long i = 0; i < n; i++) {
+        if (i % 4800 == 0) {
+            int s = (int)(i / 4800);
+            ep_bank_strike(&adv, 34 + 6 * s, 15 + 11 * s);
+        }
+        float x = ep_bank_tick(&adv);
+        h2 = tw_fnv1a64(&x, sizeof x, h2);
+    }
+    CHECK(h2 == ha, "two runs of one script must render identical bits");
+
+    /* Panic to exact silence, phases included. */
+    ep_bank_silence(&adv);
+    int live = 0;
+    for (int m = 0; m < EP_MODES; m++)
+        for (int k = 0; k < EP_KEYS; k++)
+            if (adv.amp[m][k] != 0.0f || adv.phase[m][k] != 0.0f) live++;
+    CHECK(live == 0 && adv.live_n == 0, "silence must clear every voice, %d left", live);
+
+    /* A hostile sample rate falls back to the default rather than dividing
+     * by nonsense — the tw_generator_init contract. */
+    ep_bank_init(&adv, 0.0f);
+    CHECK(fabs(adv.step[0][36] - epo_freq(36) / EP_RATE) < 1e-6,
+          "a hostile sample rate must fall back to 48 kHz");
+}
+
 int main(void) {
     test_frequency_table();
     test_foldback();
@@ -2523,6 +2842,12 @@ int main(void) {
     test_wear_leakage();
     test_wear_hum();
     test_wear_knob();
+    test_ep_note_map();
+    test_ep_modes();
+    test_ep_decay();
+    test_ep_strike();
+    test_ep_pickup();
+    test_ep_bank();
     printf("%d checks, %d failures\n", checks, fails);
     return fails ? 1 : 0;
 }
