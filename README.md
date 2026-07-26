@@ -40,6 +40,7 @@ reproduces bit-for-bit.
 
     make test      # table-driven checks (9242)
     make exhibit   # renders the evidence WAVs into build/
+    make viz       # renders the evidence PNGs into docs/viz/
     make           # also builds the live driver
 
     ./build/tw91 -d hw:CARD=AG06AG03 -e 4      # demo chord on the rig
@@ -65,11 +66,11 @@ reproduces bit-for-bit.
     src/     freestanding core (no OS, no libm, no allocation): generator,
              contacts, percussion, vibrato/chorus scanner, preamp drive,
              rotary speaker, MIDI byte parser
-    driver/  hosted layer: WAV writer, offline exhibits, and render_midi
-             (SMF in -> stereo WAV out, the live driver's deterministic
-             twin for whole songs; renders logged in docs/renders.md);
-             the Linux ALSA live driver (the one permitted dependency:
-             libasound)
+    driver/  hosted layer: WAV and PNG writers, offline exhibits, and
+             render_midi (SMF in -> stereo WAV out, the live driver's
+             deterministic twin for whole songs; renders logged in
+             docs/renders.md); the Linux ALSA live driver (the one
+             permitted dependency: libasound)
     test/    assert-based tests; two-run FNV-64 render-signature determinism
     docs/    design notes, pinned constants, per-milestone evidence
 

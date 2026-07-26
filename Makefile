@@ -8,7 +8,7 @@ CORE_CFLAGS := $(CFLAGS) -ffreestanding
 
 CORE_OBJS := $(BUILD)/generator.o $(BUILD)/midi.o $(BUILD)/organ.o $(BUILD)/scanner.o $(BUILD)/drive.o $(BUILD)/rotary.o
 
-all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/render_midi $(BUILD)/tw91
+all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/exhibit_viz $(BUILD)/render_midi $(BUILD)/tw91
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -17,6 +17,9 @@ $(BUILD)/%.o: src/%.c src/tonewheel.h | $(BUILD)
 	$(CC) $(CORE_CFLAGS) -c $< -o $@
 
 $(BUILD)/wav.o: driver/wav.c driver/wav.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/viz.o: driver/viz.c driver/viz.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/test: test/test.c $(CORE_OBJS) src/tonewheel.h | $(BUILD)
@@ -51,6 +54,9 @@ $(BUILD)/exhibit_depth: driver/exhibit_depth.c $(BUILD)/wav.o $(CORE_OBJS) src/t
 
 $(BUILD)/exhibit_warmth: driver/exhibit_warmth.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/exhibit_warmth.c $(BUILD)/wav.o $(CORE_OBJS) -o $@ -lm
+
+$(BUILD)/exhibit_viz: driver/exhibit_viz.c $(BUILD)/viz.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+	$(CC) $(CFLAGS) driver/exhibit_viz.c $(BUILD)/viz.o $(CORE_OBJS) -o $@ -lm
 
 $(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/render_midi.c $(BUILD)/wav.o $(CORE_OBJS) -o $@
@@ -102,7 +108,13 @@ warmth: $(BUILD)/exhibit_warmth
 	@echo
 	./$(BUILD)/exhibit_warmth spice-onset $(BUILD)/spice/onset_240_0.5.txt 240 0.5
 
+# Engine state as pictures (docs/viz-evidence.md). The PNGs are checked-in
+# evidence, so they land in docs/viz/, not build/.
+viz: $(BUILD)/exhibit_viz
+	mkdir -p docs/viz
+	./$(BUILD)/exhibit_viz
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test exhibit warmth warmth-ref ao28-ref clean
+.PHONY: all test exhibit warmth warmth-ref ao28-ref viz clean
