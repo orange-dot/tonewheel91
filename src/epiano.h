@@ -22,9 +22,21 @@ enum {
 extern const float EP_MODE_RATIO[EP_MODES];
 extern const float EP_MODE_T60[EP_MODES];
 
-/* Strike weights before the contact roll-off, and the roll-off corner per
- * hammer-hardness zone at velocity 127 (sec 5.2). */
+/* Contact-transient level and decay per hammer-hardness zone (sec 5.5). */
+extern const float EP_HAMMER_LEVEL[EP_ZONES];
+extern const float EP_HAMMER_MS[EP_ZONES];
+extern const float EP_HAMMER_HZ[EP_ZONES];
+
+/* The pickup curve's strength at the reference note, and how fast it grows
+ * toward the bass (sec 6.1). */
+extern const float EP_PICKUP_DRIVE_REF;
+extern const float EP_PICKUP_SLOPE;
+extern const float EP_PICKUP_OFFSET;
+
+/* The by-ear per-mode trim, the contact time per hammer-hardness zone, and
+ * the roll-off corner it implies at velocity 127 (sec 5.2). */
 extern const float EP_BASE_W[EP_MODES];
+extern const float EP_CONTACT_MS[EP_ZONES];
 extern const float EP_CORNER_HZ[EP_ZONES];
 
 /* Fundamental of key 0..72 at the pinned equal temperament, A4 = 440
@@ -44,6 +56,12 @@ extern const float EP_CORNER_HZ[EP_ZONES];
  * Out-of-range key returns 0. */
 [[nodiscard]] float ep_damp_t60_s(int key);
 
+/* How strongly a blow at the striking line excites (key, mode), relative to
+ * mode 1 (sec 5.2): the clamped-free mode shape at the strike point, times
+ * the shape at the tip the pickup reads. Out-of-range arguments return 0;
+ * mode 0 is 1 by construction. */
+[[nodiscard]] float ep_mode_shape(int key, int mode);
+
 /* The velocity-to-spectrum weight of (key, mode) at a velocity 1..127
  * (sec 5.2), normalised so mode 0 is always EP_BASE_W[0] — velocity moves
  * loudness through sec 5.1 and timbre through here, and neither leaks into
@@ -51,30 +69,24 @@ extern const float EP_CORNER_HZ[EP_ZONES];
  * This is the function the bank strikes with, not a restatement of it. */
 [[nodiscard]] float ep_mode_weight(int key, int mode, int velocity);
 
-/* Pickup nonlinearity, sec 6: the cubic series of (1 - exp(-alpha x))/alpha
- * at alpha = 1.1, monotone for every alpha. One pickup per tine, so this
- * runs per voice before summation — harmonic distortion, never IMD.
- * mean_sq is the mean of x^2 over a period, which the caller has for free
- * as half the sum of the squared modal amplitudes; subtracting it is what
- * keeps a decaying voice from dragging a DC thump behind it. */
-static inline float ep_pickup(float x, float mean_sq) {
-    float x2 = x * x;
-    return x - 0.55f * (x2 - mean_sq) + (1.21f / 6.0f) * x2 * x;
-}
+/* How hard a tine drives its own pickup, per key (sec 6.1): the swing it
+ * makes against a gap that is set the same all the way up the instrument.
+ * Swing for a given blow goes as 1/f, so the bass reaches the saturating
+ * part of the field at a far lower dynamic than the treble does.
+ * Out-of-range key returns 0. */
+[[nodiscard]] float ep_pickup_drive(int key);
 
-/* The restrike law, decision D5: what a hammer blow does to a tine that is
- * already ringing. Both axes are audible and idiomatic on fast repeated
- * notes, and neither has an obvious single answer, so EP2 renders the four
- * combinations as an A/B and the loser gets deleted. The defaults are the
- * provisional law EP1 ran, so every EP1 render stays pinned. */
-enum {
-    EP_AMP_REPLACE = 0, /* the blow sets the amplitude   */
-    EP_AMP_ADD,         /* the blow adds to what is there */
-};
-enum {
-    EP_PHASE_CONTINUE = 0, /* the tine keeps moving through the blow */
-    EP_PHASE_RESET,        /* the blow restarts it                   */
-};
+/* Pickup nonlinearity, sec 6: the tine sitting off-centre in a field that
+ * saturates. One pickup per tine, so this runs per voice before summation
+ * — harmonic distortion, never IMD.
+ *
+ * `g` is the drive above, `x0` the off-centre offset, and `ref` is
+ * tw_sat(x0), which the bank precomputes so the curve passes through zero.
+ * Bounded and monotone by construction, because tw_sat is both and the
+ * input map is affine. */
+static inline float ep_pickup(float x, float g, float x0, float ref) {
+    return tw_sat(g * x + x0) - ref;
+}
 
 /* The struck-voice bank: 73 keys x 3 modes, fixed state, no allocator and
  * no voice stealing — the resonators exist physically and their state is
@@ -89,7 +101,31 @@ typedef struct {
     float gate[EP_MODES][EP_KEYS];  /* 1 or 0: the Nyquist rule, sec 3.1 */
     float ceiling[EP_MODES][EP_KEYS]; /* the hardest single blow, sec 5.4 */
     float f1[EP_KEYS];              /* fundamentals in Hz                */
-    uint8_t amp_law, phase_law;     /* D5; write via ep_bank_set_restrike */
+    float pk_g[EP_KEYS], pk_x0[EP_KEYS], pk_ref[EP_KEYS]; /* sec 6.1     */
+    float dc_lp, dc_c;              /* coupling-cap highpass, sec 6.2     */
+    /* condition, sec 15: the per-note deviations behind one knob. Every
+     * one is exactly neutral at condition 0, so the idealized instrument
+     * is reproduced bit for bit. */
+    float cond;
+    float trim[EP_MODES][EP_KEYS];  /* per-note voicing, exactly 1 at 0  */
+    /* sec 16: the horizontal polarisation. The tine is a round wire and
+     * vibrates in two planes; the design suppresses the one the hammer
+     * does not drive, and real instruments keep a little of it anyway.
+     * Exactly absent at condition 0. */
+    float h_phase[EP_KEYS], h_step[EP_KEYS], h_amp[EP_KEYS];
+    float h_depth[EP_KEYS];
+    float floor_gain, hum_gain;     /* exactly 0 at condition 0          */
+    float hum_phase, hum_step;
+    uint64_t floor_rng;
+    /* contact transient, sec 5.5: a short shaped burst per voice. The
+     * seed is reset from the note and the strike ordinal at every blow,
+     * so the two tick layouts cannot drift apart even though only one of
+     * them advances a silent voice. */
+    float hn_amp[EP_KEYS], hn_dec[EP_KEYS];
+    float hn_lp[EP_KEYS], hn_c[EP_KEYS];
+    uint64_t hn_rng[EP_KEYS];
+    uint32_t strikes;
+    float rate;
     /* active-gated bookkeeping (sec 9): keys with any live mode, kept
      * ascending so both tick layouts sum in the same order. */
     uint8_t live[EP_KEYS];
@@ -100,15 +136,24 @@ typedef struct {
 
 void ep_bank_init(ep_bank *b, float sample_rate_hz);
 
+/* The shipped condition, nonzero because tolerance effects exist on a
+ * factory-new instrument (sec 15, the organ's own wear doctrine). */
+extern const float EP_CONDITION_DEFAULT;
+
+/* The one condition knob, 0..1 (sec 15). Rebuilds every per-note deviation
+ * from fixed-seed draws: tuning spread, clang-ratio spread, voicing
+ * spread, pickup-distance spread, and the noise and hum floors. 0 restores
+ * the idealized instrument exactly, even mid-note, so every pre-EP7 render
+ * stays pinned. Hostile values sanitize. Phase and amplitude state are
+ * untouched. */
+void ep_bank_set_condition(ep_bank *b, float v);
+
 /* A note-on. Notes outside 28..100 are ignored and counted; velocity
  * clamps to 1..127. Velocity scales loudness (sec 5.1) and timbre
  * (sec 5.2) — the first time in this codebase. A mode standing at exactly
- * zero has its phase reset, a ringing one keeps it (sec 5.3); the restrike
- * law itself is decision D5 and closes at EP2. */
+ * zero has its phase reset; a ringing one keeps its phase and the blow
+ * adds to it, bounded by the hardest single blow (sec 5.3, 5.4). */
 void ep_bank_strike(ep_bank *b, int midi_note, int velocity);
-
-/* The restrike law, D5. Hostile values clamp to the defaults. */
-void ep_bank_set_restrike(ep_bank *b, int amp_law, int phase_law);
 
 /* Damper on and off for one note (sec 8). A strike lifts the damper by
  * itself — the hammer does it through the bridle strap — so ep_bank_damp
@@ -132,6 +177,73 @@ float ep_bank_tick(ep_bank *b);
  * stays as the reference the identity test asserts against. */
 float ep_bank_tick_gated(ep_bank *b);
 
+/* --- tremolo: one LFO and a gain law (sec 12) --- */
+
+/* Two variants behind one control, as the backlog asks: the mono amplitude
+ * wobble, and the stereo opposing pan of the cabinet-equipped instrument.
+ * Stereo begins here; everything before it is mono. */
+enum {
+    EP_TREM_AM = 0, /* both channels together      */
+    EP_TREM_PAN,    /* channels in opposition      */
+};
+
+typedef struct {
+    float phase, step; /* [0, 1) turns                                   */
+    float depth;       /* 0 = bit-exact mono bypass; write via the setter */
+    int mode;
+} ep_tremolo;
+
+void ep_tremolo_init(ep_tremolo *t, float sample_rate_hz);
+
+/* Rate in Hz, clamped to the sec 12 range; hostile values sanitize. */
+void ep_tremolo_set_rate(ep_tremolo *t, float sample_rate_hz, float hz);
+
+/* Depth 0..1. Exactly 0 makes tick return { x, x } bit-identically, so
+ * every pre-EP4 render stays pinned (the scanner-OFF discipline). */
+void ep_tremolo_set_depth(ep_tremolo *t, float d);
+
+/* EP_TREM_*; hostile ints clamp. */
+void ep_tremolo_set_mode(ep_tremolo *t, int mode);
+
+/* One control covering both variants, the way the organ's CC84 covers off
+ * and six vibrato positions: 0 is off, 1..63 is the mono wobble with
+ * rising depth, 64..127 is the stereo pan with rising depth (sec 10.1). */
+void ep_tremolo_set_cc(ep_tremolo *t, int value);
+
+tw_stereo ep_tremolo_tick(ep_tremolo *t, float x);
+
+/* --- drive: the preamp stage (sec 13) --- */
+
+/* The EP feeds tw_drive at twice its bus level, because tw_drive's internal
+ * reference is the organ's and this instrument runs lower. Two is chosen
+ * over any nearer number because it is a power of two: the scale in and
+ * out is then exact in f32, so drive = 0 stays a bit-identical bypass. */
+extern const float EP_DRIVE_SCALE;
+
+/* --- cabinet: the loudspeaker's bandwidth (sec 14) --- */
+
+/* A box and a cone, and nothing else. The rolloffs are what any
+ * loudspeaker imposes and the model had none; the early-reflection set the
+ * backlog also names is deliberately not here — see sec 14 for why. */
+extern const float EP_CAB_LOW_HZ;
+extern const float EP_CAB_HIGH_HZ;
+
+typedef struct {
+    float lp1[2], lp2[2]; /* cascaded one-poles: the cone's top end     */
+    float hp[2];          /* the box's bottom end                       */
+    float c_hi, c_lo;     /* per-rate coefficients, computed at init    */
+    float mix;            /* 0 = bit-exact bypass; write via the setter */
+} ep_cabinet;
+
+void ep_cabinet_init(ep_cabinet *c, float sample_rate_hz);
+
+/* 0..1, where 0 is a bit-exact bypass and 1 is the modelled speaker.
+ * Between them it is a blend, which is what a "how much box" knob is.
+ * Hostile values sanitize. */
+void ep_cabinet_set(ep_cabinet *c, float v);
+
+tw_stereo ep_cabinet_tick(ep_cabinet *c, tw_stereo x);
+
 /* --- piano: keys, dampers and the sustain pedal over the bank --- */
 
 /* A damper is off when the key is held or the pedal is down, and on
@@ -140,6 +252,9 @@ float ep_bank_tick_gated(ep_bank *b);
  * go of the pedal while keys are still held. */
 typedef struct {
     ep_bank bank;
+    tw_drive drive;
+    ep_tremolo trem;
+    ep_cabinet cab;
     bool held[EP_KEYS];
     bool sustain;
     uint32_t pressure; /* poly key pressure: parsed, ignored, counted */
@@ -163,6 +278,28 @@ void ep_piano_key_pressure(ep_piano *p, int midi_note, int value);
  * instrument silences in the damper tau rather than by a hard mute. */
 void ep_piano_panic(ep_piano *p);
 
+/* The mono chain: bank -> drive. At drive 0 this is bit-identical to the
+ * pre-EP5 chain, so every earlier render stays pinned. */
 float ep_piano_tick(ep_piano *p);
+
+/* The mono chain, then the tremolo, then the cabinet. With both of those
+ * at zero — the defaults — this duplicates ep_piano_tick onto both
+ * channels bit-identically. */
+tw_stereo ep_piano_tick_stereo(ep_piano *p);
+
+/* CC91, sec 10.1. */
+void ep_piano_set_tremolo(ep_piano *p, int cc_value);
+
+/* The drive knob, 0..1 (sec 13). 0 is an exact bypass: the whole
+ * instrument renders bit-identically to its pre-EP5 self. CC85, the same
+ * number the organ uses, so one controller drives both. */
+void ep_piano_set_drive(ep_piano *p, float v);
+
+/* CC92, sec 10.1. 0 is bypass. */
+void ep_piano_set_cabinet(ep_piano *p, float v);
+
+/* CC93, sec 10.1 and 15. The instrument initialises to
+ * EP_CONDITION_DEFAULT, not to 0. */
+void ep_piano_set_condition(ep_piano *p, float v);
 
 #endif

@@ -13,7 +13,7 @@ CORE_OBJS := $(BUILD)/generator.o $(BUILD)/midi.o $(BUILD)/organ.o $(BUILD)/scan
 # shared kernels. No organ object depends on it.
 EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
-all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/exhibit_viz $(BUILD)/exhibit_ep_voice $(BUILD)/exhibit_ep_restrike $(BUILD)/render_midi $(BUILD)/tw91 $(BUILD)/ep73
+all: $(BUILD)/test $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/exhibit_viz $(BUILD)/exhibit_ep_voice $(BUILD)/render_midi $(BUILD)/tw91 $(BUILD)/ep73
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -69,9 +69,6 @@ $(BUILD)/exhibit_viz: driver/exhibit_viz.c $(BUILD)/viz.o $(CORE_OBJS) src/tonew
 $(BUILD)/exhibit_ep_voice: driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) src/epiano.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) -o $@ -lm
 
-$(BUILD)/exhibit_ep_restrike: driver/exhibit_ep_restrike.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) src/epiano.h src/tonewheel.h | $(BUILD)
-	$(CC) $(CFLAGS) driver/exhibit_ep_restrike.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) -o $@ -lm
-
 $(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) src/tonewheel.h src/epiano.h | $(BUILD)
 	$(CC) $(CFLAGS) driver/render_midi.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) -o $@
 
@@ -84,7 +81,7 @@ $(BUILD)/ep73: driver/ep73.c $(EP_OBJS) $(CORE_OBJS) src/epiano.h src/tonewheel.
 test: $(BUILD)/test
 	./$(BUILD)/test
 
-exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_ep_voice $(BUILD)/exhibit_ep_restrike
+exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_ep_voice
 	./$(BUILD)/exhibit_phase
 	./$(BUILD)/exhibit_contacts
 	./$(BUILD)/exhibit_taper
@@ -95,7 +92,6 @@ exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper
 	./$(BUILD)/exhibit_wear
 	./$(BUILD)/exhibit_depth
 	./$(BUILD)/exhibit_ep_voice
-	./$(BUILD)/exhibit_ep_restrike
 
 # Dev-side warmth referee (docs/warmth-evidence.md). ngspice is never a
 # build dependency: warmth-ref is run by hand when recalibrating, and

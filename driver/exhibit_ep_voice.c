@@ -25,7 +25,7 @@
 #define RATE       48000
 #define SPEC_N     2048            /* harmonic window, 42.7 ms          */
 #define ENV_N      16384           /* decay window, 341 ms              */
-#define NOTE_MAX   (10 * RATE)
+#define NOTE_MAX   (13 * RATE)
 #define LADDER_MAX (11 * RATE)
 
 static const double TAU = 6.283185307179586;
@@ -96,9 +96,10 @@ static int exhibit_velocity(void) {
         /* Pinned prediction, ep-constants.md sections 5 and 6. The
          * fundamental carries the cubic term's own contribution, which is
          * why the ratios are not simply alpha*A/4. */
-        double a = (double)v / 127.0 * ep_mode_weight(key, 0, v);
-        double aa = 1.21 * a * a;
-        double p_h2 = (1.1 * a / 4.0) / (1.0 + aa / 8.0);
+        double alpha = ep_pickup_drive(key); /* per register since EP3 */
+        double a = pow((double)v / 127.0, 1.042) * ep_mode_weight(key, 0, v);
+        double aa = alpha * alpha * a * a;
+        double p_h2 = (alpha * a / 4.0) / (1.0 + aa / 8.0);
         double p_h3 = (aa / 24.0) / (1.0 + aa / 8.0);
         double p_cl = ep_mode_weight(key, 1, v) / ep_mode_weight(key, 0, v);
 
@@ -155,14 +156,18 @@ static int exhibit_velocity(void) {
 
 /* t60 from the rendered f1 band, measured between two windows placed late
  * enough that the pickup's own level-dependent boost of the fundamental is
- * spent. */
+ * spent. The start was a t60/8 at EP1 and had to move to t60/4 at EP3: the
+ * pickup curve is per register now (ep-constants.md sec 6.1) and runs about
+ * three times stronger in the bass, so its boost — which goes as alpha
+ * squared — takes proportionally longer to leave the window. Measuring the
+ * decay of a nonlinear stage means waiting for the nonlinearity. */
 static double measured_t60(int midi, double *pinned_out) {
     int key = midi - EP_NOTE_MIN;
     double f1 = ep_key_freq_hz(key);
     double pinned = ep_t60_s(key, 0);
     *pinned_out = pinned;
 
-    long start = (long)(pinned / 8.0 * RATE);
+    long start = (long)(pinned / 4.0 * RATE);
     long span = (long)(pinned / 3.0 * RATE);
     long total = start + span + ENV_N;
     if (total > NOTE_MAX) total = NOTE_MAX;

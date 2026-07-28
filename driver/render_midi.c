@@ -150,6 +150,10 @@ static void apply_msg_ep(ep_piano *p, uint8_t status, uint8_t d1, uint8_t d2,
     case 0xB0:
         stats.ccs++;
         if (d1 == 64) ep_piano_set_sustain(p, d2 >= 64);
+        else if (d1 == 85) ep_piano_set_drive(p, (float)d2 / 127.0f);
+        else if (d1 == 91) ep_piano_set_tremolo(p, d2);
+        else if (d1 == 92) ep_piano_set_cabinet(p, (float)d2 / 127.0f);
+        else if (d1 == 93) ep_piano_set_condition(p, (float)d2 / 127.0f);
         else if (d1 == 120 || d1 == 123) ep_piano_panic(p);
         else stats.ccs--;
         break;
@@ -166,6 +170,8 @@ static void usage(const char *argv0) {
             "  -R digits  registration, nine digits (default 888000000)\n"
             "  -v mode  vibrato 0..6 = off,V1..V3,C1..C3 (default 0)\n"
             "  -D drive drive knob 0..1 (default 0)\n"
+            "  -C cab   ep73 cabinet 0..1 (default 0 = bypass)\n"
+            "  -N cond  ep73 condition 0..1 (default: the shipped value)\n"
             "  -m mode  rotary 0..3 = bypass,chorale,tremolo,brake (default 0)\n"
             "  -p 0|1   percussion on (2nd/fast/normal; default 0)\n"
             "  -f       octave-fold out-of-compass notes into 36..96\n"
@@ -180,18 +186,22 @@ static void usage(const char *argv0) {
 typedef struct {
     const uint8_t *reg;
     int vib, perc, rot;
-    float drive, gain, wear;
+    float drive, gain, wear, cab, cond;
     bool fold, ep;
     float rate;
 } settings_t;
 
-/* The ep73 twin of render(). Mono in, written to both channels, so the
- * buffer, the WAV and the two-run FNV contract are the organ's unchanged. */
+/* The ep73 twin of render(). Stereo from the tremolo on; with it off the
+ * two channels are identical, so the buffer, the WAV and the two-run FNV
+ * contract are the organ's unchanged. */
 static double render_ep(const ev_t *ev, size_t nev, const settings_t *s,
                         float *buf, int64_t frames, const int64_t *ev_frame,
                         uint32_t *out_of_compass) {
     ep_piano p;
     ep_piano_init(&p, s->rate);
+    ep_piano_set_drive(&p, s->drive);  /* -D, the same flag the organ uses */
+    ep_piano_set_cabinet(&p, s->cab);  /* -C, ep73 only                    */
+    ep_piano_set_condition(&p, s->cond); /* -N, ep73 only                  */
     memset(&stats, 0, sizeof stats);
 
     size_t next = 0;
@@ -201,11 +211,12 @@ static double render_ep(const ev_t *ev, size_t nev, const settings_t *s,
             apply_msg_ep(&p, ev[next].status, ev[next].d1, ev[next].d2, s->fold);
             next++;
         }
-        float y = ep_piano_tick(&p) * s->gain;
-        buf[2 * i] = y;
-        buf[2 * i + 1] = y;
-        float a = tw_fabsf(y);
+        tw_stereo y = ep_piano_tick_stereo(&p);
+        buf[2 * i] = y.l * s->gain;
+        buf[2 * i + 1] = y.r * s->gain;
+        float a = tw_fabsf(buf[2 * i]), b = tw_fabsf(buf[2 * i + 1]);
         if (a > peak) peak = a;
+        if (b > peak) peak = b;
     }
     *out_of_compass = p.bank.out_of_compass;
     return (double)peak;
@@ -245,13 +256,16 @@ static double render(const ev_t *ev, size_t nev, const settings_t *s,
 
 int main(int argc, char **argv) {
     uint8_t reg[TW_DRAWBARS] = { 8, 8, 8, 0, 0, 0, 0, 0, 0 };
-    settings_t st = { reg, 0, 0, 0, 0.0f, 0.125f, 0.0f, false, false, 48000.0f };
+    settings_t st = { reg, 0, 0, 0, 0.0f, 0.125f, 0.0f, 0.0f,
+                      EP_CONDITION_DEFAULT, /* -N overrides; never hardcode
+                                             * the shipped value here */
+                      false, false, 48000.0f };
     const char *out_path = "render.wav";
     double tail_s = 2.0;
     uint32_t chan_mask = 0xFFFF;
 
     int c;
-    while ((c = getopt(argc, argv, "I:c:R:v:D:m:p:fg:w:r:t:o:h")) != -1) {
+    while ((c = getopt(argc, argv, "I:c:R:v:D:C:N:m:p:fg:w:r:t:o:h")) != -1) {
         switch (c) {
         case 'I':
             if (!strcmp(optarg, "ep73")) st.ep = true;
@@ -272,6 +286,8 @@ int main(int argc, char **argv) {
             break;
         case 'v': st.vib = atoi(optarg); break;
         case 'D': st.drive = (float)atof(optarg); break;
+        case 'C': st.cab = (float)atof(optarg); break;
+        case 'N': st.cond = (float)atof(optarg); break;
         case 'm': st.rot = atoi(optarg); break;
         case 'p': st.perc = atoi(optarg); break;
         case 'f': st.fold = true; break;
@@ -383,8 +399,9 @@ int main(int argc, char **argv) {
            tail_s, (double)st.rate);
     static const char *rot_name[4] = { "bypass", "chorale", "tremolo", "brake" };
     if (st.ep)
-        printf("  instrument ep73, compass 28..100, gain %g%s\n",
-               (double)st.gain, st.fold ? ", octave-fold" : "");
+        printf("  instrument ep73, compass 28..100, drive %.2f, cabinet %.2f,"
+               " condition %.2f, gain %g%s\n", (double)st.drive, (double)st.cab,
+               (double)st.cond, (double)st.gain, st.fold ? ", octave-fold" : "");
     else
         printf("  registration %d%d%d%d%d%d%d%d%d, vibrato %d, percussion %s,"
                " drive %.2f, rotary %s, wear %.2f, gain %g%s\n",

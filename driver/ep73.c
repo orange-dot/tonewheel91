@@ -4,14 +4,12 @@
  *
  * MIDI (docs/ep-constants.md sec 10.1): notes 28..100, velocity scaling
  * loudness and timbre; CC64 sustain pedal, >= 64 is down; CC120/CC123
- * drop all dampers. CC85 drive, CC91 tremolo, CC92 cabinet and CC93
- * condition are reserved for EP5/EP4/EP6/EP7 and are counted but not yet
- * wired. Poly key pressure has no meaning on this instrument — a key that
+ * drop all dampers. CC85 drive and CC91 tremolo; CC92 cabinet, CC93 condition and are counted but not yet wired. Poly key pressure has no meaning on this instrument — a key that
  * is down has already thrown its hammer — so it is parsed, ignored and
  * counted.
  *
- * The instrument is mono until EP4's tremolo; the same sample goes to both
- * channels, which keeps the device configuration identical to the organ's.
+ * Stereo begins at the tremolo (CC91): off, and at the mono variant, both
+ * channels carry the same sample.
  */
 #define _DEFAULT_SOURCE 1
 #include <alsa/asoundlib.h>
@@ -52,7 +50,10 @@ static void apply_msg(const tw_midi_msg *m) {
         stats.ccs++;
         if (m->d1 == 64) ep_piano_set_sustain(&piano, m->d2 >= 64);
         else if (m->d1 == 120 || m->d1 == 123) ep_piano_panic(&piano);
-        else if (m->d1 == 85 || (m->d1 >= 91 && m->d1 <= 93)) stats.reserved++;
+        else if (m->d1 == 91) ep_piano_set_tremolo(&piano, m->d2);
+        else if (m->d1 == 85) ep_piano_set_drive(&piano, (float)m->d2 / 127.0f);
+        else if (m->d1 == 92) ep_piano_set_cabinet(&piano, (float)m->d2 / 127.0f);
+        else if (m->d1 == 93) ep_piano_set_condition(&piano, (float)m->d2 / 127.0f);
         else stats.ccs--;
         break;
     default:
@@ -147,8 +148,8 @@ int main(int argc, char **argv) {
             return 1;
         }
         printf("midi: %s (notes 28..100, velocity -> loudness and timbre,"
-               " CC64 sustain, CC120/123 panic; CC85/91/92/93 reserved for"
-               " drive/tremolo/cabinet/condition, counted but not wired)\n",
+               " CC64 sustain, CC120/123 panic, CC85 drive, CC91 tremolo;"
+               " CC92 cabinet, CC93 condition)\n",
                midi_dev);
     }
 
@@ -156,7 +157,7 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
-    static float mono[MAX_PERIOD];
+    static float stereo[2 * MAX_PERIOD];
     static int32_t out[2 * MAX_PERIOD];
     tw_midi_parser parser = { 0 };
     tw_midi_msg msg;
@@ -187,14 +188,13 @@ int main(int argc, char **argv) {
             if (frame >= demo_end) break;
         }
         for (snd_pcm_uframes_t i = 0; i < period; i++) {
-            float x = ep_piano_tick(&piano) * gain;
-            mono[i] = x > 1.0f ? 1.0f : x < -1.0f ? -1.0f : x;
+            tw_stereo y = ep_piano_tick_stereo(&piano);
+            float l = y.l * gain, r = y.r * gain;
+            stereo[2 * i] = l > 1.0f ? 1.0f : l < -1.0f ? -1.0f : l;
+            stereo[2 * i + 1] = r > 1.0f ? 1.0f : r < -1.0f ? -1.0f : r;
         }
-        for (snd_pcm_uframes_t i = 0; i < period; i++) {
-            int32_t s = (int32_t)(mono[i] * 2147483392.0f);
-            out[2 * i] = s;
-            out[2 * i + 1] = s;
-        }
+        for (snd_pcm_uframes_t i = 0; i < 2 * period; i++)
+            out[i] = (int32_t)(stereo[i] * 2147483392.0f);
         snd_pcm_uframes_t done = 0;
         while (done < period) {
             snd_pcm_sframes_t w = snd_pcm_writei(pcm, out + 2 * done, period - done);
