@@ -584,12 +584,19 @@ bit-for-bit.
 
 Twenty short MIDI loops for the tine electric piano, rendered through
 `render_midi -I ep73`. Unlike every entry above, this set arrives with its
-own **reference audio**: the library ships a rendered WAV beside each MIDI,
-recorded from the instrument the loops were written for. That makes it the
-first material in this repo where the electric-piano line can be heard
-directly against the thing it models, on identical notes — which is what
-`piano-backlog.md` names as the precondition for EP3 and what the EP1
-evidence recorded as an open item.
+own audio: the library ships a rendered WAV beside each MIDI, from the
+instrument the loops were written for.
+
+**Correction, 2026-07-27.** This entry originally claimed the two could be
+heard against each other "on identical notes". They cannot. Testing the
+MIDI note-on times directly against onsets detected in the audio — a test
+that does not involve this engine at all — only **25 % of MIDI onsets have
+an audio onset within 50 ms**, against the 80 %-plus a shared performance
+would give. Lengths, tempi and key names match exactly, so the pairing is
+of counterparts rather than of takes: the audio was played separately from
+the MIDI. Every per-pair statement below should be read as a comparison of
+two different performances of the same idea, which is a far weaker thing
+than it sounded.
 
 - Input: an operator-supplied loop library, unpacked into gitignored
   `renders/rhodes-loops-tl/`. Twenty format-0 single-track MIDI files, all
@@ -675,3 +682,151 @@ It is worth keeping and listening to for dampers cutting wrong, dropped
 notes, pedal behaviour and clicks. EP3 still needs what it always needed:
 dry, close-miked single notes across the compass and across the dynamic
 range.
+
+## 2026-07-27 — ep73 compass sweep, and the bass correction it forced
+
+A MIDI written here, not a transcription: one file that walks the whole
+compass and exercises every behaviour the model has, in sections separated
+by silence. It exists so that when something sounds wrong it is obvious
+which constant owns it — and it earned that on its first pass.
+
+Generator: `renders/ep73-sweep.py` (untracked, beside the render). Format
+0, one track, channel 0, 120 BPM, 210 notes, compass exactly 28..100 so
+nothing folds, 16 CC events.
+
+    section  seconds          what it isolates
+    1          0.5 -  16.6    chromatic sweep, all 73 keys at v90 — evenness
+    2         18.1 -  44.3    velocity ladder 1..127 at each E — bell to bark
+    3         45.7 -  54.5    one phrase dry, then the same pedalled — dampers
+    4         55.5 -  62.4    repeated notes accelerating, pedal down — D5
+    5         63.2 -  74.4    chords low / mid / high / compass-wide
+    6         75.8 - 105.8    lowest then highest note held on the pedal
+    7        107.3 - 131.1    a chord under a CC91 sweep — the tremolo
+
+    ./build/render_midi -I ep73 -g 0.1356 -t 6 \
+        -o renders/ep73-sweep-EP4-20260727.wav renders/ep73-sweep.mid
+    # peak 0.720, FNV64 27231494b9743862
+    #   applied: 420 notes, 0 key pressures, 16 ccs, 0 folded (two runs identical)
+
+Engine: EP3 plus EP4, `make test` 9356 checks green, eleven exhibits
+passing, and the organ's pinned whole-song baseline still reproducing
+`6e56f252d97c240c`.
+
+### What the first pass of this file found
+
+The bass did not sound like a bass note. It sounded like a short hollow
+pop at a pitch that had nothing to do with the key played. Measuring one
+E1 at velocity 127 said why: the fundamental sat at 41.2 Hz, which almost
+nothing reproduces, while the clang partial at 258 Hz sat **2.7 dB under
+it** and 9 dB above the pickup's own second harmonic. Whichever partial
+tops the harmonic series is the pitch the ear assigns, and here that was an
+inharmonic partial two octaves and a third above the note, gone in 2.6 s
+while the real note rang inaudibly for eight.
+
+Two corrections, both from documents already in the source list.
+
+The length law was violating one of them. `f1 = K/L^2` asks for a 181 mm
+tine at E1, and the longest replacement blank the factory ships is 111 mm
+[EP-SM 5-1] — the model wanted a tine 1.6 times longer than the instrument
+holds. Capping the length is not a fudge but the physical situation the
+founding patent describes: below a certain pitch the tine stops growing and
+the counterweight carries it, which is why the springs on the low-pitched
+generators are deliberately heavier [EP-P61]. With the cap the bass strike
+sits proportionally further out along its tine, at `xi = 0.514` rather than
+0.316, and couples far less to the high modes.
+
+The bass contact time then went from 4 to 6 ms on the patent's own
+statement of intent: those hammers are "relatively large and thickly
+felted, **in order to damp out harmonics**". That is a design goal, and the
+model should carry it rather than discover it.
+
+Result at E1: the clang drops from 2.7 dB under the fundamental to 11.8 dB
+under, landing **below** the second harmonic instead of above it, so the
+harmonic series carries the pitch again. Mode 3 falls 35 dB because the
+corrected `xi` lands almost exactly on that mode's node. Across the whole
+compass the clang spread narrows from 15.2 dB to 4.8 dB.
+
+The effect on this file is blunt: the raw peak fell from 14.85 to 5.31, so
+the same headroom now carries 9 dB more of everything else. A single bass
+note used to be louder than the compass-wide six-note chord; it is now
++8.9 dB over the same velocity at E4, against +17.5 dB before.
+
+Section 6 remains the one section that checks a sourced number rather than
+inviting an opinion: about 16.6 s to -60 dB at E1 and 4.0 s at E7, against
+the 17 s and 3-5 s the founding patent states.
+
+The same file is worth running through any other tine-piano instrument for
+a direct A/B on identical notes.
+
+## 2026-07-27 — the loop set re-rendered after the bass correction
+
+The same twenty loops as the 2026-07-26 entry, through the current engine:
+the mode-shape strike weights with the length cap, the contact transient,
+the per-register bark threshold, and EP4's tremolo present but off. Same
+44.1 kHz, same one-gain-for-the-whole-set discipline; the gain moved from
+0.135 to 0.154 because the bass correction freed headroom.
+
+    ./build/render_midi -I ep73 -r 44100 -t 6 -g 0.154 \
+        -o renders/rhodes-loops-tl/ep73-20260727/ep73-<name>.wav <name>.mid
+
+Twenty renders, all two-run identical; per-file peaks and signatures in
+`renders/rhodes-loops-tl/AB-manifest.txt`. The EP2-era set stays in
+`ep73/` for a direct three-way A/B against the references.
+
+Mean third-octave difference from the reference set:
+
+    band            200    400    800   1600   2540   4032   6400  10159   rms>1.6k
+    EP2             0.7   -3.0   -1.8    9.2   23.5   23.7   20.8   21.1     21.0
+    EP3+EP4         1.3   -2.6   -3.8    1.9   15.9   17.4   18.9   22.6     17.9
+
+The band that moved most is 1.6 kHz, from +9.2 dB to +1.9 dB — that is
+where the clang partial used to sit across this material, and it is the
+same correction the compass sweep forced. Below 800 Hz nothing changed,
+which is right: that region was already within a couple of dB and none of
+the EP3 work touched the fundamental.
+
+What is left is 16 to 23 dB above the references from 2.5 kHz up, and the
+earlier caveat still stands: these references are a produced patch, about
+16 dB per octave down above 2 kHz with a steady 0.80 channel correlation,
+so an unknown share of that gap is theirs rather than ours. The honest
+reading is that the model still has no cabinet stage (EP6) and that its
+remaining high-frequency excess cannot be attributed further without a
+clean reference recording.
+
+## 2026-07-27 — the loop set through the finished chain
+
+The same twenty loops again, now through everything the line has: the
+struck bank with EP3's mode-shape weights and length cap, the contact
+transient, the per-register bark threshold, EP5's drive at 0.15 and EP6's
+cabinet fully engaged. Tremolo off.
+
+    ./build/render_midi -I ep73 -D 0.15 -C 1.0 -r 44100 -t 6 -g 0.2415 \
+        -o renders/rhodes-loops-tl/ep73-cab-20260727/ep73dc-<name>.wav <name>.mid
+
+Mean third-octave difference from the reference set, one stage at a time:
+
+    stage                200    400    800   1600   2540   4032   6400  10159   rms>1.6k  crest
+    EP2 (Jul 26)         0.7   -3.0   -1.8    9.2   23.5   23.7   20.8   21.1     21.0    8.7
+    EP3+EP4              1.3   -2.6   -3.8    1.9   15.9   17.4   18.9   22.6     17.9    7.7
+    + drive 0.15         1.2   -2.7   -4.0    1.7   15.6   17.2   18.6   22.5     17.6    6.4
+    + cabinet 1.0        1.3   -2.5   -4.9   -2.7    6.7    2.6   -2.9   -5.4      5.0    6.3
+    reference            0.0    0.0    0.0    0.0    0.0    0.0    0.0    0.0      0.0    5.0
+
+The cabinet is the largest single move in the whole line: 17.6 dB of
+high-frequency error down to 5.0. **Its corners were pinned from ordinary
+loudspeaker behaviour before this was measured and were not adjusted
+afterwards**, which is the only reason the number means anything.
+
+It now overshoots slightly at the very top — we sit 5.4 dB *under* the
+references at 10 kHz — and +6.7 dB remains at 2.5 kHz, which is where the
+mode weights and the pickup still put energy. Neither is worth chasing
+against this reference set, for the reason recorded on 2026-07-26: these
+are produced patches, not clean instrument recordings, and the MIDI beside
+them is not even the same performance.
+
+Crest sits at 6.3 against the references' 5.0. The drive closes most of
+that gap and the cabinet, being a filter, closes none of it — as expected.
+
+Earlier sets are kept for comparison: `ep73/` (EP2), `ep73-20260727/`
+(EP3+EP4), `ep73-drive-20260727/` (with drive), `ep73-cab-20260727/` (this
+one), and `compare-20260727/` holds four rms-matched A/B pairs.
