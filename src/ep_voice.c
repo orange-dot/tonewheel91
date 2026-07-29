@@ -84,16 +84,66 @@ const float EP_HAMMER_MS[EP_ZONES] = { 12.0f, 10.0f, 8.0f, 6.0f, 5.0f };
  * threw away 40 dB. [FOLK], EP3 owns. */
 const float EP_HAMMER_HZ[EP_ZONES] = { 1200.0f, 1500.0f, 1900.0f, 2400.0f, 3000.0f };
 
-/* sec 6.1: alpha at the reference note (E4), and the exponent on
- * (f_ref / f) that carries it across the compass. Pure momentum would give
- * slope 1, since swing goes as 1/f for a given blow; the instrument is
- * voiced for evenness across the compass, which pulls it back, and how far
- * is [FOLK] — EP3 owns it. */
-const float EP_PICKUP_DRIVE_REF = 1.6f;
-const float EP_PICKUP_SLOPE = 0.5f;
-const float EP_PICKUP_OFFSET = 0.45f;
+/* sec 6.1: the tine's swing at the reference note (E4) in units of the
+ * pickup's own gap, and the exponent on (f_ref / f) that carries it across
+ * the compass.
+ *
+ * Slope [decision]: pure momentum gives 1, since swing goes as 1/f for a
+ * given blow. The gap is not the same all the way up — the manual sets
+ * 1/16" to 1/8" and allows 0.020" in the middle and upper ranges
+ * [EP-SM 4-8] — and a wider bass gap divides the bass swing down, so the
+ * exponent sits under 1. That direction is sourced; the magnitude is not,
+ * because the manual names two zones without saying how far apart they
+ * sit, and the implied exponent runs anywhere from 0.12 to 0.45 depending
+ * on that span. **1/8 closed by ear on the slope ballot of 2026-07-28.** It
+ * is a ratio of eighths, so r^(1/8) is three nested square roots and the
+ * core still needs no libm — the same move section 5.2 made for kappa.
+ *
+ * Drive [decision, by ear — the source says this one too]. This is the
+ * manual's other setup adjustment: VOLUME, "Slide Pickup Arms in or out to
+ * establish a gap between Pickup and Tine of between 1/16" and 1/8""
+ * [EP-SM 4-8]. A gap is a number the technician sets, and the swing that
+ * gap is measured against has no figure in any source here, so their ratio
+ * is a decision. What is not a decision is what it costs: the founding
+ * patent asks for "an initial percussive effect followed by a relatively
+ * rapid decay" [EP-P61], and a tine driven far across its field stops
+ * delivering that because the flux swing runs out before the tine does.
+ *
+ * Pinned so the hardest blow on the lowest tine sweeps exactly half a gap.
+ * E1 is three octaves under E4 and the octave is an exact power of two, so
+ * with the slope at 1/8 that closes as 2^-1 * 2^(-3/8) = 2^(-11/8). It
+ * carries the bass across dead centre and out the far side, which is the
+ * bark, and it leaves E1 at 79 % of its pinned decay rate over the first
+ * second against the 22 % the railed saturator managed. The law's maximum
+ * is g(E1) by construction — it rises toward the bass and the compass ends
+ * — so nothing needs a cap. The anchor is held fixed across slope
+ * settings, which is what made the slope ballot decide one thing.
+ *
+ * Offset [decision, by ear — which is what the source says it is]. The
+ * manual keeps two separate setup adjustments and this is the first of
+ * them: TIMBRE, "manipulating the Timbre Adjustment Screw until the end of
+ * the Tine rests on a plane slightly above dead center of the Pickup ...
+ * Let your ear guide you" [EP-SM 4-7]. VOLUME is the other one, and it is
+ * the gap. So the offset is a timbre control set by ear and no source
+ * gives it a number.
+ *
+ * What the field does give is a map, and one value inside it to avoid.
+ * Psi'' vanishes at exactly u = 1/2 — the maximum of |Psi'| is the field's
+ * inflection point — and second-harmonic generation vanishes with it, so
+ * that one offset produces an odd-dominant, hollow voice. 1/2 was pinned
+ * here briefly for exactly the wrong reason (it maximises output, which is
+ * the *volume* adjustment's job) and the EP1 exhibit caught it: H3 came
+ * out above H2. Below 1/2 the ladder is even-dominant and densifies as the
+ * offset shrinks; 0.35 is "slightly above dead centre", clear of the null,
+ * and leaves the second harmonic 15 dB over the third at E1 and 10 dB over
+ * it at E4. The patent's claim that the off-centre setting "permits
+ * accurate adjustment of the fundamental-overtone relationships" [EP-P61]
+ * is this map, and it is why the offset is a ballot and not a derivation.
+ */
+const float EP_PICKUP_DRIVE_REF = 0.38555271f;    /* 2^(-11/8)            */
+const float EP_PICKUP_SLOPE = 0.125f;             /* 1/8                  */
+const float EP_PICKUP_OFFSET = 0.35f;
 static constexpr float PICKUP_F_REF = 329.6276f;  /* E4, mid compass */
-static constexpr float PICKUP_DRIVE_MAX = 3.5f;
 static constexpr float DC_BLOCK_HZ = 10.0f;       /* the coupling cap, sec 6.2 */
 
 /* "ep73" "hammer" — fixed, per sec 5.5; every draw is reproducible from
@@ -175,11 +225,12 @@ static float polar_factor(ep_bank *b, int key) {
     return f;
 }
 
-/* sec 6.2: the coupling capacitor at the preamplifier's input. A
- * saturating asymmetric pickup leaves a level-dependent DC behind it, and
- * unlike the old cubic form that DC has no closed expression to subtract,
- * so it is filtered off where the instrument filters it off — once, on the
- * summed bus, not per voice. At 10 Hz it costs E1 a quarter of a dB. */
+/* sec 6.2: the coupling capacitor at the preamplifier's input. A tine
+ * sitting off-centre in the field leaves a level-dependent DC behind it —
+ * the field is even about dead centre and the rest offset is not — and
+ * that DC has no closed expression to subtract, so it is filtered off
+ * where the instrument filters it off: once, on the summed bus, not per
+ * voice. At 10 Hz it costs E1 a quarter of a dB. */
 static float dc_block(ep_bank *b, float x) {
     float lp = b->dc_lp + b->dc_c * (x - b->dc_lp);
     /* the same denormal-safe snap every envelope here uses: without it a
@@ -293,10 +344,12 @@ static constexpr float MODE3_SHAPE[EP_KEYS] = {
 
 float ep_pickup_drive(int key) {
     if (key < 0 || key >= EP_KEYS) return 0.0f;
-    /* sec 6.1: the slope is pinned at 1/2, so the ratio needs one square
-     * root and no general power — the same trick section 5.2 uses. */
-    float a = EP_PICKUP_DRIVE_REF * ep_sqrtf(PICKUP_F_REF / ep_key_freq_hz(key));
-    return a > PICKUP_DRIVE_MAX ? PICKUP_DRIVE_MAX : a;
+    /* sec 6.1: r^(1/8) is three nested square roots — no general power, and
+     * the core keeps its no-libm rule. Uncapped: the law rises toward the
+     * bass and the compass ends, so its maximum is g(E1), which is the
+     * value the drive anchor pins. */
+    float r = PICKUP_F_REF / ep_key_freq_hz(key);
+    return EP_PICKUP_DRIVE_REF * ep_sqrtf(ep_sqrtf(ep_sqrtf(r)));
 }
 
 float ep_mode_shape(int key, int mode) {
@@ -344,7 +397,7 @@ static void rebuild(ep_bank *b, float sample_rate_hz) {
                    * (1.0f + c * COND_ALPHA_DEV * field(d1, 13));
         b->pk_x0[k] = EP_PICKUP_OFFSET
                     * (1.0f + c * COND_ALPHA_DEV * field(d2, 52));
-        b->pk_ref[k] = tw_sat(b->pk_x0[k]);
+        b->pk_ref[k] = ep_field(b->pk_x0[k]);
         for (int m = 0; m < EP_MODES; m++) {
             /* sec 15: the clang ratio drifts per note, because the tuning
              * spring moves the fundamental and not the harmonics [EP-P61].

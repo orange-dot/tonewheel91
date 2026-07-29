@@ -830,3 +830,224 @@ that gap and the cabinet, being a filter, closes none of it — as expected.
 Earlier sets are kept for comparison: `ep73/` (EP2), `ep73-20260727/`
 (EP3+EP4), `ep73-drive-20260727/` (with drive), `ep73-cab-20260727/` (this
 one), and `compare-20260727/` holds four rms-matched A/B pairs.
+
+## 2026-07-28 — the pickup field, and the bass envelope it gives back
+
+The by-ear verdict after the finished chain was that the low notes still
+carried "a slight vibraphone flavour". Measuring before guessing found the
+mechanism, and it was not a voicing question.
+
+**What was wrong.** Section 4 pins E1 at `t60 = 17 s` — 3.53 dB/s. Rendered
+through the old pickup the fundamental fell **0.77 dB/s** between 0.3 s and
+1 s, a fifth of its own pinned rate, and the timbre did not move either:
+`h3` stayed within 1.4 dB of itself for the first 1.5 s. A note that holds
+both level and colour for a second is a struck bar under a resonator. The
+compression was graded across the compass and worst at the bottom, which is
+exactly the register the ear picked out:
+
+    fraction of the pinned decay rate reached, 0.3-1 s, velocity 100
+    note     E1     A1     E2     B2     E3     E4
+    old    22 %   33 %   34 %   53 %   62 %   84 %
+    new    79 %   85 %   93 %   95 %   91 %   96 %
+
+**Why.** `tw_sat` is the organ's power-stage saturator — tonewheel.h keeps
+it for "the rotary's 40 W ceiling, where a power stage wants a hard bound".
+It clamps flat at `|u| = 3` with exactly zero slope. At the pinned drive
+E1 reached `u = 3.18` at velocity 100, and at velocity 127 the bottom
+twenty notes were clipped outright. A power amplifier has a rail; a
+magnetic field does not, and the borrow had carried one across.
+
+**The replacement** is the field taken from the source the section already
+cited: `Psi(u) = (1 + u^2)^(-3/2)`, the inverse-cube law of
+[EP-DAFx17 eq 6] over the lateral sweep of eq 8, in units of the pickup
+gap. Detail and the three constants in `ep-constants.md` sec 6.
+
+Renders. The compass sweep, gain chosen to land on the previous set's peak
+so the two are directly comparable by ear:
+
+    ./build/render_midi -I ep73 -g 0.65 -t 6 \
+        -o renders/ep73-sweep-field-20260728.wav renders/ep73-sweep.mid
+    # peak 0.719, FNV64 f7e8a836e9701a04
+    #   applied: 420 notes, 16 ccs, 0 folded (two runs identical)
+    # the EP4-era comparison take is ep73-sweep-EP4-20260727.wav, peak 0.720
+
+The loop set again, same chain as 2026-07-27 (drive 0.15, cabinet 1.0):
+
+    ./build/render_midi -I ep73 -D 0.15 -C 1.0 -r 44100 -t 6 -g 0.52 \
+        -o renders/rhodes-loops-tl/ep73-field-20260728/ep73f2-<name>.wav <name>.mid
+
+Twenty renders, all two-run identical. Mean third-octave difference from
+the reference set, the two kernels through the same chain, each levelled on
+its own 200-800 Hz mean so the comparison is of shape and not of gain:
+
+    kernel              200    400    800   1600   2540   4032   6400  10159   rms>1.6k
+    saturator (Jul 27)  3.1   -0.3   -2.8   -7.6    1.6    4.4   -0.2   -5.9      4.8
+    field (Jul 28)      5.7   -1.2   -4.5   -7.8   -0.1    3.6   -0.7   -2.2      4.0
+    reference           0.0    0.0    0.0    0.0    0.0    0.0    0.0    0.0      0.0
+
+It does not regress against that set and improves it slightly, which is
+about all the set can be asked — the standing correction of 2026-07-27
+holds, these are produced patches and the MIDI beside them is a different
+performance. The measurement that matters here is the decay table above,
+and it is against the model's own pinned constants, not against a
+recording.
+
+An attack-versus-body descriptor over the same twenty pairs, which is
+self-normalising and so survives the references' production EQ:
+
+    reference    2.5 dB     saturator    3.2 dB     field    3.6 dB
+
+**A ballot, and why there is one.** `EP_PICKUP_OFFSET` is the manual's
+TIMBRE adjustment — "until the end of the Tine rests on a plane slightly
+above dead center of the Pickup ... Let your ear guide you" [EP-SM 4-7].
+No source gives it a number, and it is the strongest single control over
+the fundamental-to-overtone balance the patent says it is. The compass
+sweep is rendered at four settings in
+`renders/ep73-ballots-field-20260728/`:
+
+    timbre-u0-0.25.wav   peak 0.709   FNV64 071b33ed3f7c2abe   most octave
+    timbre-u0-0.30.wav   peak 0.711   FNV64 34d5c367a6efc594
+    timbre-u0-0.35.wav   peak 0.719   FNV64 f7e8a836e9701a04   <- chosen
+    timbre-u0-0.40.wav   peak 0.718   FNV64 c443f0360a6c5784   cleanest
+
+0.50 is deliberately not on the ballot: it is the field's inflection point,
+where the second harmonic cancels outright and the voice goes hollow.
+
+**Settled 2026-07-28: 0.35**, which is the setting this entry's renders were
+already made at, so every signature above stands as pinned and nothing needs
+re-rendering.
+
+**The organ is untouched.** No organ translation unit has been edited since
+this line began, and both pinned whole-song baselines still render
+`6e56f252d97c240c` and `e983aea2ca6ecaf2`. `make test` 9386/0, ten of ten
+exhibits PASS.
+
+## 2026-07-28 — the slope ballot
+
+`EP_PICKUP_SLOPE` is the one pickup constant left open (register item 6b,
+journal O14). It sets how much further the bass tine sweeps across its
+field than the treble one does, so it trades bass growl against treble
+cleanliness, and nothing in the sources narrows it: the direction is
+sourced — the manual's gap is wider in the bass [EP-SM 4-8], which pulls
+the exponent under the momentum value of 1 — but the magnitude is not,
+because the manual names two zones without saying how far apart they sit.
+Plausible spans give anywhere from 0.12 to 0.45.
+
+**`EP_PICKUP_DRIVE_REF` is re-derived for each take** so that `g(E1)` stays
+exactly 1/2, the anchor closed with the field kernel. Without that the
+ballot would move the bass and the treble at once and decide nothing. E1 is
+therefore bit-identical across all four; everything above it is what moves.
+
+    slope   DRIVE_REF     g(E1)   g(E4)   g(E7)   E1/E7 spread
+    1/8     0.38555271    0.500   0.386   0.297      1.68x
+    1/4     0.29730178    0.500   0.297   0.177      2.83x     <- shipped
+    3/8     0.22925101    0.500   0.229   0.105      4.76x
+    1/2     0.17677670    0.500   0.177   0.063      8.00x     (outside the bracket)
+
+What moves, measured — second harmonic against the fundamental at velocity
+127, 42.7 ms from the strike:
+
+    slope     E1      E3      E5      E7
+    1/8    -13.8   -15.0   -17.2   -19.4     nearly even across the compass
+    1/4    -13.8   -17.1   -21.0   -24.7
+    3/8    -13.8   -19.1   -24.5   -29.5
+    1/2    -13.8   -20.9   -27.7   -34.1     growl confined to the bass
+
+**Level-matched, and this one matters.** As played the four differ by up to
+6.6 dB of rms on the loop, because a shallower slope drives the whole
+middle harder — the louder take would win any A/B on loudness alone. Each
+take is therefore re-rendered at a gain that puts it on the shipped 1/4
+take's rms, and all four now sit within 0.01 dB of each other. The gain each
+needed is itself the measurement of how much level the slope moves:
+
+    renders/ep73-ballots-slope-20260728/
+
+    slope  sweep gain   peak    FNV64              loop gain   peak    FNV64
+    1/8      0.557247  0.655  bb4584e1c00120e6      0.403251  0.293  4c78d745da629bfd
+    1/4      0.650000  0.719  f7e8a836e9701a04      0.520000  0.294  f6087f8b24f19325
+    3/8      0.743395  0.774  1ce1ef6fba6c4ced      0.680094  0.296  345e7d8a136270a1
+    1/2      0.832643  0.816  013824148be30425      0.893403  0.304  35c9087311b3c901
+
+Two takes each: the compass sweep dry, which is where section 2's velocity
+ladder at each E makes the bell-to-bark judgement directly, and one loop
+through the finished chain (drive 0.15, cabinet 1.0) for musical context —
+`90_Am_RhodesDust_03`, the longest in the set at 42.7 s. All eight two-run
+identical.
+
+The shipped 1/4 sweep take is byte-identical to the one logged in the
+previous entry, so that signature is unchanged and the two entries' takes
+are directly comparable.
+
+**What to listen for**: the treble. E1 is the same in all four by
+construction, so anything that differs is the middle and top — 1/8 keeps
+the growl even all the way up, 1/2 confines it to the bass and leaves the
+top nearly a pure tine. The bracket says 1/8 to 3/8 are defensible; 1/2 is
+on the ballot as an audible endpoint and would need its own justification
+to ship.
+
+## 2026-07-29 — slope closed at 1/8, and what it moved
+
+`EP_PICKUP_SLOPE` settled off the previous entry's ballot: **1/8**, the
+shallow end of the sourced bracket. `EP_PICKUP_DRIVE_REF` is re-derived
+with it so `g(E1)` stays exactly 1/2 — `2^-1 * 2^(-3/8) = 2^(-11/8) =
+0.38555271` — which is the whole reason the ballot was built that way.
+
+The shipped sweep take is byte-identical to the ballot's `slope-1-8-sweep`,
+which is the check that the tree and the ballot are the same instrument:
+
+    ./build/render_midi -I ep73 -g 0.557247 -t 6 \
+        -o renders/ep73-sweep-slope18-20260729.wav renders/ep73-sweep.mid
+    # peak 0.655, FNV64 bb4584e1c00120e6
+    #   applied: 420 notes, 16 ccs, 0 folded (two runs identical)
+
+The loop set again, same chain, gain dropped from 0.52 to 0.4033 because
+the shallower slope drives the middle harder and the set is mid-register:
+
+    ./build/render_midi -I ep73 -D 0.15 -C 1.0 -r 44100 -t 6 -g 0.4033 \
+        -o renders/rhodes-loops-tl/ep73-slope18-20260729/ep73s8-<name>.wav <name>.mid
+
+Twenty renders, all two-run identical. Third-octave difference from the
+reference set, each levelled on its own 200-800 Hz mean:
+
+    kernel / slope        200    400    800   1600   2540   4032   6400  10159   rms>1.6k
+    saturator (Jul 27)    3.1   -0.3   -2.8   -7.6    1.6    4.4   -0.2   -5.9      4.8
+    field, slope 1/4      5.7   -1.2   -4.5   -7.8   -0.1    3.6   -0.7   -2.2      4.0
+    field, slope 1/8      4.8   -1.1   -3.7   -7.1   -0.1    3.4   -1.5   -4.0      4.0
+    reference             0.0    0.0    0.0    0.0    0.0    0.0    0.0    0.0      0.0
+
+Unchanged at 4.0 against the reference set — the slope moved the middle,
+which is where that set is closest to us already, so it barely registers
+there. The measurement that shows what the slope did is the ladder across
+the compass, in `ep-constants.md` sec 6.1.
+
+**What moved besides the two constants.** The bark — the register where the
+tine crosses dead centre at full strike — went from twenty-five notes
+(E1..E3) to fifty (E1..F5). That is a real change of character and it is
+documented rather than smoothed: at 1/8 this instrument growls nearly all
+the way up rather than only underneath.
+
+**One check had to be re-derived, not loosened.** `test.c` asserted the
+crossing ended "in the lower middle", which encoded the 1/4 setting rather
+than the property, and failed the moment the ballot moved it. It now
+asserts the invariant the drive law actually exists to produce — lowest
+tine crosses at full strike, highest never does, crossing ends inside the
+compass — and where it ends is reported in the constants doc instead.
+
+A second check moved for a better reason. The EP1 exhibit judged the
+kernel against its own quadrature, one-sided, on the argument that the
+contact transient could only ever *add* to the `2*f1` bin. That was wrong:
+the transient's corner falls as the fourth root of level, so at a soft blow
+it sits *below* `f1` and inflates the denominator instead, pushing the
+measured ratio under the prediction — which is exactly what it did at
+velocity 1 here, by 5.5 dB. The kernel is fine: checked directly, f32
+against the transcendental, it tracks H2/H1 to 0.17 dB at that same
+velocity. So the kernel claim moved into `test.c` where no burst is in the
+way, and the exhibit now asserts only what a rendered note can honestly
+show — that velocity moves timbre monotonically, 51.3 dB of it.
+
+Gate: `make test` 9389/0, ten of ten exhibits PASS, both organ whole-song
+baselines unmoved at `6e56f252d97c240c` and `e983aea2ca6ecaf2`, no organ
+translation unit edited.
+
+The 2026-07-28 sweep take above it is kept at the 1/4 setting it documents
+(`f7e8a836e9701a04`), so the two entries remain a direct A/B.

@@ -2500,9 +2500,9 @@ static const double EPO_BEAM_K = 1.34517;   /* f1 = K / L^2, L in metres  */
 static const double EPO_X0_BASS = 57.150, EPO_X0_TREBLE = 3.175; /* mm    */
 static const double EPO_L_MAX = 111.125; /* longest blank, [EP-SM 5-1]     */
 static const double EPO_T60_E1 = 17.0, EPO_T60_RATIO = 0.980099;
-static const double EPO_DRIVE_REF = 1.6;          /* at E4, sec 6.1 */
+static const double EPO_DRIVE_REF = 0.38555271;   /* 2^(-11/8), sec 6.1 */
 static const double EPO_PICKUP_F_REF = 329.6276;
-static const double EPO_PICKUP_OFFSET = 0.45;
+static const double EPO_PICKUP_OFFSET = 0.35;
 static const double EP_RATE = 48000.0;
 
 static int epo_zone(int midi) {
@@ -2780,47 +2780,73 @@ static void test_ep_strike(void) {
 }
 
 static void test_ep_pickup(void) {
-    CHECK(ep_pickup(0.0f, 1.6f, 0.45f, tw_sat(0.45f)) == 0.0f,
+    /* sec 6: the field itself, against the transcendental it is derived
+     * from. The core has no libm and computes it by seeded Newton; the
+     * oracle here has libm, so the kernel is validated rather than
+     * trusted — the same arrangement the mode-shape tables use. */
+    double field_worst = 0.0;
+    for (int i = -60000; i <= 60000; i++) {
+        double u = i * 0.001;
+        double want = pow(1.0 + u * u, -1.5);
+        double err = fabs((double)ep_field((float)u) - want) / want;
+        if (err > field_worst) field_worst = err;
+    }
+    CHECK(field_worst < 1e-6,
+          "ep_field must match (1+u^2)^-3/2, worst relative error %.3e",
+          field_worst);
+
+    CHECK(ep_field(0.0f) == 1.0f, "the field must be exactly 1 at dead centre");
+    int even_bad = 0;
+    for (int i = 1; i <= 8000; i++)
+        if (ep_field(i * 0.001f) != ep_field(i * -0.001f)) even_bad++;
+    CHECK(even_bad == 0, "the field must be exactly even in u, %d mismatches",
+          even_bad);
+
+    /* The property that replaces monotonicity, and the whole reason this
+     * kernel exists: the field has no rail. Past dead centre it falls
+     * forever as u^-3 and never goes flat, so no operating point can pin
+     * the output against a ceiling and flatten a note's envelope. The old
+     * saturator reached its bound at |u| = 3 with exactly zero slope and
+     * the bass sat on it. */
+    int flat = 0;
+    for (int i = 1; i <= 20000; i++) {
+        float u = i * 0.01f;
+        if (ep_field(u) <= ep_field(u + 0.01f)) flat++;
+    }
+    CHECK(flat == 0,
+          "the field must fall strictly for every u > 0, %d flat or rising",
+          flat);
+
+    /* sec 6: the rest offset is a by-ear setup adjustment [EP-SM 4-7] and
+     * carries no derivation, but the field does forbid one value. Psi''
+     * vanishes at exactly u = 1/2, so an offset there generates no second
+     * harmonic at all and the voice comes out odd-dominant and hollow.
+     * The pin must stay clear of it, and on the side the manual names —
+     * "slightly above dead center", so below the null, where the ladder is
+     * even-dominant. */
+    double infl = 0.0;
+    for (int i = 1; i <= 30000; i++) {
+        double u = i * 0.0001;
+        if (12.0 * u * u - 3.0 >= 0.0) { infl = u; break; }
+    }
+    CHECK(fabs(infl - 0.5) < 1e-3,
+          "the field's inflection must sit at u = 1/2, found %.4f", infl);
+    CHECK(EP_PICKUP_OFFSET < 0.45f && EP_PICKUP_OFFSET > 0.15f,
+          "the rest offset must stay clear of the H2 null and stay slight, %.3f",
+          (double)EP_PICKUP_OFFSET);
+
+    float ref0 = ep_field(EP_PICKUP_OFFSET);
+    CHECK(ep_pickup(0.0f, 1.0f, EP_PICKUP_OFFSET, ref0) == 0.0f,
           "the pickup must pass zero at zero");
 
-    /* sec 6: monotone for every alpha — the property the organ's small
-     * alpha made moot and this line cannot assume. */
-    /* Monotone, not strictly rising: this kernel saturates, and past its
-     * clamp consecutive samples are equal by design. The tolerance is a
-     * few ulps because tw_sat's flat top wiggles by about one — a property
-     * of that kernel the organ's own tests already record, not a defect
-     * introduced here. */
-    int mono_bad = 0;
-    float prev = ep_pickup(-4.0f, 1.6f, 0.45f, tw_sat(0.45f));
-    for (int i = -3999; i <= 4000; i++) {
-        float y = ep_pickup(i * 0.001f, 1.6f, 0.45f, tw_sat(0.45f));
-        if (y < prev - 4e-7f) mono_bad++;
-        prev = y;
-    }
-    CHECK(mono_bad == 0, "the pickup kernel must be monotone, %d inversions", mono_bad);
-
-    /* sec 6.1: monotone at every alpha the compass actually uses, not just
-     * the reference one — that property is what lets the bass run a much
-     * stronger curve than the treble without folding. */
-    int mono_any = 0;
-    for (int k = 0; k < EP_KEYS; k += 8) {
-        float g = ep_pickup_drive(k), x0 = EP_PICKUP_OFFSET, r = tw_sat(x0);
-        float last = ep_pickup(-4.0f, g, x0, r);
-        for (int i = -3999; i <= 4000; i++) {
-            float y = ep_pickup(i * 0.001f, g, x0, r);
-            if (y < last - 4e-7f) mono_any++; /* flat past the clamp, never falling */
-            last = y;
-        }
-    }
-    CHECK(mono_any == 0, "the kernel must stay monotone across the compass, %d",
-          mono_any);
-
-    /* sec 6: the point of the saturating form is that it fills a ladder
-     * where the old cubic series stopped dead at the third harmonic. */
+    /* sec 6: the ladder must stay filled past the third harmonic — the
+     * defect that made the cubic series leave the clang standing alone
+     * over an empty octave and a half. */
     static float lad[8192];
-    double f = 300.0, gg = 2.0, x0 = 0.45, rr = tw_sat(0.45f);
+    double f = 300.0, gg = 0.6, x0 = EP_PICKUP_OFFSET;
     for (int i = 0; i < 8192; i++)
-        lad[i] = ep_pickup((float)sin(TAU_D * f * i / EP_RATE), gg, x0, rr);
+        lad[i] = ep_pickup((float)sin(TAU_D * f * i / EP_RATE), (float)gg,
+                           (float)x0, ref0);
     double h1 = ep_bin(lad, 8192, f);
     int thin = 0;
     for (int k = 4; k <= 6; k++)
@@ -2829,19 +2855,103 @@ static void test_ep_pickup(void) {
           "the pickup must carry harmonics past the third, %d of 3 missing",
           thin);
 
-    /* The bark threshold moves with the tine's swing, which goes as 1/f. */
+    /* sec 6.1: the drive law, uncapped, and its geometric anchor. */
     CHECK(ep_pickup_drive(-1) == 0.0f && ep_pickup_drive(EP_KEYS) == 0.0f,
           "out-of-range pickup drive must return 0");
     int drive_bad = 0;
     for (int k = 0; k < EP_KEYS; k++) {
-        double want = EPO_DRIVE_REF * pow(EPO_PICKUP_F_REF / epo_freq(k), 0.5);
-        if (want > 3.5) want = 3.5;
+        double want = EPO_DRIVE_REF * pow(EPO_PICKUP_F_REF / epo_freq(k), (double)EP_PICKUP_SLOPE);
         if (fabs(ep_pickup_drive(k) / want - 1.0) > 1e-4) drive_bad++;
     }
     CHECK(drive_bad == 0, "pickup drive off its law at %d keys", drive_bad);
     CHECK(ep_pickup_drive(0) > ep_pickup_drive(36)
           && ep_pickup_drive(36) > ep_pickup_drive(72),
           "the bass must reach its bark at a lower dynamic than the treble");
+
+    /* The anchor: the hardest blow on the lowest tine sweeps exactly half
+     * a gap. Mode 1 at velocity 127 has amplitude exactly 1.0 by the sec 7
+     * reference, so the swing in gap units is the drive itself. */
+    CHECK(fabs((double)ep_pickup_drive(0) - 0.5) < 1e-5,
+          "E1 at full strike must sweep half a gap, got %.6f",
+          (double)ep_pickup_drive(0));
+    int over = 0;
+    for (int k = 0; k < EP_KEYS; k++)
+        if (ep_pickup_drive(k) > ep_pickup_drive(0)) over++;
+    CHECK(over == 0,
+          "the uncapped law must peak at the bottom of the compass, %d above",
+          over);
+
+    /* And the bark is graded rather than global: at full strike the tine
+     * crosses dead centre at the bottom of the compass and never does at
+     * the top. That is the invariant the drive law exists to produce, and
+     * it holds for any slope in the section 6.1 bracket — the earlier form
+     * of this check pinned the crossing to the lower middle, which encoded
+     * one slope setting rather than the property, and failed the moment
+     * the ballot moved it. Where it ends is a consequence of the pin and
+     * is reported in sec 6.1, not asserted here. */
+    CHECK(ep_pickup_drive(0) > EP_PICKUP_OFFSET,
+          "the lowest tine must cross dead centre at full strike");
+    CHECK(ep_pickup_drive(EP_KEYS - 1) < EP_PICKUP_OFFSET,
+          "the highest tine must never cross it");
+    int cross_hi = -1;
+    for (int k = 0; k < EP_KEYS; k++)
+        if (ep_pickup_drive(k) > EP_PICKUP_OFFSET) cross_hi = k;
+    CHECK(cross_hi > 0 && cross_hi < EP_KEYS - 1,
+          "crossing must end inside the compass, ends at key %d", cross_hi);
+
+    /* sec 6: the f32 kernel must reproduce the transcendental's harmonics,
+     * not merely its values, across the whole swing range the compass uses.
+     * This is the claim the EP1 exhibit used to carry, and it belongs here
+     * instead: the exhibit measures a rendered note, where the contact
+     * transient lands in the same bins and moves the ratio either way. */
+    {
+        double gE4 = ep_pickup_drive(36), worst = 0.0;
+        const double LV[7] = { 0.0064245, 0.0560862, 0.1685609, 0.3549462,
+                               0.5375621, 0.7795366, 1.0 };
+        for (int i = 0; i < 7; i++) {
+            double sw = gE4 * LV[i];
+            double fr1 = 0, fi1 = 0, fr2 = 0, fi2 = 0;
+            double dr1 = 0, di1 = 0, dr2 = 0, di2 = 0;
+            for (int n = 0; n < 4096; n++) {
+                double th = TAU_D * n / 4096.0, u = EP_PICKUP_OFFSET + sw * sin(th);
+                double yf = (double)(ep_field(EP_PICKUP_OFFSET) - ep_field((float)u));
+                double yd = pow(1.0 + (double)EP_PICKUP_OFFSET * EP_PICKUP_OFFSET, -1.5)
+                          - pow(1.0 + u * u, -1.5);
+                fr1 += yf * cos(th); fi1 += yf * sin(th);
+                fr2 += yf * cos(2 * th); fi2 += yf * sin(2 * th);
+                dr1 += yd * cos(th); di1 += yd * sin(th);
+                dr2 += yd * cos(2 * th); di2 += yd * sin(2 * th);
+            }
+            double rf = sqrt(fr2 * fr2 + fi2 * fi2) / sqrt(fr1 * fr1 + fi1 * fi1);
+            double rd = sqrt(dr2 * dr2 + di2 * di2) / sqrt(dr1 * dr1 + di1 * di1);
+            double e = fabs(20 * log10(rf / rd));
+            if (e > worst) worst = e;
+        }
+        CHECK(worst < 0.5,
+              "f32 field must track the transcendental's H2/H1, worst %.2f dB",
+              worst);
+    }
+
+    /* sec 6, and the reason this kernel replaced the saturator: a note's
+     * envelope must track its tine. Drive the field at the bass operating
+     * point with a decaying sine and check the output decays with it —
+     * against the old saturator's bass, which held its level while the
+     * tine fell 12 dB behind it. */
+    double lo_out = 0.0, hi_out = 0.0;
+    for (int i = 0; i < 8192; i++) {
+        double env_a = 1.0, env_b = 0.25;   /* 12 dB apart */
+        double s = sin(TAU_D * f * i / EP_RATE);
+        double ya = (double)ep_pickup((float)(env_a * s), ep_pickup_drive(0),
+                                      EP_PICKUP_OFFSET, ref0);
+        double yb = (double)ep_pickup((float)(env_b * s), ep_pickup_drive(0),
+                                      EP_PICKUP_OFFSET, ref0);
+        hi_out += ya * ya;
+        lo_out += yb * yb;
+    }
+    double tracked = 10 * log10(hi_out / lo_out);
+    CHECK(tracked > 9.0,
+          "a 12 dB fall at the tine must reach the bus, only %.1f dB did",
+          tracked);
 
     /* The mean-square term is what keeps a decaying voice from dragging a
      * DC thump behind it: the bus must stay centred while a note dies. */

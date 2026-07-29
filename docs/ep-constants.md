@@ -547,90 +547,191 @@ Two sourced facts fix its shape:
   appears only behind the pickup [EP-DAFx17 §4.2, Fig 3]. The timbre change
   from displacing the rest position is shown directly [EP-DAFx17 Fig 7a/7b].
 
-So the bell-to-bark transition is a pickup effect driven by excursion, not a
-new mechanical mode — which is exactly the M7 stage with a new operating
-point, as `piano-backlog.md` predicted.
+**Kernel: the field the tine sweeps through, taken from the geometry.**
 
-**Kernel: a tine sitting off-centre in a field that saturates.**
+    Psi(u) = (1 + u^2)^(-3/2)
+    y      = Psi(u0) - Psi(u0 + g * x)
 
-    y = tw_sat(g * x + x0) - tw_sat(x0)
+`u` is the tine tip's lateral offset from the pole axis **in units of the
+pickup's own gap**, `u0` the rest offset (6.1), `g` the swing per unit
+strike (6.1), and `x` the tine displacement the bank produces.
 
-with `x0 = EP_PICKUP_OFFSET = 0.45` the off-centre offset [decision, from
-the manual's own timbre adjustment] and `g` the drive of section 6.1. It is
-bounded and monotone by construction, because `tw_sat` is both and the
-input map is affine.
+The shape is derived, not chosen. [EP-DAFx17 §5.4] reduces the pickup to
+Faraday's law over a field it builds from magnetic point charges, giving
+`Bz = B0 * dz / |r|^3` [eq 6], and the tine tip sweeps that field laterally,
+`x' = x_hat * sin(2 pi f t)` [eq 8]. For a point charge at fixed gap `d` and
+lateral offset `s`, the linked flux goes as `d / (s^2 + d^2)^(3/2)`, which
+in gap units is the expression above. One parameter, and it is a geometry.
 
-**This replaces the organ's M7 cubic form, and the reason is worth
-recording.** EP0 through EP7 used the cubic series of
-`(1 - exp(-alpha x))/alpha`, the shape [AS16] gives and the organ uses. The
-by-ear pass called the result "vibraphone", and measurement said why: a
-three-term series generates a second and a third harmonic **and nothing at
-all above them**. The spectrum ran `f, 2f, 3f`, then silence until the
-clang at 6.27f — an isolated high partial with a hole under it, which is
-exactly what a tuned bar instrument is.
+**Three consequences, and they are the reason this replaced the saturator.**
 
-The series was also simply wrong at this instrument's excursions. The organ
-could truncate at three terms because its alpha is 0.3; here the drive
-reaches the bass end of the compass and the series deviates from the law it
-approximates by **69 %**, dropping the second harmonic 4.4 dB and losing
-the fourth through ninth entirely — the very harmonics [AT20] counted on a
-hard blow.
+*It is a bell, not a saturator.* The flux is maximal when the tine is in
+front of the pole and falls away on both sides. It is even in `u`, so at
+`u0 = 0` it passes **no fundamental at all** — which is what makes the
+patent's off-centre claim a mechanism rather than a remark. The rest offset
+is the fundamental-to-overtone control the patent says it is.
 
-The exponential law itself is no fix: it is a local expansion for small
-displacement and it grows without bound on one polarity, which is not what
-a pickup does. A field that saturates is, and the saturating form is also
-the picture [EP-P61] draws directly — the chisel edge deliberately
-off-centre relative to the tine at rest.
+*It has no rail.* It falls as `u^-3` and never flattens. This is what the
+previous kernel got wrong and it was audible: `tw_sat` is the organ's power
+stage saturator, and tonewheel.h says so in as many words — the odd kernel
+is kept for "the rotary's 40 W ceiling, where a power stage wants a hard
+bound". A power amplifier has a rail. **A magnetic field does not.** The
+borrow carried the rail across, and at the pinned drive the bass sat on it:
+at E1 and velocity 100 the operating point reached `u = 3.18` against a
+curve clamped flat at `|u| = 3`, and at velocity 127 the whole bottom
+twenty notes were clipped outright.
 
-Measured on a rendered note at velocity 127:
+What that cost is measurable, and it is the envelope. Section 4 pins E1 at
+`t60 = 17 s`, which is 3.53 dB/s. Rendered through the railed saturator the
+fundamental fell **0.77 dB/s** between 0.3 s and 1 s — a fifth of its own
+pinned rate — and the harmonic ladder did not move either: `h3` sat within
+1.4 dB of itself for the first 1.5 s. A note that holds level and holds
+timbre for a second is a struck bar with a resonator under it, not a tine,
+and it is the direct contradiction of the founding patent's "an initial
+percussive effect followed by a relatively rapid decay and then by a
+limited dwell" [EP-P61]. The compression was graded across the compass,
+worst at the bottom: 22 % of the pinned rate at E1 against 84 % at E4.
 
-    MIDI    g     h2     h3     h4     h5     h6   clang
-      40  3.20  -17.2  -13.5  -22.6  -25.1  -30.2  -25.4
-      64  1.60  -15.7  -22.3  -30.5  -45.9  -47.4  -24.8
-      88  0.80  -19.3  -35.3  -46.4  -77.1  -75.8  -26.1
+*The two-stage envelope now falls out, as section 4 said it should.* With
+the field in place the same note decays at **4.32 dB/s** over its first
+0.3 s, then settles to 2.79 and 3.28 and 3.48 against the pinned 3.53 —
+percussive, then rapid, then dwell. Section 4 bet that the patent's shape
+would emerge from three modes plus a level-dependent pickup rather than
+needing an explicit envelope stage. Against the saturator that bet failed
+in the bass; against the field it holds, and open item 8 closes with it.
 
-The ladder is continuous now, dense in the bass and thinning toward the
-treble, and the clang no longer stands alone over a hole.
+    E1, velocity 100, dry, decay of the f1 band in dB/s (pinned 3.53)
+
+    window        0.05-0.3   0.3-1    1-3    3-6
+    saturator         2.20    0.77   1.96   3.22
+    field             4.32    2.79   3.28   3.48
+
+Measured on a rendered note at velocity 127, the ladder the field builds:
+
+    MIDI    g      h2     h3     h4     h5    clang
+      28  0.500  -13.8  -18.8  -28.1  -24.5  -20.6
+      64  0.297  -19.1  -28.9  -62.3  -60.9  -19.2
+      88  0.210  -22.9  -35.2  -67.9  -74.6  -19.1
+
+Even-dominant and continuous, thinning toward the treble, and the clang no
+longer stands over a hole. The second harmonic is the octave the off-centre
+pickup makes, which is the instrument's growl; the old kernel's ladder ran
+odd-dominant because a symmetric saturator clipped on both halves.
+
+### 6.1 The two setup adjustments
+
+The manual keeps **two** adjustments here and they are independent. The
+model now carries both, in the same units the technician works in, and
+neither is derivable — the manual says to set them by ear.
+
+**TIMBRE — the rest offset `u0`.** "Manipulating the Timbre Adjustment
+Screw until the end of the Tine rests on a plane slightly above dead center
+of the Pickup ... Let your ear guide you" [EP-SM 4-7].
+
+- **`EP_PICKUP_OFFSET = 0.35`** [decision, **closed by ear 2026-07-28**].
+  Chosen off the four-way ballot in
+  `renders/ep73-ballots-field-20260728/`; the losing settings were 0.25,
+  0.30 and 0.40. Nothing but this constant distinguishes them, so there
+  is no dead code to remove the way decision D5 left four restrike laws
+  behind — the ballot renders stay as the evidence for the pin.
+
+What the field does supply is a map, and one value inside it to avoid.
+`Psi''` vanishes at exactly `u = 1/2`, because the maximum of `|Psi'|` is
+the field's inflection point, and second-harmonic generation vanishes with
+it. That offset was pinned here briefly for exactly the wrong reason — it
+maximises output, which is the *volume* adjustment's job, not timbre's —
+and the EP1 exhibit caught it immediately: H3 came out above H2 and the
+voice went hollow. Below the null the ladder is even-dominant and densifies
+as the offset shrinks; above it, it is even-dominant again but the
+fundamental is falling away. At a swing of 0.3 gaps:
+
+    u0     h1 (dB)   h2-h1   h3-h1
+    0.20    -16.99    -9.7   -26.3
+    0.25    -15.43   -12.7   -26.9
+    0.30    -14.31   -15.7   -27.6
+    0.35    -13.51   -18.9   -28.5       <- pinned
+    0.40    -12.95   -22.7   -29.5
+    0.50    -12.42   -37.9   -32.0       <- the null: odd-dominant, hollow
+    0.65    -12.65   -26.7   -37.3
+
+0.35 is "slightly above dead centre", clear of the null, and leaves the
+second harmonic about 14 dB over the third at E1 and 10 dB over it at E4.
+
+**VOLUME — the swing per unit strike `g`.** "Slide Pickup Arms in or out to
+establish a gap between Pickup and Tine of between 1/16" (1.588 mm) and
+1/8" (3.175 mm) ... the smaller the gap, the greater the volume of sound.
+More important — the more pronounced the DYNAMIC RESPONSE" [EP-SM 4-8].
+
+    g(key) = EP_PICKUP_DRIVE_REF * (f_ref / f(key))^EP_PICKUP_SLOPE
+
+- **`EP_PICKUP_DRIVE_REF = 2^(-11/8) = 0.38555271`** at `f_ref = 329.63 Hz`
+  (E4) [decision, by ear]. Pinned so the hardest blow on the lowest tine
+  sweeps exactly half a gap: mode 1 at velocity 127 has amplitude exactly
+  1.0 by the section 7 reference, E1 sits three octaves under E4 and the
+  octave is an exact power of two, so `g(E1) = 1/2` closes as
+  `2^-1 * 2^(-3/8)` at the pinned slope. The anchor is held fixed when the
+  slope moves, which is what made the slope ballot decide one thing. The gap is a number a technician sets and the swing it
+  is measured against has no figure in any source here, so their ratio is a
+  decision; what is not a decision is what it costs, and this pin leaves E1
+  at 79 % of its pinned decay rate against the saturator's 22 %.
+- **`EP_PICKUP_SLOPE = 1/8`** [decision, **closed by ear 2026-07-29**]. Momentum alone gives 1, since
+  swing goes as `1/f` for a given blow. The gap is not constant across the
+  compass — 1/16" to 1/8" generally, and 0.020" (0.508 mm) "can be
+  accommodated in the middle and upper ranges" on instruments built since
+  March 1972 [EP-SM 4-8] — and a wider bass gap divides the bass swing
+  down, so the exponent sits under 1. **That direction is sourced; the
+  magnitude is not.** The manual names two zones without saying how far
+  apart they sit, and the implied exponent runs from 0.12 to 0.45 across
+  plausible spans, so it was settled on the ballot of 2026-07-28
+  (`renders/ep73-ballots-slope-20260728/`, four settings, bass anchor held
+  fixed and every take rms-matched). 1/8 is at the shallow end of the
+  bracket, and is a ratio of eighths, so `r^(1/8)` is three nested square
+  roots and the core still needs no libm — the same move section 5.2 made
+  for `kappa`. It keeps the growl nearly even across the compass: the
+  second harmonic runs -13.8 dB at E1 to -19.4 dB at E7 at full strike,
+  against the 21 dB spread the steepest ballot setting gave.
+
+**No cap.** The old kernel carried `PICKUP_DRIVE_MAX = 3.5`, described here
+as "a stated limit, not a derived one", to keep a saturator plausible. It
+had a side effect nobody had looked at: it pinned the bottom nine notes,
+E1 to C2, to one identical drive value, so the model had no per-note
+gradation at all down there. The field needs no such limit — the law rises
+toward the bass and the compass ends, so `g(E1)` is its maximum by
+construction and the strike level is bounded with it. The constant is
+deleted rather than re-tuned.
+
+The bark is where the tine crosses dead centre, and that is now a geometric
+statement rather than a threshold: `g(key) > u0`. At the pinned slope it
+holds from E1 up to **F5 (MIDI 77), fifty of the seventy-three notes** — so
+at 1/8 the growl is not a bass phenomenon but a compass-wide one that
+merely thins toward the top. At the 1/4 setting this section carried until
+2026-07-29 it stopped at E3, twenty-five notes. The bark's reach is a
+consequence of the slope pin and moves with it; what does not move, and is
+what the test asserts, is that the lowest tine crosses at full strike and
+the highest never does.
 
 ### 6.2 The coupling capacitor
 
-A saturating asymmetric curve leaves a level-dependent DC behind it. The
-old cubic form had a closed expression for that offset, which is why
-earlier sections subtract a mean square; this one does not, so the DC is
-filtered off where the instrument filters it off — a one-pole highpass at
-**10 Hz**, once, on the summed bus rather than per voice, because the
-coupling capacitor sits at the preamplifier's input and there is one of it.
+A tine sitting off-centre in the field leaves a level-dependent DC behind
+it: the field is even about dead centre and the rest offset is not. That DC
+has no closed expression to subtract, so it is filtered off where the
+instrument filters it off — a one-pole highpass at **10 Hz**, once, on the
+summed bus rather than per voice, because the coupling capacitor sits at
+the preamplifier's input and there is one of it.
 
 It costs E1 about a quarter of a dB. It also means a silenced instrument
 reaches exact zero only after the capacitor discharges, which the same
 epsilon snap every envelope here uses then completes.
 
-### 6.1 Where the bark sits, per register
+### 6.3 What the kernel costs to compute
 
-The curve above is not one number for the whole instrument. What drives it
-is how far the tine swings against the pickup's field, and the gap that
-field lives in is set the same way all the way up — 1/16 to 1/8 inch, and
-0.020 inch in the middle and upper ranges on later instruments
-[EP-SM 4-8]. Swing for a given blow goes as `1/f`, so a bass tine covers
-far more of the field than a treble one does and reaches the nonlinear part
-of it at a much lower dynamic.
-
-    g(key) = EP_PICKUP_DRIVE_REF * (f_ref / f(key))^EP_PICKUP_SLOPE, cap 3.5
-
-- **`EP_PICKUP_DRIVE_REF = 1.6`** at `f_ref = 329.63 Hz` (E4, mid compass)
-  [decision, section 6].
-- **`EP_PICKUP_SLOPE = 0.5`** [FOLK]. Momentum alone would give 1, since
-  swing goes as `1/f` exactly; the instrument is voiced for evenness across
-  the compass — pickup gaps are set per note by ear [EP-SM 4-8] — which
-  pulls it back. How far is EP3's to settle, and the slope is the number to
-  turn if the bass growls too much or the treble stays too clean.
-- The cap exists because the curve stays monotone at any drive but stops
-  being a plausible pickup somewhere; 3.5 is a stated limit, not a derived
-  one. It also holds the waveform asymmetry to about 2.5:1 across the
-  compass, against the 2.4 to 3.9 the cubic form reached.
-
-The bark is a bass-and-middle phenomenon, which is where the instrument's
-growl lives.
+`(1 + u^2)^(-3/2)` is an inverse square root cubed, and the core has no
+libm. The seed is exponent halving and negation (`0x5f400000 - (i >> 1)`),
+worst relative error 8.9 % over the range `u` takes, and three Newton steps
+bring that to 7.3e-8 — f32-exact. `y = 1 + u^2 >= 1` always, so there is no
+zero, denormal or negative case to guard. The test checks the whole range
+against the transcendental with libm, so the kernel is validated rather
+than trusted, exactly as the mode-shape tables are.
 
 ## 16. The second polarisation
 
@@ -1050,12 +1151,12 @@ defect in this document.
 | 3 | Contact times behind the corners (4.0..1.1 ms) | [FOLK] | EP3 |
 | 4 | Contact-time ratio 3.4:1 behind `κ = 1/4`; the 9.0..1.95 ms ladder | [FOLK] | closed by ear at EP3; revisit on a clean reference |
 | 5 | `γ = 1.042` velocity-to-level exponent | **closed at EP3** | — |
-| 6 | `EP_PICKUP_ALPHA = 1.1` and the H2 ladder | [decision] | EP3 |
+| 6 | Pickup kernel: the field of sec 6, `(1+u^2)^(-3/2)` | **closed: derived from [EP-DAFx17] eq 6+8** | — |
 | 6a | Contact-transient level, decay and bandwidth (sec 5.5) | [FOLK] | EP3 |
-| 6b | `EP_PICKUP_SLOPE = 0.5`, how fast the bark moves toward the bass | [FOLK] | EP3 |
-| 6c | `EP_PICKUP_OFFSET = 0.45`, how far off centre the tine sits | [decision] | EP3 |
+| 6b | `EP_PICKUP_SLOPE = 1/8`; direction sourced [EP-SM 4-8], magnitude not | **closed by ear 2026-07-29** | — |
+| 6c | `EP_PICKUP_OFFSET = 0.35` — the manual's TIMBRE adjustment | **closed by ear 2026-07-28** | — |
 | 7 | Damper t60 anchors (0.35 s / 0.0887 s) | [FOLK] | EP3 |
-| 8 | Whether an explicit two-rate mode-1 envelope is needed | open | EP3 (EP1's exhibit did not force one) |
+| 8 | Whether an explicit two-rate mode-1 envelope is needed | **closed: no** | the field produces it — sec 6 |
 | 9 | Mode-shape derivation of the strike weights | **closed at EP3** | — |
 | 10 | Bank layout (D4) | closed at EP1: active-gated | — |
 | 11 | SBC-class measurement point for D4 | open | operator |
@@ -1065,3 +1166,5 @@ defect in this document.
 | 15 | Drive kernel choice, triode curve vs odd kernel | **closed at EP5: odd** | — |
 | 16 | Cabinet stage (D7) | **closed at EP6: bandwidth in, reflections declined** | — |
 | 17 | Reference-recording set for the by-ear pass | open | operator, before EP3 |
+| 18 | `EP_PICKUP_DRIVE_REF = 2^(-11/8)` — the manual's VOLUME adjustment | [decision] | operator |
+| 19 | `PICKUP_DRIVE_MAX` | **deleted at the field kernel** | — |

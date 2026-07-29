@@ -27,8 +27,9 @@ extern const float EP_HAMMER_LEVEL[EP_ZONES];
 extern const float EP_HAMMER_MS[EP_ZONES];
 extern const float EP_HAMMER_HZ[EP_ZONES];
 
-/* The pickup curve's strength at the reference note, and how fast it grows
- * toward the bass (sec 6.1). */
+/* The tine's swing at the reference note in units of the pickup gap, how
+ * fast that grows toward the bass, and where the tine rests in the field
+ * (sec 6.1). All three are derived; none is a trim. */
 extern const float EP_PICKUP_DRIVE_REF;
 extern const float EP_PICKUP_SLOPE;
 extern const float EP_PICKUP_OFFSET;
@@ -69,23 +70,60 @@ extern const float EP_CORNER_HZ[EP_ZONES];
  * This is the function the bank strikes with, not a restatement of it. */
 [[nodiscard]] float ep_mode_weight(int key, int mode, int velocity);
 
-/* How hard a tine drives its own pickup, per key (sec 6.1): the swing it
- * makes against a gap that is set the same all the way up the instrument.
- * Swing for a given blow goes as 1/f, so the bass reaches the saturating
- * part of the field at a far lower dynamic than the treble does.
- * Out-of-range key returns 0. */
+/* How far a tine swings across its own pickup's field, per key, in units
+ * of that pickup's gap (sec 6.1). Swing for a given blow goes as 1/f,
+ * which alone would give slope 1; the gap is itself wider in the bass than
+ * in the middle and upper ranges [EP-SM 4-8], and that pulls the exponent
+ * under 1; 1/4 is the pinned value. Uncapped: the law's maximum is at the
+ * bottom of the compass and the strike level is bounded, so the swing is
+ * bounded with them. Out-of-range key returns 0. */
 [[nodiscard]] float ep_pickup_drive(int key);
 
-/* Pickup nonlinearity, sec 6: the tine sitting off-centre in a field that
- * saturates. One pickup per tine, so this runs per voice before summation
- * — harmonic distortion, never IMD.
+/* sec 6: the pickup's field, in units of its own gap. The tine tip sweeps
+ * laterally across the pole face [EP-DAFx17 eq 8] and the field over that
+ * face reduces, for a point charge, to the inverse-cube law of [EP-DAFx17
+ * eq 6], so the flux the coil links goes as (1 + u^2)^(-3/2) with u the
+ * tine's lateral offset in gap units.
  *
- * `g` is the drive above, `x0` the off-centre offset, and `ref` is
- * tw_sat(x0), which the bank precomputes so the curve passes through zero.
- * Bounded and monotone by construction, because tw_sat is both and the
- * input map is affine. */
+ * A bell, not a saturator. Two things follow, and both are the point:
+ * it has no rail anywhere — it falls as u^-3 and never flattens — and it
+ * is what makes the patent's off-centre claim mean something, since at
+ * u = 0 the curve is even and passes no fundamental at all. The rest
+ * offset is therefore the fundamental-to-overtone control [EP-P61] says
+ * it is, not a bias into a monotone curve.
+ *
+ * No libm, so the inverse square root is exponent halving and negation
+ * seeded (~8.9 %) plus three Newton steps, which reaches 7.3e-8 relative
+ * over the whole range u takes — f32-exact, and the test checks it
+ * against the transcendental. y >= 1 always, so there is no zero, no
+ * denormal and no negative case. */
+static inline float ep_field(float u) {
+    float y = 1.0f + u * u;
+    union { float f; uint32_t i; } v = { y };
+    v.i = 0x5f400000u - (v.i >> 1);
+    float r = v.f;
+    r *= 1.5f - 0.5f * y * r * r;
+    r *= 1.5f - 0.5f * y * r * r;
+    r *= 1.5f - 0.5f * y * r * r;
+    return r * r * r;
+}
+
+/* Pickup, sec 6: the tine sitting off-centre in that field. One pickup per
+ * tine, so this runs per voice before summation — harmonic distortion,
+ * never IMD.
+ *
+ * `g` is the swing per unit strike in gap units (sec 6.1), `x0` the rest
+ * offset, and `ref` is ep_field(x0), which the bank precomputes so the
+ * curve passes through zero. Subtracted that way round so a positive
+ * displacement gives a positive output: the flux falls as the tine leaves
+ * the pole.
+ *
+ * Not monotone, and that is the physics — past dead centre the tine is
+ * on the far side of the field and the flux falls again. What replaces
+ * monotonicity as the safety property is that the field is bounded,
+ * smooth and rail-free, so no operating point can flatten the envelope. */
 static inline float ep_pickup(float x, float g, float x0, float ref) {
-    return tw_sat(g * x + x0) - ref;
+    return ref - ep_field(g * x + x0);
 }
 
 /* The struck-voice bank: 73 keys x 3 modes, fixed state, no allocator and

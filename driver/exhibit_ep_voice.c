@@ -63,6 +63,24 @@ static void render_note(float *dst, long n, int midi_note, int velocity) {
     for (long i = 0; i < n; i++) dst[i] = ep_bank_tick(&b);
 }
 
+/* The k-th harmonic of the pinned pickup, for a tine swinging `s` gaps
+ * about the rest offset. Section 6's field is even about dead centre and
+ * the offset is not, so there is no closed form; this is the exact
+ * quadrature the model's own kernel is checked against. */
+static double field_harmonic(double s, int k) {
+    const int N = 4096;
+    double ref = pow(1.0 + (double)EP_PICKUP_OFFSET * EP_PICKUP_OFFSET, -1.5);
+    double re = 0.0, im = 0.0;
+    for (int i = 0; i < N; i++) {
+        double th = TAU * i / N;
+        double u = EP_PICKUP_OFFSET + s * sin(th);
+        double y = ref - pow(1.0 + u * u, -1.5);
+        re += y * cos(k * th);
+        im += y * sin(k * th);
+    }
+    return 2.0 * sqrt(re * re + im * im) / N;
+}
+
 /* --- A: the velocity ladder ------------------------------------------ */
 
 static int exhibit_velocity(void) {
@@ -76,9 +94,21 @@ static int exhibit_velocity(void) {
     printf("   vel    peak     H2/H1 dB           H3/H1 dB      clang/H1 dB\n");
     printf("                 meas   pinned      meas   pinned    meas  pinned\n");
 
+    /* The H2 err column is reported, not asserted, and the reason is that
+     * the contact transient lands in *both* bins and which one it favours
+     * changes with velocity. Its corner falls as the fourth root of level
+     * (sec 5.5), so at a soft blow it sits below f1 and inflates the
+     * denominator, pushing the measured ratio *under* the prediction; at a
+     * hard blow it sits above f1 and inflates the numerator instead. An
+     * earlier form of this check assumed it could only ever add to the
+     * numerator and failed the moment the slope ballot moved the operating
+     * point. The kernel-versus-transcendental claim it was really trying to
+     * make now lives in test.c, where there is no burst in the way.
+     * What is asserted here is what a rendered note can honestly show:
+     * that velocity moves timbre monotonically and across a wide range. */
     double first_h2 = 0.0, last_h2 = 0.0;
-    int monotone = 1;
-    double prev = -1e9;
+    int monotone = 1, judged = 0;
+    double prev = -1e9, worst_deficit = 0.0, worst_excess = 0.0;
 
     for (int i = 0; i < 7; i++) {
         int v = VELS[i];
@@ -93,32 +123,39 @@ static int exhibit_velocity(void) {
         double h3 = mag_at(note, SPEC_N, 3.0 * f1);
         double cl = mag_at(note, SPEC_N, EP_MODE_RATIO[1] * f1);
 
-        /* Pinned prediction, ep-constants.md sections 5 and 6. The
-         * fundamental carries the cubic term's own contribution, which is
-         * why the ratios are not simply alpha*A/4. */
-        double alpha = ep_pickup_drive(key); /* per register since EP3 */
+        /* Pinned prediction, ep-constants.md sections 5 and 6. The field
+         * has no closed Fourier form, so the prediction is the exact
+         * integral of the pinned kernel over one cycle of a sine at the
+         * strike's own amplitude — computed here, where libm exists, and
+         * compared against what the bank actually produced. */
+        double g = ep_pickup_drive(key);
         double a = pow((double)v / 127.0, 1.042) * ep_mode_weight(key, 0, v);
-        double aa = alpha * alpha * a * a;
-        double p_h2 = (alpha * a / 4.0) / (1.0 + aa / 8.0);
-        double p_h3 = (aa / 24.0) / (1.0 + aa / 8.0);
+        double p_h1 = field_harmonic(g * a, 1);
+        double p_h2 = field_harmonic(g * a, 2) / p_h1;
+        double p_h3 = field_harmonic(g * a, 3) / p_h1;
         double p_cl = ep_mode_weight(key, 1, v) / ep_mode_weight(key, 0, v);
 
-        printf("   %3d  %6.3f  %7.2f %7.2f   %8.2f %7.2f  %6.2f %6.2f\n",
+        double err = db(h2 / h1) - db(p_h2);
+        printf("   %3d  %6.3f  %7.2f %7.2f   %8.2f %7.2f  %6.2f %6.2f  %+6.2f\n",
                v, peak, db(h2 / h1), db(p_h2), db(h3 / h1), db(p_h3),
-               db(cl / h1), db(p_cl));
+               db(cl / h1), db(p_cl), err);
 
-        if (i == 0) first_h2 = db(h2 / h1);
+        if (err < -worst_deficit) worst_deficit = -err;
+        if (err > worst_excess) worst_excess = err;
+        if (judged++ == 0) first_h2 = db(h2 / h1);
         last_h2 = db(h2 / h1);
         if (db(h2 / h1) <= prev) monotone = 0;
         prev = db(h2 / h1);
     }
 
     double swing = last_h2 - first_h2;
-    printf("\n   second-harmonic swing pp -> ff: %.1f dB, monotone: %s\n",
-           swing, monotone ? "yes" : "NO");
-    printf("   (measured ratios sit below the pinned ones by design: the\n"
-           "    window covers a decaying note, and the harmonics decay\n"
-           "    faster than the fundamental that carries them)\n");
+    printf("\n   second-harmonic swing pp -> ff: %.1f dB, monotone: %s\n"
+           "   spread against the pinned quadrature: %.2f dB under to"
+           " %.2f dB over\n",
+           swing, monotone ? "yes" : "NO", worst_deficit, worst_excess);
+    printf("   (`pinned` is the field's exact quadrature at the strike's own\n"
+           "    swing; the err column is the contact transient moving the\n"
+           "    ratio, either way, and test.c asserts the kernel itself)\n");
 
     /* As played: seven strikes, one per 1.5 s. */
     long n = 0;
