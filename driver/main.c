@@ -22,27 +22,23 @@
  * Without -2 the driver stays channel-agnostic, byte-for-byte as before.
  */
 #define _DEFAULT_SOURCE 1
-#include <alsa/asoundlib.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include "../src/tonewheel.h"
-
-#define MAX_PERIOD 4096
+#include "host_parse.h"
+#include "live_io.h"
+#include "midi_map.h"
 
 static volatile sig_atomic_t stop_flag;
 static void on_signal(int sig) { (void)sig; stop_flag = 1; }
 
 static tw_instrument inst; /* ~100 KB of fixed state; static by design */
 
-static struct {
-    unsigned long notes, depths, ccs, xruns;
-} stats;
-
-/* tw_organ_set_percussion takes all four tablets at once; CCs toggle one
- * at a time, so the driver keeps its own shadow of the other three.
- * Defaults mirror tw_organ_init's: off, 2nd, fast, NORMAL. */
-static struct { bool on, third, slow, normal; } perc_state = { false, false, false, true };
+static unsigned long xruns;
+static organ_midi_map midi_map;
 
 /* -2: the two-manual touch-surface protocol (channel-aware); see the
  * header comment. Off by default: channel-agnostic, as always. */
@@ -65,92 +61,9 @@ static bool accept_msg(const tw_midi_msg *m) {
     }
 }
 
-static void apply_percussion_cc(void) {
-    tw_organ_set_percussion(&inst.organ, perc_state.on, perc_state.third,
-                            perc_state.slow, perc_state.normal);
-}
-
 static void apply_msg(const tw_midi_msg *m) {
     if (!accept_msg(m)) return;
-    switch (m->status & 0xF0) {
-    case 0x90:
-        tw_organ_note(&inst.organ, m->d1, true, m->d2);
-        stats.notes++;
-        break;
-    case 0x80:
-        tw_organ_note(&inst.organ, m->d1, false, m->d2);
-        stats.notes++;
-        break;
-    case 0xA0:
-        tw_organ_note_depth(&inst.organ, m->d1, m->d2);
-        stats.depths++;
-        break;
-    case 0xB0:
-        stats.ccs++;
-        if (m->d1 == 11) tw_organ_set_swell(&inst.organ, (float)m->d2 / 127.0f);
-        else if (m->d1 >= 70 && m->d1 <= 78)
-            tw_organ_set_drawbar(&inst.organ, m->d1 - 70, (m->d2 * 8 + 63) / 127);
-        else if (m->d1 == 120 || m->d1 == 123) tw_organ_panic(&inst.organ);
-        else if (m->d1 == 80) { perc_state.on = m->d2 >= 64; apply_percussion_cc(); }
-        else if (m->d1 == 81) { perc_state.third = m->d2 >= 64; apply_percussion_cc(); }
-        else if (m->d1 == 82) { perc_state.slow = m->d2 >= 64; apply_percussion_cc(); }
-        else if (m->d1 == 83) { perc_state.normal = m->d2 >= 64; apply_percussion_cc(); }
-        else if (m->d1 == 84) tw_organ_set_vibrato(&inst.organ, m->d2 / 19);
-        else if (m->d1 == 85) tw_instrument_set_drive(&inst, (float)m->d2 / 127.0f);
-        else if (m->d1 == 86) tw_rotary_set_mode(&inst.rotary, m->d2 / 32);
-        else if (m->d1 == 87)
-            tw_rotary_set_mode(&inst.rotary,
-                               m->d2 >= 64 ? TW_ROT_TREMOLO : TW_ROT_CHORALE);
-        else if (m->d1 == 88) tw_rotary_set_balance(&inst.rotary, (float)m->d2 / 127.0f);
-        else if (m->d1 == 89) tw_rotary_set_width(&inst.rotary, (float)m->d2 / 127.0f);
-        else if (m->d1 == 90) tw_rotary_set_drive(&inst.rotary, (float)m->d2 / 127.0f);
-        else stats.ccs--;
-        break;
-    default:
-        break;
-    }
-}
-
-static int open_pcm(snd_pcm_t **pcm, const char *dev, unsigned rate,
-                    snd_pcm_uframes_t *period, unsigned nperiods) {
-    int err = snd_pcm_open(pcm, dev, SND_PCM_STREAM_PLAYBACK, 0);
-    if (err < 0) {
-        fprintf(stderr, "pcm open %s: %s\n", dev, snd_strerror(err));
-        if (err == -EBUSY)
-            fprintf(stderr, "hint: another client holds the device"
-                            " (PipeWire?); release the card's node first\n");
-        return err;
-    }
-    snd_pcm_hw_params_t *hw;
-    snd_pcm_hw_params_alloca(&hw);
-    snd_pcm_hw_params_any(*pcm, hw);
-    if ((err = snd_pcm_hw_params_set_access(*pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED)) < 0
-        || (err = snd_pcm_hw_params_set_format(*pcm, hw, SND_PCM_FORMAT_S32_LE)) < 0
-        || (err = snd_pcm_hw_params_set_channels(*pcm, hw, 2)) < 0
-        || (err = snd_pcm_hw_params_set_rate(*pcm, hw, rate, 0)) < 0) {
-        fprintf(stderr, "pcm hw params (S32_LE/2ch/%u): %s\n", rate, snd_strerror(err));
-        return err;
-    }
-    int dir = 0;
-    if ((err = snd_pcm_hw_params_set_period_size_near(*pcm, hw, period, &dir)) < 0)
-        return err;
-    snd_pcm_uframes_t buffer = *period * nperiods;
-    if ((err = snd_pcm_hw_params_set_buffer_size_near(*pcm, hw, &buffer)) < 0)
-        return err;
-    if ((err = snd_pcm_hw_params(*pcm, hw)) < 0) {
-        fprintf(stderr, "pcm hw commit: %s\n", snd_strerror(err));
-        return err;
-    }
-    snd_pcm_sw_params_t *sw;
-    snd_pcm_sw_params_alloca(&sw);
-    snd_pcm_sw_params_current(*pcm, sw);
-    snd_pcm_sw_params_set_start_threshold(*pcm, sw, buffer);
-    snd_pcm_sw_params_set_avail_min(*pcm, sw, *period);
-    if ((err = snd_pcm_sw_params(*pcm, sw)) < 0) return err;
-    printf("pcm: %s, S32_LE stereo %u Hz, period %lu, buffer %lu (%.1f ms)\n",
-           dev, rate, (unsigned long)*period, (unsigned long)buffer,
-           1000.0 * (double)buffer / rate);
-    return 0;
+    organ_midi_apply(&midi_map, &inst, m->status, m->d1, m->d2);
 }
 
 static void usage(const char *argv0) {
@@ -159,7 +72,7 @@ static void usage(const char *argv0) {
             " [-n periods] [-g gain] [-e demo_secs] [-2]\n"
             "  -d  ALSA PCM out (default \"default\"; the rig: hw:CARD=AG06AG03)\n"
             "  -m  ALSA rawmidi in, e.g. hw:2,0,0 (none = play the demo or idle)\n"
-            "  -r  sample rate (default 48000)\n"
+            "  -r  sample rate 44100..192000 (default 48000)\n"
             "  -p  period frames (default 128)   -n  periods (default 3)\n"
             "  -g  master gain (default 0.0625)  -e  demo chord for N seconds\n"
             "  -2  two-manual protocol: notes+depth ch1+ch2 merge, CCs ch1 only\n",
@@ -171,32 +84,78 @@ int main(int argc, char **argv) {
     unsigned rate = 48000, nperiods = 3;
     snd_pcm_uframes_t period = 128;
     float gain = 0.0625f;
-    long demo_secs = 0;
+    uint64_t demo_secs = 0;
 
     int c;
     while ((c = getopt(argc, argv, "d:m:r:p:n:g:e:2h")) != -1) {
         switch (c) {
-        case 'd': pcm_dev = optarg; break;
-        case 'm': midi_dev = optarg; break;
-        case 'r': rate = (unsigned)atoi(optarg); break;
-        case 'p': period = (snd_pcm_uframes_t)atol(optarg); break;
-        case 'n': nperiods = (unsigned)atoi(optarg); break;
-        case 'g': gain = (float)atof(optarg); break;
-        case 'e': demo_secs = atol(optarg); break;
+        case 'd':
+            if (!*optarg) { usage(argv[0]); return 2; }
+            pcm_dev = optarg;
+            break;
+        case 'm':
+            if (!*optarg) { usage(argv[0]); return 2; }
+            midi_dev = optarg;
+            break;
+        case 'r': {
+            uint64_t value = 0;
+            if (!host_parse_u64(optarg, 44100, 192000, &value)) {
+                usage(argv[0]);
+                return 2;
+            }
+            rate = (unsigned)value;
+            break;
+        }
+        case 'p': {
+            uint64_t value = 0;
+            if (!host_parse_u64(optarg, 1, LIVE_PERIOD_MAX, &value)) {
+                usage(argv[0]);
+                return 2;
+            }
+            period = (snd_pcm_uframes_t)value;
+            break;
+        }
+        case 'n': {
+            uint64_t value = 0;
+            if (!host_parse_u64(optarg, 2, 64, &value)) {
+                usage(argv[0]);
+                return 2;
+            }
+            nperiods = (unsigned)value;
+            break;
+        }
+        case 'g': {
+            double value = 0.0;
+            if (!host_parse_double(optarg, 0.0, 16.0, &value)) {
+                usage(argv[0]);
+                return 2;
+            }
+            gain = (float)value;
+            break;
+        }
+        case 'e':
+            if (!host_parse_u64(optarg, 0, 86400, &demo_secs)) {
+                usage(argv[0]);
+                return 2;
+            }
+            break;
         case '2': two_manual = true; break;
+        case 'h': usage(argv[0]); return 0;
         default: usage(argv[0]); return 2;
         }
     }
-    if (period > MAX_PERIOD) period = MAX_PERIOD;
+    if (optind != argc) { usage(argv[0]); return 2; }
 
-    snd_pcm_t *pcm = nullptr;
-    if (open_pcm(&pcm, pcm_dev, rate, &period, nperiods) < 0) return 1;
+    live_pcm audio = { 0 };
+    if (live_pcm_open(&audio, pcm_dev, rate, period, nperiods) < 0) return 1;
+    period = audio.period;
 
     snd_rawmidi_t *midi = nullptr;
     if (midi_dev) {
         int err = snd_rawmidi_open(&midi, nullptr, midi_dev, SND_RAWMIDI_NONBLOCK);
         if (err < 0) {
             fprintf(stderr, "rawmidi open %s: %s\n", midi_dev, snd_strerror(err));
+            live_pcm_close(&audio, false);
             return 1;
         }
         printf("midi: %s (notes 36..96, poly key pressure = key depth,"
@@ -209,25 +168,43 @@ int main(int argc, char **argv) {
     }
 
     tw_instrument_init(&inst, (float)rate);
-    signal(SIGINT, on_signal);
-    signal(SIGTERM, on_signal);
+    organ_midi_map_init(&midi_map, false, false);
+    if (signal(SIGINT, on_signal) == SIG_ERR || signal(SIGTERM, on_signal) == SIG_ERR) {
+        fprintf(stderr, "signal handler setup failed\n");
+        if (midi) snd_rawmidi_close(midi);
+        live_pcm_close(&audio, false);
+        return 1;
+    }
 
-    static float stereo[2 * MAX_PERIOD];
-    static int32_t out[2 * MAX_PERIOD];
     tw_midi_parser parser = { 0 };
-    tw_midi_msg msg;
+    tw_midi_msg msg = { 0 };
     int64_t frame = 0;
-    int64_t demo_end = demo_secs > 0 ? demo_secs * (int64_t)rate : -1;
+    int64_t demo_end = demo_secs ? (int64_t)(demo_secs * rate) : -1;
+    int result = 0;
     printf("running%s -- ctrl-c to stop\n", demo_secs ? " (demo chord)" : "");
 
     while (!stop_flag) {
         if (midi) {
             unsigned char buf[256];
-            ssize_t r;
-            while ((r = snd_rawmidi_read(midi, buf, sizeof buf)) > 0)
-                for (ssize_t i = 0; i < r; i++)
+            for (;;) {
+                ssize_t count = snd_rawmidi_read(midi, buf, sizeof buf);
+                if (count > 0) {
+                    for (ssize_t i = 0; i < count; i++)
                     if (tw_midi_parse(&parser, buf[i], &msg)) apply_msg(&msg);
+                    continue;
+                }
+                if (!count || count == -EAGAIN) break;
+                if (count == -EINTR) {
+                    if (stop_flag) break;
+                    continue;
+                }
+                fprintf(stderr, "rawmidi read: %s\n", snd_strerror((int)count));
+                result = 1;
+                stop_flag = 1;
+                break;
+            }
         }
+        if (stop_flag) break;
         if (demo_end > 0) {
             int64_t on = rate / 2, off = demo_end - rate / 2;
             if (frame <= on && on < frame + (int64_t)period) {
@@ -244,36 +221,21 @@ int main(int argc, char **argv) {
         }
         for (snd_pcm_uframes_t i = 0; i < period; i++) {
             tw_stereo s = tw_instrument_tick_stereo(&inst);
-            float l = s.l * gain, r = s.r * gain;
-            stereo[2 * i] = l > 1.0f ? 1.0f : l < -1.0f ? -1.0f : l;
-            stereo[2 * i + 1] = r > 1.0f ? 1.0f : r < -1.0f ? -1.0f : r;
+            audio.stereo[2 * i] = s.l * gain;
+            audio.stereo[2 * i + 1] = s.r * gain;
         }
-        for (snd_pcm_uframes_t i = 0; i < 2 * period; i++)
-            out[i] = (int32_t)(stereo[i] * 2147483392.0f);
-        snd_pcm_uframes_t done = 0;
-        while (done < period) {
-            snd_pcm_sframes_t w = snd_pcm_writei(pcm, out + 2 * done, period - done);
-            if (w < 0) {
-                stats.xruns++;
-                w = snd_pcm_recover(pcm, (int)w, 1);
-                if (w < 0) {
-                    fprintf(stderr, "pcm write: %s\n", snd_strerror((int)w));
-                    stop_flag = 1;
-                    break;
-                }
-                continue;
-            }
-            done += (snd_pcm_uframes_t)w;
+        if (live_pcm_write(&audio, &xruns) < 0) {
+            result = 1;
+            stop_flag = 1;
         }
         frame += (int64_t)period;
     }
 
-    snd_pcm_drain(pcm);
-    snd_pcm_close(pcm);
     if (midi) snd_rawmidi_close(midi);
+    live_pcm_close(&audio, result == 0);
     printf("\nstopped: %.1f s rendered, %lu note events, %lu depth events,"
            " %lu ccs, %lu xruns, %u out-of-compass\n", (double)frame / rate,
-           stats.notes, stats.depths, stats.ccs, stats.xruns,
+           midi_map.stats.notes, midi_map.stats.depths, midi_map.stats.ccs, xruns,
            inst.organ.out_of_compass);
-    return 0;
+    return result;
 }

@@ -1051,3 +1051,306 @@ translation unit edited.
 
 The 2026-07-28 sweep take above it is kept at the 1/4 setting it documents
 (`f7e8a836e9701a04`), so the two entries remain a direct A/B.
+
+## 2026-07-29 — the second polarisation, summed rather than multiplied
+
+The stage of `ep-constants.md` sec 16 did not do what that section said it
+did, and the check that found it is one no render in this log had run: two
+takes of a single note differing in nothing but the second plane's depth,
+compared as an envelope ratio at the bus. On the shipped build the envelope
+moved **0.99 dB over two seconds** and 0.00 dB after the first — against a
+published table claiming up to 3.48 dB of modulation.
+
+The cause is spectral, not a value. A gain of `1 + a·sin(2π·fh·t)` on a
+voice at `f1` puts its energy at `f1 ± fh`, and with the two frequencies a
+fraction of a percent apart that is an octave line and a subsonic one, not a
+beat. Measured at MIDI 88, `condition = 1.0`: the whole contribution was
+2630 Hz at −19.5 dB relative to the note, plus a 0.54 Hz line that the
+section 6.2 coupling capacitor removes — confirmed by rendering the same
+note with the 10 Hz highpass bypassed, where the 0.54 Hz line reappears at
+−0.4 dB of the octave line and the envelope still does not move.
+
+Beating needs the two planes **summed at the sensor**. The pickup's chisel
+edge is perpendicular to the hammer's plane and sits off-centre [EP-P61],
+and its rotation about the tine is an unpinned setup tolerance, so its
+sensitivity axis is not exactly that plane and a small share of the
+horizontal motion is sensed alongside the vertical. Summed, the same note at
+the same depth gives **3.68 dB**. `test.c` now asserts that swing, and the
+assertion fails on the previous build, which is the property a regression
+test has to have.
+
+The second plane also stopped borrowing the fundamental's decay. The tine
+and the inertia bar form a fork in one plane only, so the base reaction
+cancels there and nowhere else [EP-P61], [AT20]; `POLAR_T60_RATIO = 0.60`
+is the horizontal dwell as a fraction of the vertical's. Direction sourced,
+magnitude on a ballot.
+
+**The ballot**, `renders/ep73-ballots-polar-20260729/`. Two takes each, the
+same pair the slope ballot used — the compass sweep dry, and the longest
+loop in the set through the finished chain:
+
+    ratio   sweep peak   FNV64              loop peak   FNV64
+    1.00      0.689     0256b8ef1c968cbe      0.296     f71496f7d66e7369
+    0.60      0.689     d70c2ca0a521117f      0.296     f1717c2046853571   <- shipped
+    0.35      0.689     4f49a724bc7600ef      0.296     0d04796920f48f6d
+    0.20      0.688     b47b3aaabac604b5      0.293     6baa8c136bd7fea9
+
+    ./build/render_midi -I ep73 -g 0.557247 -t 6 \
+        -o .../polar-t60-<r>-sweep.wav renders/ep73-sweep.mid
+    ./build/render_midi -I ep73 -D 0.15 -C 1.0 -r 44100 -t 6 -g 0.403251 \
+        -o .../polar-t60-<r>-loop.wav 90_Am_RhodesDust_03.mid
+
+All eight two-run identical, and all four within 0.23 dB of each other in
+rms, so no take needed a gain match — the ratio shortens a small modulation
+without moving level. **1.00 is the previous law** and is on the ballot as
+the audible endpoint: the beat holds its depth for as long as the note
+lasts. The shipped 0.60 sweep take is byte-identical to the tree's own
+render, which is the check that the ballot and the tree are one instrument.
+
+**What to listen for**: sustained single notes, not the loop's chords. The
+per-note draw means some notes breathe and some do not, and at `condition =
+0.5` the bus figures run 0.02 to 1.23 dB — this is a texture, not an effect.
+
+**Settled 2026-07-29: 0.60**, which is the arm this entry's shipped renders
+were already made at, so every signature above stands as pinned and nothing
+needs re-rendering.
+
+**`condition = 0` is bit-identical across the rework**, which is the
+scanner-OFF discipline every stage on this instrument is held to. The same
+sweep rendered with `-N 0` gives `387c2126c2f5d7ca` on the committed build
+and on this one; the shipped-condition take is what moves.
+
+**Re-pinned.** The standing compass-sweep take moves with the stage:
+
+    ./build/render_midi -I ep73 -g 0.557247 -t 6 \
+        -o renders/ep73-sweep-polar-20260729.wav renders/ep73-sweep.mid
+    # peak 0.689, FNV64 d70c2ca0a521117f (two runs identical)
+    # was bb4584e1c00120e6 at the slope entry above
+
+**The twenty-loop set was not re-rendered.** Its job in this log is the
+third-octave comparison against the reference audio, and a modulation of
+about a decibel that decays inside two seconds does not move a long-term
+average spectrum — the same reasoning that closed O9 about onset shapes.
+The set therefore still stands at the `ep73-slope18-20260729/` take, and any
+future spectral claim should use that one rather than re-deriving it here.
+
+Gate: `make test` 9391/0, ten of ten exhibits PASS, both organ whole-song
+baselines unmoved at `6e56f252d97c240c` and `e983aea2ca6ecaf2`, no organ
+translation unit edited.
+
+## 2026-07-29 — the depth and the rate of the beat, on ballots
+
+`POLAR_T60_RATIO` settled at 0.60 in the entry above. The two constants
+beside it did not, and the reason is the same one that produced the entry
+above: both were pinned while the stage put nothing on the bus, so neither
+`COND_POLAR_DEPTH` nor `COND_POLAR_SPLIT` has ever been heard. (The split
+is `EP_POLAR_SPLIT` from 2026-07-30; it is named as it stood at this entry.)
+
+**New material, because the compass sweep cannot decide this.** The sweep's
+median note is 0.30 s against beat periods of seconds, so an A/B on it
+compares attack transients. `renders/ep73-hold.mid` holds seven E's for
+sixteen seconds each at velocity 110, the same seven at velocity 45, and a
+chord — 266 s. Generator `renders/ep73-hold.py`, untracked beside it. The
+compass top is in it on purpose: it is where a wide split stops beating.
+
+Each ballot holds the other constant at its shipped value. **Both are
+level-matched**: the depth moves rms up to 0.63 dB and the split up to
+0.26 dB, and after matching all fourteen takes sit within 0.0001 dB of the
+shipped arm. The gain each needed is itself the measurement.
+
+    renders/ep73-ballots-polar2-20260729/
+
+    arm                  hold gain   peak    FNV64              loop gain   peak    FNV64
+    shipped 0.30/0.004    0.557247  0.686  a713a8efba077929      0.403251  0.292  2f1ad83632e26c4d
+    depth-0.60            0.539853  0.694  07e5ed3c3bca6105      0.400921  0.294  7d7c9822730a31c1
+    depth-0.85            0.526242  0.700  b754850ad380fb5d      0.398592  0.298  c81393cab2bb1261
+    depth-1.00            0.518457  0.703  d4b583edc2dbc9b5      0.397037  0.301  04ee47851f299795
+    split-0.010           0.566537  0.697  affa62983710e11d      0.404118  0.292  015c1f3d214db265
+    split-0.020           0.571984  0.704  a2913e792fc97aa9      0.404528  0.296  4f78109bc59faf41
+    split-0.040           0.574254  0.707  b48136289c4b5a91      0.404477  0.292  6dbd65b576c4df71
+
+**These are the re-cut takes.** The ballot was first rendered with the depth
+at 0.60; when the depth closed at 0.30 the split arms were left sitting on a
+setting the ear had just rejected, so all seven arms were re-rendered
+against a shipped reference of 0.30 / 0.004 and named after the constant
+they carry rather than after which ballot they belong to.
+
+    ./build/render_midi -I ep73 -g <gain> -t 6 \
+        -o .../<arm>-hold.wav renders/ep73-hold.mid
+    ./build/render_midi -I ep73 -D 0.15 -C 1.0 -r 44100 -t 6 -g <gain> \
+        -o .../<arm>-loop.wav 90_Am_RhodesDust_03.mid
+
+All fourteen two-run identical. `shipped-0.30-0.004` serves both ballots and
+was rendered by the tree's own binary rather than a ballot build, which is
+the check that the two are one instrument.
+
+**What the measurements say**, in full in `ep-constants.md` sec 16.3. The
+short version is that **the rate turned out to be the stronger lever, which
+was not the expectation**: going from 0.004 to 0.040 moves the bus figure
+further than raising the depth from 0.30 to 1.00 does, because at the
+shipped rate the envelope only traverses part of a cycle before the dwell of
+sec 16.2 has taken the breath away. Depth sets how deep the swing is; the
+rate sets whether there is time for one.
+
+**What to listen for**, and it differs per ballot. For the depth: whether
+the breath is present at all on the notes whose draw is small — the per-note
+spread is the point of the stage and a depth that fixes the quiet notes may
+make the loud ones a wobble. For the split: **the last held note**.
+(The depth question is now answered — see the entry below.) The
+widest-drawn note in the compass sits at 4.07 Hz from its twin at the
+shipped setting and 40.67 Hz at `split 0.040`, which is no longer a beat but
+roughness, and ten of seventy-three notes are past that boundary at the
+shipped condition on that arm. 0.010 is the widest arm with nothing past it
+at `condition = 0.5`.
+
+Gate unchanged from the entry above: `make test` 9391/0, ten of ten exhibits
+PASS, both organ whole-song baselines unmoved, no organ translation unit
+edited. Nothing in the tree moved for this entry — the ballot is renders
+only, and the shipped constants are untouched.
+
+## 2026-07-29 — the depth settled at 0.30, and what that moved
+
+**`COND_POLAR_DEPTH`: 0.30**, off the ballot above — the quietest arm, and
+half what the section shipped before it. Worth recording as more than a
+preference: the ear went to the bottom of a bracket whose top was picked to
+be audible, which says the second polarisation earns its place as a
+disturbance in the texture rather than as anything a listener should be able
+to name.
+
+Three things moved with it, and none of them silently.
+
+**The split ballot was re-cut.** Its arms had been rendered with the depth
+at 0.60, so the moment the depth closed they were an open ballot sitting on
+a rejected setting. All seven arms were re-rendered against a shipped
+reference of 0.30 / 0.004; the table in the entry above is the re-cut one
+and the files are named after the constant they carry. The split remains
+open, register item 21.
+
+**The measurements in `ep-constants.md` sec 16 were re-taken**, not scaled.
+The bus figures at `condition = 0.5` now run 0.01 to 0.65 dB across the
+compass against 0.02 to 1.23 before. Section 16.2's own ballot table is the
+exception and is left at the depth it was taken at, with a line saying so:
+it compared four arms against each other, that comparison does not move, and
+re-rendering a closed decision to make a table prettier is not evidence.
+
+**The bus-swing assertion in `test.c` was re-derived, not relaxed.** It had
+been calibrated against the shipped depth and would have failed at 0.30 —
+which is exactly the moment a threshold gets quietly lowered until it
+passes. Instead the check now pins its own depth on the bank under test, so
+it measures the mechanism rather than the calibration: 4.89 dB summed
+against 1.32 dB multiplied, and it still fails on the previous build.
+
+**Re-pinned.** The standing compass-sweep take:
+
+    ./build/render_midi -I ep73 -g 0.557247 -t 6 \
+        -o renders/ep73-sweep-polar-20260729.wav renders/ep73-sweep.mid
+    # peak 0.640, FNV64 6c28ea4d9953c671 (two runs identical)
+    # was d70c2ca0a521117f at depth 0.60
+
+**One slip, recorded where it happened, because it is the second time.**
+`build/render_midi` was stale again — linked against an `ep_voice.o` from
+before the depth moved — and produced a sweep signature identical to the
+0.60 take, which is what gave it away. The same trap in the entry above cost
+a ballot arm. A render that is meant to prove a change and comes back
+unchanged is a build question before it is an engine question. A second
+slip in the same round: a shell loop built the split arms with
+`-DSPLIT_V=0.0${v}f` over `v` in `010 020 040`, which is 0.0010 and not
+0.010, so one arm came out byte-identical to the shipped setting. Caught by
+checking each arm's beat period against the ratio it was supposed to carry
+before rendering anything — the arms are now verified that way as a matter
+of course.
+
+Gate: `make test` 9391/0, ten of ten exhibits PASS, both organ whole-song
+baselines unmoved at `6e56f252d97c240c` and `e983aea2ca6ecaf2`, no organ
+translation unit edited.
+
+## 2026-07-30 — the rate settled at 0.040, and the depth reopened
+
+**`EP_POLAR_SPLIT`: 0.040**, off the ballot two entries above — the widest
+arm, and the one the ballot's own analysis had flagged as crossing out of
+beating and into roughness in the top two octaves. That crossing is why the
+compass top was in the hold material, so it was heard rather than predicted,
+and the verdict is that it is acceptable: the notes past fifteen hertz of
+separation are the widest per-note draws and not the typical ones, and the
+top two octaves decay in under five seconds. Register item 21 closed.
+
+Four things moved with it.
+
+**The depth reopened, as register item 24.** Section 16.3 had written down
+in advance that the depth verdict was taken with the rate at its slowest arm
+and would be worth re-hearing if the rate moved. The rate has now moved to
+its fastest arm, a tenfold step, and at 0.30 / 0.040 the bus figures are up
+everywhere: about twice through the middle and top of the compass, seven
+times at MIDI 40, and more than twentyfold at MIDI 28, where the old rate
+could not complete a swing before the breath had faded. The depth was
+picked as the quietest arm of a bracket, against a stage that could barely
+complete one swing; that reasoning does not carry over to a stage that
+completes several. The ear's verdict is not overruled — its premise expired.
+Item 24 needs a depth ballot re-cut at 0.040, and that ballot does not exist
+yet, so this is an open item and not a pending edit.
+
+**The split bound in `test.c` was re-derived, not widened.** It read
+`split > 0.005`, which is the shipped 0.004 plus headroom — a calibration
+wearing a bound's clothes, and it would have failed outright at 0.040. The
+tempting fix is to type a larger number. Instead the constant is now
+exported as `EP_POLAR_SPLIT` and the bound *is* the constant: the split is
+that scale times a per-note draw in [-1, 1), so no note can reach it, the
+bound is exact rather than approximate, and it moves whenever section 16.3
+moves. Two checks were added beside it — that the widest drawn split
+approaches its scale, which is what keeps the ceiling from being vacuous,
+and that every split scales linearly with condition. Neither catches a
+mis-typed constant, and no check in the suite can: the bound and the value
+move together by construction. Guarding the constant itself is the ballot's
+job, through the beat period each arm has to carry before it is rendered.
+9391 checks became 9393.
+
+**Section 16's bus tables were re-measured, and the method was written
+down.** The figures at `condition = 0.5` now run 0.02 to 1.65 dB across the
+compass against 0.01 to 0.65 before. The beat-period column of the analytic
+table is exactly a tenth of what it was at every one of its eight rows,
+which is the check that the column follows the ratio rather than being a
+second calibration. The split ballot's own table was re-measured too — all
+four arms together under one rule, so no arm carries a method the others do
+not; the arms keep their order and the verdict is unaffected.
+
+The method had never been recorded, and reconstructing it cost real work:
+the first attempt measured the note's own decay rather than the beat, and
+the second read waveform phase as envelope at the bottom of the compass,
+where a 256-sample window is a fifth of one cycle at MIDI 28 and reports
+about a decibel that is not there. It is now stated in section 16 — two
+banks differing only in depth, the ratio of their windowed rms, floors off,
+window locked to whole cycles of the fundamental. Section 16.2's ballot
+table stays at the depth *and* rate it was decided at, with its caveat line
+extended to name both.
+
+**Re-pinned.** The standing compass-sweep take:
+
+    ./build/render_midi -I ep73 -g 0.557247 -t 6 \
+        -o renders/ep73-sweep-polar-20260730.wav renders/ep73-sweep.mid
+    # peak 0.644, FNV64 f7ff238efa784994 (two runs identical)
+    # was 6c28ea4d9953c671 at rate 0.004
+
+**The standing take is dated per era from here.** The two entries above both
+wrote to `ep73-sweep-polar-20260729.wav`, so that one name held two renders
+in turn and the file on disk now carries only the later of them — the
+`d70c2ca0a521117f` artifact of the depth-0.60 entry is gone, and that entry
+names a file whose contents moved out from under it. Recomputing the data
+chunk of what is there gives `6c28ea4d9953c671`, the depth-0.30 render. The
+new take took its own date rather than extending the collision.
+
+**`condition = 0` is bit-identical across the rate change**, the same
+scanner-OFF discipline every stage here is held to: the sweep rendered with
+`-N 0` gives `387c2126c2f5d7ca` on the committed build and on this one.
+
+**One slip, and it is the third of this kind.** The measurement probe failed
+to compile and the shell ran the previous binary, which printed a full table
+of plausible numbers that were silently one revision old. It was caught
+because the validation run was placed first and reproduced the committed
+0.004 figures too well for a build that was supposed to have changed. The
+probe build now removes its output first and stops the shell on a non-zero
+compiler exit. Stale binaries have now cost this project a ballot arm, a
+sweep signature, and a measurement table.
+
+Gate: `make test` 9393/0, ten of ten exhibits PASS, both organ whole-song
+baselines unmoved at `6e56f252d97c240c` and `e983aea2ca6ecaf2`, no organ
+translation unit edited.

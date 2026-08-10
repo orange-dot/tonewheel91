@@ -113,7 +113,7 @@ static void test_determinism(void) {
     float t[TW_WHEELS] = { 0 };
     t[36] = 1.0f;
     t[43] = 0.7f;
-    float out1[4800], out2[4800];
+    float out1[4800] = {0}, out2[4800] = {0};
     for (int run = 0; run < 2; run++) {
         tw_generator g;
         tw_generator_init(&g, 48000.0f, 0.001f);
@@ -151,6 +151,38 @@ static void test_sanitize_and_smoothing(void) {
     tw_generator_set_keyed_targets(&g, zero);
     for (int i = 0; i < 48000; i++) (void)tw_generator_tick(&g);
     CHECK(g.keyed_gain[45] == 0.0f, "gain must snap to exact 0");
+
+    /* Every component accepts the same 44.1-192 kHz clock interval and
+     * selects 48 kHz for non-finite or out-of-range input. */
+    CHECK(tw_sample_rate_hz(44100.0f) == 44100.0f
+          && tw_sample_rate_hz(192000.0f) == 192000.0f,
+          "sample-rate boundaries must be accepted");
+    CHECK(tw_sample_rate_hz(44099.0f) == 48000.0f
+          && tw_sample_rate_hz(192001.0f) == 48000.0f,
+          "sample rates outside the supported interval must use 48 kHz");
+    CHECK(tw_sample_rate_hz(0.0f / 0.0f) == 48000.0f
+          && tw_sample_rate_hz(1.0f / 0.0f) == 48000.0f,
+          "non-finite sample rates must use 48 kHz");
+
+    tw_instrument instrument;
+    tw_instrument_init(&instrument, 384000.0f);
+    CHECK(instrument.organ.rate == 48000.0f
+          && instrument.rotary.inv_rate == 1.0f / 48000.0f,
+          "one instrument must not contain mixed component clocks");
+    CHECK(instrument.organ.gen.step[45] == tw_wheel_freq_hz(46) / 48000.0f,
+          "top-level sanitization must reach the generator");
+
+    tw_organ organ;
+    tw_organ_init(&organ, 44100.0f);
+    CHECK(organ.rate == 44100.0f, "44.1 kHz must reach a direct initializer");
+    tw_organ_init(&organ, 192000.0f);
+    CHECK(organ.rate == 192000.0f, "192 kHz must reach a direct initializer");
+
+    ep_piano piano;
+    ep_piano_init(&piano, -1.0f / 0.0f);
+    CHECK(piano.bank.rate == 48000.0f
+          && piano.trem.step == 5.5f / 48000.0f,
+          "EP components must share the sanitized top-level clock");
 }
 
 static void test_output_frequency(void) {
@@ -3006,7 +3038,7 @@ static void test_ep_bank(void) {
     }
     CHECK(h2 == ha, "two runs of one script must render identical bits");
 
-    /* Panic to exact silence, phases included. */
+    /* The explicit hard-silence operation clears resonator phases. */
     ep_bank_silence(&adv);
     int live = 0;
     for (int m = 0; m < EP_MODES; m++)
@@ -3581,8 +3613,8 @@ static void test_ep_condition(void) {
     CHECK(off == 0 && b.hum_gain == 0.0f && b.floor_gain == 0.0f,
           "condition 0 must leave every deviation exactly neutral, %d off", off);
 
-    /* And a render at condition 0 is bit-identical to one that never knew
-     * about condition at all — the scanner-OFF discipline. */
+    /* A configuration-time return to 0, before oscillators have advanced,
+     * is bit-identical to a bank kept ideal — the scanner-OFF discipline. */
     ep_bank a, c;
     ep_bank_init(&a, (float)EP_RATE);
     ep_bank_init(&c, (float)EP_RATE);
@@ -3625,6 +3657,27 @@ static void test_ep_condition(void) {
     CHECK(b.hum_gain > 0.0f && b.floor_gain > 0.0f,
           "the hum and noise floors must arrive with condition");
 
+    /* Every named deviation gets a full 13-bit field of its own. In
+     * particular the pickup offset used to read a 12-bit tail at shift 52,
+     * which made every draw negative. */
+    int pickup_pos = 0, pickup_neg = 0, split_pos = 0, split_neg = 0;
+    int pickup_split_same = 0;
+    for (int k = 0; k < EP_KEYS; k++) {
+        double pickup = (b.pk_x0[k] / EP_PICKUP_OFFSET - 1.0) / 0.30;
+        double polar = (b.h_step[k] * EP_RATE / b.f1[k] - 1.0)
+                     / EP_POLAR_SPLIT;
+        pickup_pos += pickup > 0.0;
+        pickup_neg += pickup < 0.0;
+        split_pos += polar > 0.0;
+        split_neg += polar < 0.0;
+        pickup_split_same += fabs(pickup - polar) < 1e-7;
+    }
+    CHECK(pickup_pos && pickup_neg && split_pos && split_neg,
+          "independent 13-bit fields must span both signs (%d/%d, %d/%d)",
+          pickup_pos, pickup_neg, split_pos, split_neg);
+    CHECK(pickup_split_same < EP_KEYS,
+          "pickup and polar deviations must not reuse one random field");
+
     /* The floor is bank-level, so it must not break the layout identity
      * that decision D4 rests on. */
     ep_bank adv, gat;
@@ -3656,8 +3709,8 @@ static void test_ep_condition(void) {
         if (d.f1[k] != e.f1[k] || d.pk_g[k] != e.pk_g[k]) drift++;
     CHECK(drift == 0, "the condition draws must be reproducible, %d differ", drift);
 
-    /* sec 16: the horizontal polarisation. Absent at condition 0, present
-     * and per-note above it, and it modulates rather than adding a pitch. */
+    /* sec 16: the horizontal polarisation. Unsensed at condition 0 and
+     * present per note above it, where it adds a nearly equal pitch. */
     ep_bank pb;
     ep_bank_init(&pb, (float)EP_RATE);
     int pol_on = 0, unsplit0 = 0;
@@ -3671,28 +3724,172 @@ static void test_ep_condition(void) {
           "at condition 0 the second polarisation must carry no depth (%d) and"
           " no split (%d)", pol_on, unsplit0);
     ep_bank_strike(&pb, 60, 100);
-    CHECK(pb.h_amp[32] == 0.0f,
-          "a strike at condition 0 must put nothing into the second plane");
+    CHECK(pb.h_amp[32] > 0.0f && pb.h_depth[32] == 0.0f,
+          "condition 0 must gate pickup depth, not erase physical excitation");
 
     ep_bank_set_condition(&pb, 1.0f);
+    /* The ceiling is the constant itself, not a number chosen beside it: the
+     * split is that scale times a draw in [-1, 1), so no note can reach it
+     * and the bound stays exact through every re-pin of sec 16.3. Reading it
+     * off the shipped value instead would have to be widened by hand each
+     * time the rate moves, which is how a bound stops being a bound. */
     int flat = 0, unsplit = 0;
     for (int k = 0; k < EP_KEYS; k++) {
         if (pb.h_depth[k] <= 0.0f) flat++;
         double split = fabs(pb.h_step[k] * EP_RATE / pb.f1[k] - 1.0);
-        if (split < 1e-6 || split > 0.005) unsplit++;
+        if (split < 1e-6 || split > EP_POLAR_SPLIT) unsplit++;
     }
     CHECK(flat <= 2 && unsplit == 0,
           "at condition 1 every note must carry a split twin (%d flat, %d off)",
           flat, unsplit);
 
-    /* The twin is a modulation, not a partial: it must never make the voice
-     * louder than the ceiling the modes already bound. */
+    /* The draw spans its scale rather than hugging one end of it, which is
+     * what keeps the ceiling above from being vacuous: a bound nothing
+     * approaches would pass on a bank whose splits were all near zero. It
+     * does not catch a mis-typed constant — both sides move together — and
+     * nothing in this suite does; that is the ballot's job, and the arms
+     * are verified against the beat period they must carry before they are
+     * rendered. */
+    double smax = 0.0;
+    for (int k = 0; k < EP_KEYS; k++) {
+        double split = fabs(pb.h_step[k] * EP_RATE / pb.f1[k] - 1.0);
+        if (split > smax) smax = split;
+    }
+    CHECK(smax > 0.9 * EP_POLAR_SPLIT,
+          "the widest drawn split must approach its scale, %.5f of %.5f",
+          smax, (double)EP_POLAR_SPLIT);
+
+    /* And the whole stage rides condition linearly, so half the condition is
+     * half of every split — the gate in sec 15, measured rather than assumed. */
+    double full[EP_KEYS];
+    for (int k = 0; k < EP_KEYS; k++)
+        full[k] = fabs(pb.h_step[k] * EP_RATE / pb.f1[k] - 1.0);
+    ep_bank_set_condition(&pb, 0.5f);
+    int nonlin = 0;
+    for (int k = 0; k < EP_KEYS; k++) {
+        double half = fabs(pb.h_step[k] * EP_RATE / pb.f1[k] - 1.0);
+        if (fabs(half * 2.0 - full[k]) > 1e-6) nonlin++;
+    }
+    CHECK(nonlin == 0,
+          "the split must scale linearly with condition, %d do not", nonlin);
+    ep_bank_set_condition(&pb, 1.0f);
+
+    /* The twin is a share of the fundamental, not a partial of its own: it
+     * must never exceed the share of the ceiling the modes already bound. */
     ep_bank_strike(&pb, 64, 127);
-    CHECK(pb.h_amp[36] <= pb.h_depth[36] + 1e-7f,
-          "the polarisation index must stay inside its own depth");
+    float pcap = pb.ceiling[0][36];
+    CHECK(pb.h_amp[36] <= pcap + 1e-7f,
+          "the polarisation must stay inside its share of the ceiling");
     for (int i = 0; i < 200; i++) ep_bank_strike(&pb, 64, 127);
-    CHECK(pb.h_amp[36] <= pb.h_depth[36] + 1e-7f,
+    CHECK(pb.h_amp[36] <= pcap + 1e-7f,
           "stacked blows must not run the polarisation away");
+
+    /* A coefficient rebuild preserves the physical state already in flight:
+     * held and sustained tines stay undamped, and condition 0 gates the
+     * second plane without resetting phase or energy. */
+    ep_bank live;
+    ep_bank_init(&live, (float)EP_RATE);
+    ep_bank_set_condition(&live, 1.0f);
+    ep_bank_strike(&live, 64, 110);
+    for (int i = 0; i < 100; i++) ep_bank_tick_gated(&live);
+    int lk = 64 - EP_NOTE_MIN;
+    float phase_before = live.h_phase[lk];
+    float amp_before = live.h_amp[lk];
+    ep_bank_set_condition(&live, 0.4f);
+    CHECK(live.damper_up[lk] && live.dec[0][lk] == live.dec_free[0][lk]
+          && live.h_dec[lk] == live.h_dec_free[lk],
+          "condition rebuild must preserve a held tine's free decay");
+    CHECK(live.h_phase[lk] == phase_before && live.h_amp[lk] == amp_before,
+          "condition rebuild must preserve horizontal phase and energy");
+    ep_bank_set_condition(&live, 0.0f);
+    CHECK(live.h_depth[lk] == 0.0f && live.h_amp[lk] == amp_before,
+          "condition 0 must gate, not clear, live horizontal energy");
+    ep_bank gated = live;
+    gated.h_amp[lk] = 0.0f;
+    int leaked = 0;
+    for (int i = 0; i < 100; i++) {
+        float x = ep_bank_tick_gated(&live);
+        float y = ep_bank_tick_gated(&gated);
+        if (memcmp(&x, &y, sizeof x)) leaked++;
+    }
+    CHECK(leaked == 0,
+          "condition-zero horizontal energy must be inaudible, %d samples differ",
+          leaked);
+    ep_bank_damp(&live, 64);
+    ep_bank_set_condition(&live, 0.8f);
+    CHECK(!live.damper_up[lk] && live.dec[0][lk] == live.dec_damp[0][lk],
+          "condition rebuild must preserve a lowered damper");
+
+    ep_piano sustained;
+    ep_piano_init(&sustained, (float)EP_RATE);
+    ep_piano_note(&sustained, 64, true, 100);
+    ep_piano_set_sustain(&sustained, true);
+    ep_piano_note(&sustained, 64, false, 0);
+    ep_piano_set_condition(&sustained, 0.2f);
+    CHECK(sustained.bank.damper_up[lk]
+          && sustained.bank.dec[0][lk] == sustained.bank.dec_free[0][lk],
+          "condition rebuild must preserve sustain-owned free decay");
+    ep_piano_set_sustain(&sustained, false);
+    CHECK(!sustained.bank.damper_up[lk],
+          "sustain release must lower an unheld key's damper");
+
+    /* sec 16.2: the fork cancels the base reaction in its own plane and
+     * nowhere else, so the horizontal plane is the shorter-lived one at
+     * every note — and the damper, which lands on the tine rather than on
+     * one of its planes, is faster still, so damping never slows it. */
+    ep_bank_init(&pb, (float)EP_RATE);
+    ep_bank_set_condition(&pb, 1.0f);
+    int slower = 0, damp_slower = 0;
+    for (int k = 0; k < EP_KEYS; k++) {
+        if (pb.h_dec_free[k] <= pb.dec_free[0][k]) slower++;
+        if (pb.dec_damp[0][k] <= pb.h_dec_free[k]) damp_slower++;
+    }
+    CHECK(slower == 0 && damp_slower == 0,
+          "the horizontal plane must decay faster than the fundamental (%d do"
+          " not) and slower than the damper (%d do not)", slower, damp_slower);
+
+    /* And it must reach the bus. The stage is only worth its cost if the
+     * envelope actually moves, so this compares two renders of one note
+     * that differ in nothing but the second plane's depth: two nearly-equal
+     * frequencies summed at the sensor beat, and the beat is what a listener
+     * hears as the note breathing. An earlier build gated the voice with the
+     * twin instead of summing it, which measured correct as a modulation
+     * index and put its whole contribution on the octave, where nothing in
+     * the envelope moved at all (sec 16.1). */
+    ep_bank wet, dry;
+    ep_bank_init(&wet, (float)EP_RATE);
+    ep_bank_init(&dry, (float)EP_RATE);
+    ep_bank_set_condition(&wet, 1.0f);
+    ep_bank_set_condition(&dry, 1.0f);
+    wet.hum_gain = wet.floor_gain = 0.0f; /* a floor would blur the ratio */
+    dry.hum_gain = dry.floor_gain = 0.0f;
+    const int pk = 88 - EP_NOTE_MIN;
+    /* The check pins its own depth rather than riding the shipped one: the
+     * property under test is that the second plane reaches the bus as an
+     * envelope at all, and that must not be re-derived every time the
+     * calibration in sec 16.3 moves. */
+    wet.h_depth[pk] = 0.5f;
+    dry.h_depth[pk] = 0.0f;
+    ep_bank_strike(&wet, 88, 110);
+    ep_bank_strike(&dry, 88, 110);
+    int win = 256, wins = 2 * EP_RATE / win;
+    double rlo = 1e30, rhi = -1e30;
+    for (int i = 0; i < wins; i++) {
+        double sw = 0.0, sd = 0.0;
+        for (int j = 0; j < win; j++) {
+            double a = ep_bank_tick(&wet), c2 = ep_bank_tick(&dry);
+            sw += a * a;
+            sd += c2 * c2;
+        }
+        if (sd <= 1e-18) continue;
+        double r = sqrt(sw / sd);
+        if (r < rlo) rlo = r;
+        if (r > rhi) rhi = r;
+    }
+    double swing = 20.0 * log10(rhi / rlo);
+    CHECK(swing > 3.0,
+          "the second polarisation must move the envelope at the bus, not"
+          " only the index: %.2f dB over two seconds", swing);
 
     /* Hostile values, and the shipped default. */
     ep_bank_set_condition(&d, -2.0f);

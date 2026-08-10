@@ -136,6 +136,7 @@ typedef struct {
     float dec[EP_MODES][EP_KEYS];   /* the live decrement: free or damped */
     float dec_free[EP_MODES][EP_KEYS];
     float dec_damp[EP_MODES][EP_KEYS];
+    bool damper_up[EP_KEYS];        /* explicit runtime state, false at rest */
     float gate[EP_MODES][EP_KEYS];  /* 1 or 0: the Nyquist rule, sec 3.1 */
     float ceiling[EP_MODES][EP_KEYS]; /* the hardest single blow, sec 5.4 */
     float f1[EP_KEYS];              /* fundamentals in Hz                */
@@ -149,9 +150,13 @@ typedef struct {
     /* sec 16: the horizontal polarisation. The tine is a round wire and
      * vibrates in two planes; the design suppresses the one the hammer
      * does not drive, and real instruments keep a little of it anyway.
-     * Exactly absent at condition 0. */
+     * The pickup senses a small share of it alongside the vertical, and
+     * the two nearly-equal frequencies beat. Exactly absent at condition 0.
+     * It carries its own losses: the fork cancels the base reaction only
+     * in its own plane, so the horizontal dwell is the shorter one. */
     float h_phase[EP_KEYS], h_step[EP_KEYS], h_amp[EP_KEYS];
-    float h_depth[EP_KEYS];
+    float h_depth[EP_KEYS];         /* condition-scaled pickup share       */
+    float h_dec[EP_KEYS], h_dec_free[EP_KEYS];
     float floor_gain, hum_gain;     /* exactly 0 at condition 0          */
     float hum_phase, hum_step;
     uint64_t floor_rng;
@@ -178,12 +183,17 @@ void ep_bank_init(ep_bank *b, float sample_rate_hz);
  * factory-new instrument (sec 15, the organ's own wear doctrine). */
 extern const float EP_CONDITION_DEFAULT;
 
+/* The second plane's frequency offset from the first, as a ratio, scaled by
+ * condition and by a per-note draw in [-1, 1) (sec 16). Exported so the test
+ * can bound the drawn splits by the scale they are drawn from. */
+extern const float EP_POLAR_SPLIT;
+
 /* The one condition knob, 0..1 (sec 15). Rebuilds every per-note deviation
- * from fixed-seed draws: tuning spread, clang-ratio spread, voicing
- * spread, pickup-distance spread, and the noise and hum floors. 0 restores
- * the idealized instrument exactly, even mid-note, so every pre-EP7 render
- * stays pinned. Hostile values sanitize. Phase and amplitude state are
- * untouched. */
+ * from fixed-seed draws: tuning spread, clang-ratio spread, voicing spread,
+ * pickup-distance spread, and the noise and hum floors. A bank initialized
+ * and kept at 0 is the idealized instrument bit for bit. Returning to 0
+ * neutralizes condition-only output while preserving oscillator history,
+ * amplitude and damper state. Hostile values sanitize. */
 void ep_bank_set_condition(ep_bank *b, float v);
 
 /* A note-on. Notes outside 28..100 are ignored and counted; velocity
@@ -201,8 +211,9 @@ void ep_bank_strike(ep_bank *b, int midi_note, int velocity);
 void ep_bank_damp(ep_bank *b, int midi_note);
 void ep_bank_undamp(ep_bank *b, int midi_note);
 
-/* Everything to exact silence, phases included — a hard mute, not a
- * damper. The instrument's panic drops dampers instead (ep_piano_panic). */
+/* Clear every struck/resonator state, phases and DC history. The condition
+ * hum/noise floor remains part of a conditioned bank; the instrument's
+ * panic drops dampers instead (ep_piano_panic). */
 void ep_bank_silence(ep_bank *b);
 
 /* One sample, always-advance: every mode of every key ticks, amplitudes

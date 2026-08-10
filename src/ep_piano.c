@@ -6,6 +6,7 @@
 const float EP_DRIVE_SCALE = 2.0f;
 
 void ep_piano_init(ep_piano *p, float sample_rate_hz) {
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     *p = (ep_piano){ 0 };
     ep_bank_init(&p->bank, sample_rate_hz);
     tw_drive_init(&p->drive, sample_rate_hz);
@@ -88,13 +89,6 @@ float ep_piano_tick(ep_piano *p) {
     return tw_drive_tick(&p->drive, x) * (1.0f / EP_DRIVE_SCALE);
 }
 
-/* The generator's Taylor form for 1 - exp(-x), the same one ep_voice.c
- * uses; valid to x <= 0.25, which every corner here sits far under. */
-static float one_minus_exp(float x) {
-    if (!(x > 0.0f) || x > 0.25f) x = 0.25f;
-    return x * (1.0f - x * (0.5f - x * (1.0f / 6.0f - x / 24.0f)));
-}
-
 /* --- tremolo (sec 12) ------------------------------------------------- */
 
 static constexpr float TREM_HZ_MIN = 1.0f;
@@ -102,13 +96,13 @@ static constexpr float TREM_HZ_MAX = 10.0f;
 static constexpr float TREM_HZ_DEFAULT = 5.5f;
 
 void ep_tremolo_init(ep_tremolo *t, float sample_rate_hz) {
-    if (!(sample_rate_hz >= 8000.0f)) sample_rate_hz = 48000.0f;
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     *t = (ep_tremolo){ 0 };
     ep_tremolo_set_rate(t, sample_rate_hz, TREM_HZ_DEFAULT);
 }
 
 void ep_tremolo_set_rate(ep_tremolo *t, float sample_rate_hz, float hz) {
-    if (!(sample_rate_hz >= 8000.0f)) sample_rate_hz = 48000.0f;
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     if (!(hz >= TREM_HZ_MIN)) hz = TREM_HZ_MIN; /* NaN and below-range */
     else if (hz > TREM_HZ_MAX) hz = TREM_HZ_MAX;
     t->step = hz / sample_rate_hz;
@@ -161,10 +155,10 @@ const float EP_CAB_LOW_HZ = 80.0f;
 const float EP_CAB_HIGH_HZ = 4000.0f;
 
 void ep_cabinet_init(ep_cabinet *c, float sample_rate_hz) {
-    if (!(sample_rate_hz >= 8000.0f)) sample_rate_hz = 48000.0f;
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     *c = (ep_cabinet){ 0 };
-    c->c_lo = one_minus_exp(6.2831853f * EP_CAB_LOW_HZ / sample_rate_hz);
-    c->c_hi = one_minus_exp(6.2831853f * EP_CAB_HIGH_HZ / sample_rate_hz);
+    c->c_lo = tw_one_pole_coeff(6.2831853f * EP_CAB_LOW_HZ / sample_rate_hz);
+    c->c_hi = tw_one_pole_coeff(6.2831853f * EP_CAB_HIGH_HZ / sample_rate_hz);
 }
 
 void ep_cabinet_set(ep_cabinet *c, float v) {

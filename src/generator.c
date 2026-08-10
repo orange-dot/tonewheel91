@@ -159,13 +159,11 @@ int tw_wheel_index(int key, int drawbar) {
  * valid for x <= 0.25 (tau >= ~0.1 ms at 44.1 kHz), where the truncation
  * error is < 1e-5 of the coefficient. Hostile tau/fs clamp to x = 0.25. */
 static float smooth_coeff(float sample_rate_hz, float tau_s) {
-    float x = 1.0f / (tau_s * sample_rate_hz);
-    if (!(x > 0.0f) || x > 0.25f) x = 0.25f;
-    return x * (1.0f - x * (0.5f - x * (1.0f / 6.0f - x / 24.0f)));
+    return tw_one_pole_coeff(1.0f / (tau_s * sample_rate_hz));
 }
 
 void tw_generator_init(tw_generator *g, float sample_rate_hz, float tau_s) {
-    if (!(sample_rate_hz >= 8000.0f)) sample_rate_hz = 48000.0f;
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     *g = (tw_generator){ 0 };
     uint64_t seed = WEAR_SEED;
     for (int i = 0; i < TW_WHEELS; i++) {
@@ -187,6 +185,7 @@ void tw_generator_init(tw_generator *g, float sample_rate_hz, float tau_s) {
 }
 
 void tw_generator_set_perc_tau(tw_generator *g, float sample_rate_hz, float tau_s) {
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     g->perc_smooth = smooth_coeff(sample_rate_hz, tau_s);
 }
 

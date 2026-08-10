@@ -279,11 +279,11 @@ int main(void) {
     }
     for (long i = 0; i < 2L * TR_FRAMES; i++) tr_buf[i] *= 0.125f;
     int rc = 0;
-    rc |= wav_write_f32("build/m6_chorale.wav", ab_a, 2L * AB_FRAMES, RATE, 2);
-    rc |= wav_write_f32("build/m6_tremolo.wav", ab_b, 2L * AB_FRAMES, RATE, 2);
-    rc |= wav_write_f32("build/m6_transition.wav", tr_buf, 2L * TR_FRAMES, RATE, 2);
-    rc |= wav_write_f32("build/m6_horn_fm.wav", fm_a, 2L * AB_FRAMES, RATE, 2);
-    rc |= wav_write_f32("build/m6_drum_am.wav", fm_b, 2L * AB_FRAMES, RATE, 2);
+    rc |= wav_write_f32("build/m6_chorale.wav", ab_a, AB_FRAMES, RATE, 2);
+    rc |= wav_write_f32("build/m6_tremolo.wav", ab_b, AB_FRAMES, RATE, 2);
+    rc |= wav_write_f32("build/m6_transition.wav", tr_buf, TR_FRAMES, RATE, 2);
+    rc |= wav_write_f32("build/m6_horn_fm.wav", fm_a, AB_FRAMES, RATE, 2);
+    rc |= wav_write_f32("build/m6_drum_am.wav", fm_b, AB_FRAMES, RATE, 2);
     printf("\n  wavs: build/m6_chorale.wav / m6_tremolo.wav (the speed A/B),\n"
            "        m6_transition.wav (chorale -> tremolo at 5 s -> chorale\n"
            "        at 10 s: the horn changes in ~1 s, the drum takes 5-8 s),\n"

@@ -2,8 +2,11 @@
 #ifndef WAV_H
 #define WAV_H
 
-/* Interleaved f32 frames; returns 0 on success, -1 on I/O failure. */
-int wav_write_f32(const char *path, const float *samples, long count,
-                  int rate_hz, int channels);
+#include <stddef.h>
+
+/* Interleaved f32 frames; returns 0 on success, -1 on invalid input or an
+ * I/O failure. A null sample pointer is valid only for zero frames. */
+int wav_write_f32(const char *path, const float *samples, size_t frames,
+                  unsigned rate_hz, unsigned channels);
 
 #endif

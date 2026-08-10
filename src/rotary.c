@@ -71,13 +71,6 @@ static constexpr float DRUM_AM_DEPTH = 0.15f;
  * decorrelates — the lobe and delay swings sit in quadrature. */
 static constexpr float MIC_TURNS = 0.125f;
 
-/* 1 - exp(-x) by the alternating Taylor expansion of exp; valid for
- * x <= 0.25 (generator.c's smooth_coeff discipline); hostile args clamp. */
-static float one_pole_coeff(float x) {
-    if (!(x > 0.0f) || x > 0.25f) x = 0.25f;
-    return x * (1.0f - x * (0.5f - x * (1.0f / 6.0f - x / 24.0f)));
-}
-
 /* cos(2*pi*p) for p in [0, 1) via the quarter-turn shift. */
 static inline float cos_turns(float p) {
     p += 0.25f;
@@ -92,10 +85,7 @@ static inline float snap0(float x) {
 }
 
 void tw_rotary_init(tw_rotary *r, float sample_rate_hz) {
-    /* upper clamp too: the delay line's fixed capacity is sized for the
-     * repo's 192 kHz ceiling */
-    if (!(sample_rate_hz >= 8000.0f) || sample_rate_hz > 192000.0f)
-        sample_rate_hz = 48000.0f;
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     *r = (tw_rotary){ 0 };
     r->inv_rate = 1.0f / sample_rate_hz;
 
@@ -106,14 +96,14 @@ void tw_rotary_init(tw_rotary *r, float sample_rate_hz) {
     r->xo_a2 = g * r->xo_a1;
     r->xo_a3 = g * r->xo_a2;
 
-    r->dm_c = one_pole_coeff(6.28318531f * DRUM_AM_FLOOR_HZ / sample_rate_hz);
+    r->dm_c = tw_one_pole_coeff(6.28318531f * DRUM_AM_FLOOR_HZ / sample_rate_hz);
 
     /* per-direction decay factors of the rate deviation */
-    r->horn_up_k = 1.0f - one_pole_coeff(1.0f / (HORN_RISE_TAU_S * sample_rate_hz));
-    r->horn_dn_k = 1.0f - one_pole_coeff(1.0f / (HORN_FALL_TAU_S * sample_rate_hz));
-    r->drum_up_k = 1.0f - one_pole_coeff(1.0f / (DRUM_RISE_TAU_S * sample_rate_hz));
-    r->drum_dn_k = 1.0f - one_pole_coeff(1.0f / (DRUM_FALL_TAU_S * sample_rate_hz));
-    r->park_c = one_pole_coeff(1.0f / (PARK_TAU_S * sample_rate_hz));
+    r->horn_up_k = 1.0f - tw_one_pole_coeff(1.0f / (HORN_RISE_TAU_S * sample_rate_hz));
+    r->horn_dn_k = 1.0f - tw_one_pole_coeff(1.0f / (HORN_FALL_TAU_S * sample_rate_hz));
+    r->drum_up_k = 1.0f - tw_one_pole_coeff(1.0f / (DRUM_RISE_TAU_S * sample_rate_hz));
+    r->drum_dn_k = 1.0f - tw_one_pole_coeff(1.0f / (DRUM_FALL_TAU_S * sample_rate_hz));
+    r->park_c = tw_one_pole_coeff(1.0f / (PARK_TAU_S * sample_rate_hz));
 
     r->d_base = DOP_BASE_S * sample_rate_hz;
     r->d_amp = DOP_AMP_S * sample_rate_hz;

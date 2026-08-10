@@ -16,8 +16,11 @@ instrument family (kept outside the repo).
 libm: per-sample math uses repo-local kernels (polynomial sine over a phase
 accumulator, tanh-shaped saturator, a small exp for init-time smoothing
 coefficients). All state lives in caller-provided structs, fixed capacity for
-sample rates up to 192 kHz, f32 throughout, structure-of-arrays layout so the
-91-wide banks auto-vectorize. Gain smoothers snap to target below an epsilon
+sample rates from 44.1 through 192 kHz, f32 throughout, structure-of-arrays
+layout so the 91-wide banks auto-vectorize. Every initializer applies that
+same rate contract; unsupported or non-finite values select 48 kHz. The build
+asserts an 8-bit byte and IEEE-754 binary32 because the bit-level math kernels
+depend on that representation. Gain smoothers snap to target below an epsilon
 so decaying banks never enter denormal territory. The MIDI byte parser
 (running status, note on/off, program change, CC) is part of the core: on
 Linux it is fed by ALSA rawmidi, on an instrument build by a UART — same
@@ -32,18 +35,26 @@ Live driver: one thread, synchronous:
 
 No second thread, no ring buffer; ALSA's period/buffer machinery is all the
 buffering there is. Event timing quantizes to one period (2.7 ms at 128
-frames / 48 kHz). The offline renderer replays a small text event script and
-writes WAV; it is the determinism/test twin of the live path, not a product.
+frames / 48 kHz). ALSA may negotiate a different period from the request, so
+the driver validates the result and allocates its buffers once from that
+value before entering the loop. The offline renderer parses bounded SMF
+format 0/1 input and writes stereo IEEE-float WAV; it is the determinism/test
+twin of the live path, not a product.
 
 ## Dependency policy
 
-- Core: no third-party code. What one would import there is either the
+- Core: no third-party code. A bare target must provide the compiler's memory
+  primitive used for aggregate initialization; the current GCC and Clang
+  objects require only `memset`, enforced by the core-symbol allow-list test.
+  What one would import there is either the
   project's own subject matter (oscillators, filters, delay lines, shapers)
   or smaller to write than to vendor (WAV writer, FNV-64, xorshift RNG,
   later a radix-2 FFT for offline metrics).
 - Drivers: platform libraries are legitimate when a real capability demands
   them. Today that is exactly one: `libasound`.
 - libc, libm-in-drivers, and POSIX getopt are standard, not dependencies.
+- Hosted WAV output requires the little-endian IEEE-754 binary32 layout used
+  by the supported x86-64 and aarch64 Linux targets.
 - Litmus test: would we be replacing code that is the point of the project,
   or plumbing? Plumbing may be taken ready-made; the point we write.
 

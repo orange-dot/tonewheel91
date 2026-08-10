@@ -5,7 +5,8 @@ in pure C23. Ninety-one always-running tonewheels behind a gear-ratio table, a
 key-contact/busbar network with taper, loudness robbing and key click,
 percussion, a vibrato/chorus scanner, stateful preamp drive, and a two-rotor
 rotary speaker. Live-first: the primary driver is a Linux ALSA MIDI-in /
-PCM-out loop; an offline script renderer is the deterministic test twin.
+PCM-out loop; an offline Standard MIDI File renderer is the deterministic
+test twin.
 
 Status: M7 landed — wear, the structured deviations: per-wheel level
 spread, tooth-profile harmonics, motion AM at each wheel's own rotation
@@ -46,12 +47,13 @@ for the first time in this codebase. EP0 pins its constants
 (`docs/ep-constants.md`), EP1 lands the voice bank offline
 (`docs/ep1-evidence.md`), and EP2 adds dampers, the sustain pedal, panic,
 the live `ep73` binary and an instrument switch on `render_midi`
-(`docs/ep2-evidence.md`) — its restrike law is still an open A/B and it has
-not been played on the rig yet. No organ translation unit is shared or
-edited, the instrument switch defaults to the organ, and the organ's pinned
-signatures — the whole-song render hashes included — reproduce bit-for-bit.
+(`docs/ep2-evidence.md`). Later passes add the pinned hammer voicing,
+tremolo, shared drive stage, cabinet and per-note condition model. No organ
+core translation unit depends on the EP core, the instrument switch defaults
+to the organ, and the organ's pinned signatures — the whole-song render
+hashes included — reproduce bit-for-bit.
 
-    make test      # table-driven checks (9322)
+    make test      # core, hosted-boundary and MIDI-dispatch checks
     make exhibit   # renders the evidence WAVs into build/
     make viz       # renders the evidence PNGs into docs/viz/
     make           # also builds the live driver
@@ -69,17 +71,15 @@ signatures — the whole-song render hashes included — reproduce bit-for-bit.
                    # CC87 rotary speed switch (chorale/tremolo), CC88 balance,
                    # CC89 width, CC90 rotary drive
                    # -r rate -p period -n periods -g gain
+                   # -2 two-manual touch-surface protocol: notes and key
+                   #    depth on ch1+ch2 merge onto the one manual; CCs are
+                   #    honored on ch1 only
 
     ./build/ep73 -d hw:CARD=AG06AG03 -e 4       # the electric piano
                    # notes 28..100, velocity -> loudness and timbre
                    # CC64 sustain pedal, CC120/123 panic
-                   # CC85/91/92/93 reserved: drive, tremolo, cabinet,
-                   #   condition — counted, not yet wired
+                   # CC85 drive, CC91 tremolo, CC92 cabinet, CC93 condition
     ./build/render_midi -I ep73 ...             # its offline twin
-                   # -2 two-manual touch-surface protocol: notes and key
-                   #    depth on ch1+ch2 (upper+lower) merge onto the one
-                   #    manual, CCs honored on ch1 only; default stays
-                   #    channel-agnostic
 
 ## Layout
 
@@ -93,7 +93,8 @@ signatures — the whole-song render hashes included — reproduce bit-for-bit.
              deterministic twin for whole songs; renders logged in
              docs/renders.md); the Linux ALSA live driver (the one
              permitted dependency: libasound)
-    test/    assert-based tests; two-run FNV-64 render-signature determinism
+    test/    assert-based core, hosted-boundary and MIDI-dispatch tests;
+             two-run FNV-64 render-signature determinism; SMF fuzz entrypoint
     docs/    design notes, pinned constants, per-milestone evidence
 
 ## Policy

@@ -164,17 +164,35 @@ static constexpr float COND_FLOOR_LEVEL = 2.5e-4f;/* -72 dB broadband    */
 static constexpr float COND_HUM_HZ = 60.0f;
 /* sec 16: the horizontal polarisation's split from the vertical, as a
  * frequency ratio — the asymmetry is in the wire and its mounting, so it
- * scales with pitch and the beat rate rises with it. Its excitation and
- * how strongly it reaches the pickup are separate depths. [FOLK] */
-static constexpr float COND_POLAR_SPLIT = 0.004f;
-static constexpr float COND_POLAR_DEPTH = 0.60f;
+ * scales with pitch and the beat rate rises with it. The depth is what the
+ * pickup senses of that plane, as a share of the fundamental: its
+ * excitation and the sensing axis's misalignment are two small factors and
+ * only their product reaches the bus. Both are [decision], closed by ear
+ * against the sec 16.3 ballots — the rate on 2026-07-30, the depth the day
+ * before it. */
+/* Exported, unlike its siblings, because the test binds its split bound to
+ * this number rather than restating it: a draw can never exceed its own
+ * scale, so the bound is the constant itself and moves when it does. */
+const float EP_POLAR_SPLIT = 0.040f;
+static constexpr float COND_POLAR_DEPTH = 0.30f;
+/* sec 16.2: the horizontal plane's dwell, as a fraction of the vertical
+ * fundamental's. Not scaled by condition — it is the mechanism's own ratio,
+ * and the stage still vanishes at condition 0 through the depth alone.
+ * Direction is sourced: the tine and the inertia bar lie in one plane and
+ * form a fork there, so the base reaction cancels in that plane and nowhere
+ * else. The magnitude is a decision, closed by ear against a ballot: below
+ * about 0.5 the breath does not survive one beat period and reads as a
+ * wobble in the attack rather than a gesture. */
+static constexpr float POLAR_T60_RATIO = 0.60f;
 static constexpr uint64_t COND_SEED = 0x65703733636f6e64u; /* "ep73" "cond" */
 
 const float EP_CONDITION_DEFAULT = 0.5f;
 
-/* A draw's 13-bit field mapped to [-1, 1). */
-static float field(uint64_t d, int shift) {
-    return (float)(int32_t)((d >> shift) & 0x1FFFu) * (1.0f / 4096.0f) - 1.0f;
+/* Four non-overlapping 13-bit fields fit in one word. */
+static float field13(uint64_t word, unsigned slot) {
+    unsigned shift = 13u * slot;
+    return (float)(int32_t)((word >> shift) & 0x1fffu)
+         * (1.0f / 4096.0f) - 1.0f;
 }
 
 /* Square root, strike-time only — never on a per-sample path. Exponent
@@ -190,39 +208,33 @@ static float ep_sqrtf(float x) {
     return 0.5f * (r + x / r);
 }
 
-/* 1 - exp(-ln(1000)/(t60*fs)) by the alternating Taylor expansion of exp —
- * the generator's smooth_coeff form (sec 4.1). x is at most ~7e-4 here, so
- * the truncation sits far below f32 resolution. */
-static float one_minus_exp(float x) {
-    if (!(x > 0.0f) || x > 0.25f) x = 0.25f;
-    return x * (1.0f - x * (0.5f - x * (1.0f / 6.0f - x / 24.0f)));
-}
-
 static float decay_coeff(float sample_rate_hz, float t60_s) {
-    return one_minus_exp(LN1000 / (t60_s * sample_rate_hz));
+    return tw_one_pole_coeff(LN1000 / (t60_s * sample_rate_hz));
 }
 
 /* One-pole lowpass coefficient for a corner at fc: tau = 1/(2 pi fc). */
 static float lowpass_coeff(float sample_rate_hz, float fc_hz) {
-    return one_minus_exp(6.2831853f * fc_hz / sample_rate_hz);
+    return tw_one_pole_coeff(6.2831853f * fc_hz / sample_rate_hz);
 }
 
 /* sec 16: one sample of the horizontal polarisation, returned as the
- * factor it applies to the voice. The pickup's chisel edge stands
- * perpendicular to the plane the hammer drives [EP-P61], so horizontal
- * motion barely induces anything by itself — what it does is move the tine
- * across the field and modulate how well the vertical motion couples. So
- * it multiplies rather than adds, and what it produces is the slow breath
- * of a real note rather than a second pitch. Exactly 1 at condition 0. */
-static float polar_factor(ep_bank *b, int key) {
+ * displacement the pickup senses from it. The chisel edge stands
+ * perpendicular to the plane the hammer drives and sits "somewhat
+ * off-center" [EP-P61], and how far it is rotated about the tine is a
+ * setup tolerance, so its sensitivity axis is not exactly the hammer's
+ * plane and a small share of the horizontal motion is sensed alongside the
+ * vertical. Two nearly-equal frequencies summed at the sensor is what
+ * beats; sec 16.1 records what happens when they are multiplied instead.
+ * Exactly 0 at condition 0. */
+static float polar_tick(ep_bank *b, int key) {
     float p = b->h_phase[key] + b->h_step[key];
     p -= (p >= 1.0f) ? 1.0f : 0.0f;
     b->h_phase[key] = p;
     float a = b->h_amp[key];
-    float f = 1.0f + a * tw_sin_turns(p);
-    a -= a * b->dec[0][key];
+    float d = b->h_depth[key] * a * tw_sin_turns(p);
+    a -= a * b->h_dec[key];
     b->h_amp[key] = (a < AMP_EPS) ? 0.0f : a;
-    return f;
+    return d;
 }
 
 /* sec 6.2: the coupling capacitor at the preamplifier's input. A tine
@@ -383,20 +395,22 @@ static void rebuild(ep_bank *b, float sample_rate_hz) {
     const float c = b->cond;
     uint64_t seed = COND_SEED;
     for (int k = 0; k < EP_KEYS; k++) {
-        uint64_t d1 = tw_splitmix64(&seed), d2 = tw_splitmix64(&seed);
+        uint64_t d1 = tw_splitmix64(&seed);
+        uint64_t d2 = tw_splitmix64(&seed);
+        uint64_t d3 = tw_splitmix64(&seed);
         /* sec 15: tuning drift, in cents, as a frequency multiplier. The
          * cent-to-ratio conversion is linearised — 6 cents is 0.347 %, and
          * the error of treating that as linear is under 6e-6. */
-        float detune = 1.0f + c * COND_DETUNE_CENTS * field(d1, 0)
+        float detune = 1.0f + c * COND_DETUNE_CENTS * field13(d1, 0)
                      * (0.0005777895f);
         float f1 = ep_key_freq_hz(k) * detune;
         b->f1[k] = f1;
         /* sec 6.1: the gap is a per-note setup adjustment, so both how
          * hard the tine drives the field and where it sits in it vary. */
         b->pk_g[k] = ep_pickup_drive(k)
-                   * (1.0f + c * COND_ALPHA_DEV * field(d1, 13));
+                   * (1.0f + c * COND_ALPHA_DEV * field13(d1, 1));
         b->pk_x0[k] = EP_PICKUP_OFFSET
-                    * (1.0f + c * COND_ALPHA_DEV * field(d2, 52));
+                    * (1.0f + c * COND_ALPHA_DEV * field13(d1, 2));
         b->pk_ref[k] = ep_field(b->pk_x0[k]);
         for (int m = 0; m < EP_MODES; m++) {
             /* sec 15: the clang ratio drifts per note, because the tuning
@@ -404,9 +418,11 @@ static void rebuild(ep_bank *b, float sample_rate_hz) {
              * Mode 1 is the fundamental and carries no extra deviation. */
             float ratio = EP_MODE_RATIO[m]
                         * (m == 0 ? 1.0f
-                           : 1.0f + c * COND_RATIO_DEV * field(d2, 13 * m));
+                           : 1.0f + c * COND_RATIO_DEV
+                           * field13(d2, (unsigned)(m - 1)));
             b->trim[m][k] = (m == 0) ? 1.0f
-                          : 1.0f + c * COND_VOICE_DEV * field(d2, 26 + 13 * m);
+                          : 1.0f + c * COND_VOICE_DEV
+                          * field13(d2, (unsigned)(m + 1));
             /* sec 3.1: a mode inside the guard band renders at gain zero —
              * silence, not foldback. A piano borrows nothing. */
             float f = f1 * ratio;
@@ -415,31 +431,39 @@ static void rebuild(ep_bank *b, float sample_rate_hz) {
             b->step[m][k] = voiced ? f / sample_rate_hz : 0.0f;
             b->dec_free[m][k] = decay_coeff(sample_rate_hz, ep_t60_s(k, m));
             b->dec_damp[m][k] = decay_coeff(sample_rate_hz, ep_damp_t60_s(k));
-            b->dec[m][k] = b->dec_damp[m][k]; /* at rest the dampers are on */
+            b->dec[m][k] = b->damper_up[k]
+                         ? b->dec_free[m][k] : b->dec_damp[m][k];
             /* sec 5.4: the hardest single blow this mode can take, which is
              * also the ceiling a restrike may not push it past. */
             b->ceiling[m][k] = ep_mode_weight(k, m, 127) * b->trim[m][k]
                              * b->gate[m][k];
         }
-        /* sec 16: a twin of the fundamental, split by a per-note fraction
-         * and running on the same tine's losses. Both depths are exactly
-         * 0 at condition 0, which makes the whole stage vanish. */
-        float split = 1.0f + c * COND_POLAR_SPLIT * field(d2, 39);
+        /* sec 16: a twin of the fundamental, split by a per-note fraction.
+         * The depth is exactly 0 at condition 0, which makes the whole
+         * stage vanish; a twin past the guard band carries no depth
+         * either, so a muted plane cannot leave a frozen offset behind. */
+        float split = 1.0f + c * EP_POLAR_SPLIT * field13(d3, 0);
         float fh = f1 * split;
-        b->h_step[k] = (fh < guard) ? fh / sample_rate_hz : 0.0f;
-        /* One depth, not two. Excitation and pickup sensitivity were
-         * separate factors at first, each a small number, and their
-         * product came out at a couple of percent — inaudible. What the
-         * ear cares about is the modulation index that reaches the bus, so
-         * that is what is pinned. */
-        b->h_depth[k] = c * COND_POLAR_DEPTH
-                      * (0.5f + 0.5f * field(d1, 26));
+        bool h_voiced = fh < guard;
+        b->h_step[k] = h_voiced ? fh / sample_rate_hz : 0.0f;
+        /* One depth, not two. The horizontal excursion and the share of it
+         * the sensing axis picks up are separate small factors, and only
+         * their product reaches the bus, so that product is what is
+         * pinned — as a share of the fundamental, which makes it the
+         * beat's own depth. */
+        b->h_depth[k] = h_voiced ? c * COND_POLAR_DEPTH
+                                 * (0.5f + 0.5f * field13(d1, 3)) : 0.0f;
+        /* sec 16.2: its own losses, and they are the shorter ones. */
+        b->h_dec_free[k] = decay_coeff(sample_rate_hz,
+                                       ep_t60_s(k, 0) * POLAR_T60_RATIO);
+        b->h_dec[k] = b->damper_up[k]
+                    ? b->h_dec_free[k] : b->dec_damp[0][k];
         b->hn_dec[k] = decay_coeff(sample_rate_hz,
                                    EP_HAMMER_MS[ep_zone(k + EP_NOTE_MIN)] * 1e-3f);
         b->hn_c[k] = lowpass_coeff(sample_rate_hz,
                                    EP_HAMMER_HZ[ep_zone(k + EP_NOTE_MIN)]);
     }
-    b->dc_c = one_minus_exp(6.2831853f * DC_BLOCK_HZ / sample_rate_hz);
+    b->dc_c = tw_one_pole_coeff(6.2831853f * DC_BLOCK_HZ / sample_rate_hz);
     b->hum_step = COND_HUM_HZ / sample_rate_hz;
     b->hum_gain = c * COND_HUM_LEVEL;
     b->floor_gain = c * COND_FLOOR_LEVEL;
@@ -447,7 +471,7 @@ static void rebuild(ep_bank *b, float sample_rate_hz) {
 }
 
 void ep_bank_init(ep_bank *b, float sample_rate_hz) {
-    if (!(sample_rate_hz >= 8000.0f)) sample_rate_hz = 48000.0f;
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     *b = (ep_bank){ 0 };
     b->floor_rng = COND_SEED;
     rebuild(b, sample_rate_hz); /* condition 0: the idealized instrument */
@@ -462,8 +486,13 @@ void ep_bank_set_condition(ep_bank *b, float v) {
 }
 
 static void set_decrements(ep_bank *b, int key, bool damped) {
+    b->damper_up[key] = !damped;
     for (int m = 0; m < EP_MODES; m++)
         b->dec[m][key] = damped ? b->dec_damp[m][key] : b->dec_free[m][key];
+    /* sec 16.2: the damper lands on the tine, not on one of its planes, so
+     * a damped horizontal runs on the damper's rate like everything else.
+     * That rate is the faster one at every note, which the test asserts. */
+    b->h_dec[key] = damped ? b->dec_damp[0][key] : b->h_dec_free[key];
 }
 
 void ep_bank_damp(ep_bank *b, int midi_note) {
@@ -485,6 +514,7 @@ void ep_bank_strike(ep_bank *b, int midi_note, int velocity) {
     else if (velocity > 127) velocity = 127;
     int k = midi_note - EP_NOTE_MIN;
     float level = EP_LEVEL[velocity]; /* sec 5.1, gamma = 1.042 */
+    float m1 = 0.0f;                  /* this blow's share of the fundamental */
     for (int m = 0; m < EP_MODES; m++) {
         float have = b->amp[m][k];
         /* sec 5.3: a mode at rest has no phase worth keeping; a ringing one
@@ -493,8 +523,10 @@ void ep_bank_strike(ep_bank *b, int midi_note, int velocity) {
         /* sec 5.4, D5 closed by ear at EP3: the blow adds to what is there,
          * bounded by what its own hardest single blow would give. A hammer
          * puts energy into a tine and has no way to take any out. */
-        float a = have + level * ep_mode_weight(k, m, velocity)
-               * b->trim[m][k] * b->gate[m][k];
+        float add = level * ep_mode_weight(k, m, velocity)
+                  * b->trim[m][k] * b->gate[m][k];
+        if (m == 0) m1 = add;
+        float a = have + add;
         b->amp[m][k] = (a > b->ceiling[m][k]) ? b->ceiling[m][k] : a;
     }
     /* sec 5.5: the tip meeting the tine. Seed and filter state are both
@@ -515,11 +547,12 @@ void ep_bank_strike(ep_bank *b, int midi_note, int velocity) {
     b->hn_lp[k] = 0.0f;
     b->hn_rng[k] = HAMMER_SEED ^ ((uint64_t)midi_note * 0x9e3779b97f4a7c15u)
                  ^ ((uint64_t)(b->strikes++) * 0xbf58476d1ce4e5b9u);
-    /* sec 16: the blow spills a little into the plane it is not aimed at.
-     * Same add-and-ceiling law as the modes, same phase rule. */
+    /* sec 16: the blow also excites the other physical plane. Its energy is
+     * condition-independent; h_depth is applied only where the pickup senses
+     * it, so changing condition cannot erase or invent live energy. */
     if (b->h_amp[k] == 0.0f) b->h_phase[k] = 0.0f;
-    float hcap = b->h_depth[k];
-    float ha = b->h_amp[k] + level * b->h_depth[k];
+    float hcap = b->ceiling[0][k];
+    float ha = b->h_amp[k] + m1;
     b->h_amp[k] = (ha > hcap) ? hcap : ha;
     set_decrements(b, k, false); /* the hammer lifts the damper, sec 8 */
     b->relist = true;
@@ -537,7 +570,10 @@ void ep_bank_silence(ep_bank *b) {
         b->hn_lp[k] = 0.0f;
         b->h_amp[k] = 0.0f;
         b->h_phase[k] = 0.0f;
+        b->h_dec[k] = b->dec_damp[0][k]; /* back to rest, sec 16.2 */
+        b->damper_up[k] = false;
     }
+    b->dc_lp = 0.0f;
     b->live_n = 0;
     b->relist = false;
 }
@@ -581,8 +617,8 @@ float ep_bank_tick(ep_bank *b) {
 
     float sum = floor_tick(b);
     for (int k = 0; k < EP_KEYS; k++) {
-        float g = polar_factor(b, k);
-        sum += ep_pickup(voice[k] * g, b->pk_g[k], b->pk_x0[k], b->pk_ref[k])
+        float h = polar_tick(b, k);
+        sum += ep_pickup(voice[k] + h, b->pk_g[k], b->pk_x0[k], b->pk_ref[k])
              + hammer_tick(b, k);
     }
     return dc_block(b, sum);
@@ -606,10 +642,10 @@ float ep_bank_tick_gated(ep_bank *b) {
             b->amp[m][k] = a;
             alive += a;
         }
-        float g = polar_factor(b, k);
+        float h = polar_tick(b, k);
         alive += b->hn_amp[k] + b->h_amp[k];
         if (alive == 0.0f) b->relist = true;
-        sum += ep_pickup(x * g, b->pk_g[k], b->pk_x0[k], b->pk_ref[k])
+        sum += ep_pickup(x + h, b->pk_g[k], b->pk_x0[k], b->pk_ref[k])
              + hammer_tick(b, k);
     }
     return dc_block(b, sum);

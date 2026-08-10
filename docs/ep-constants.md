@@ -761,41 +761,346 @@ makes it **a deviation, not a feature** — which is why it lives behind
 `condition` with everything else in section 15, and why `condition = 0`
 has no second plane at all.
 
-    COND_POLAR_SPLIT = 0.004    the twin's frequency offset, +/-   [FOLK]
-    COND_POLAR_DEPTH = 0.60     modulation index at a full strike  [FOLK]
+The round wire is not incidental to any of this, and the patent says so.
+Prior-art instruments could not use one: "the plane of vibration of the reed
+would rotate erratically and result in highly undesirable beating noises",
+so they used flat reeds and gave up the overtones a round section gives.
+The answer here is geometric — the tine and the inertia bar "lie in a single
+plane", the bar carries "relatively little mass, and preferably no mass,
+outside" that plane, and it rests on felt, isolated from the support. Only
+then, the patent concludes, may the tine "be constructed with a cylindrical
+shape, preferably a piano wire" [EP-P61]. The second polarisation is the
+residue of a suppression that is the reason this instrument can use a round
+wire at all.
 
-**It multiplies, it does not add.** The pickup's chisel edge stands
-perpendicular to the plane the hammer drives [EP-P61], so horizontal motion
-induces very little by itself; what it does is carry the tine across the
-field and change how well the vertical motion couples. So the horizontal
-twin is applied as a gain on the voice, and what comes out is a slow
-breath rather than a second pitch. The pickup's mean-square term is scaled
-by the same factor squared, so section 6's DC removal stays exact.
+    EP_POLAR_SPLIT   = 0.040    the twin's frequency offset, +/-  [decision]
+    COND_POLAR_DEPTH = 0.30     sensed share of the fundamental   [decision]
+    POLAR_T60_RATIO  = 0.60     the horizontal plane's dwell      [decision]
+
+The split is the one member of this family the header exports, and the
+reason is in the suite: the test bounds every drawn split by the scale it
+was drawn from rather than by a number written beside it, so the bound
+moves when the constant does and cannot be widened by hand. It was
+`COND_POLAR_SPLIT` until 2026-07-30 and carries the `EP_` prefix now
+because it crosses into the public header.
+
+**It adds, and that is what beats.** The pickup's chisel edge stands
+perpendicular to the plane the hammer drives, and it sits "somewhat
+off-center" [EP-P61]; how far it is rotated about the tine is a setup
+tolerance nothing pins. Its sensitivity axis is therefore not exactly the
+hammer's plane, and a small share of the horizontal motion is sensed
+alongside the vertical. Two nearly-equal frequencies summed at one sensor
+is the textbook beat, and the beat is what a listener hears as the note
+breathing. Section 16.1 records what happens when they are multiplied
+instead, because that is what this section said until 2026-07-29.
+
+`COND_POLAR_DEPTH` is that sensed share, taken of **the fundamental this
+blow deposited** rather than of the strike level, so it means the beat's own
+depth and stays that whatever the velocity. It is one number covering two:
+the horizontal excursion and how much of it the sensing axis picks up are
+separate small factors, and only their product reaches the bus.
 
 The split is a **ratio**, because the asymmetry is in the wire's section
 and its mounting rather than an absolute frequency. The beat rate therefore
 rises with pitch, which is what a real instrument does: the bass swells
 slowly and the treble shimmers.
 
-Measured, at a velocity-110 strike:
+Analytic, at a velocity-110 strike. The depth column is the share; the
+ceiling column is what that share would give if the beat completed
+instantly, and is an upper bound, not a measurement:
 
-    MIDI   condition   modulation peak-to-peak   beat period
-      40      0.0            0.00 dB              —
-      40      0.5            3.48 dB              11.7 s
-      40      1.0            7.27 dB               5.8 s
-      64      0.5            0.78 dB               1.66 s
-      88      0.5            2.76 dB               0.54 s
+    MIDI   cond   depth   p-p ceiling   beat period   note t60   breath t60
+      28    0.5   0.082      1.43 dB        2.03 s      17.00 s     10.20 s
+      28    1.0   0.165      2.88 dB        1.01 s      17.00 s     10.20 s
+      40    0.5   0.115      2.01 dB        0.74 s      13.36 s      8.01 s
+      40    1.0   0.231      4.08 dB        0.37 s      13.36 s      8.01 s
+      52    0.5   0.013      0.23 dB        0.43 s      10.49 s      6.30 s
+      64    0.5   0.026      0.45 dB        0.36 s       8.24 s      4.95 s
+      76    0.5   0.130      2.26 dB        0.65 s       6.48 s      3.89 s
+      88    0.5   0.092      1.60 dB        0.37 s       5.09 s      3.05 s
 
-The spread between notes at one condition — 0.78 dB against 3.48 dB — is
-the per-note draw and is the point: some notes breathe and some barely do.
+Only the period column moved when the rate closed at 0.040 — the depth and
+its ceiling are the depth's business and the t60s are section 16.2's. Every
+period is exactly a tenth of what it was at 0.004, which is the check that
+the column is the ratio's consequence and not a second calibration. The
+periods are now shorter than the breath at every note, where at the old
+rate the two lowest were not: that is the whole of what the rate bought.
 
-One thing was got wrong first and is worth recording. The excitation and
-the pickup's sensitivity to it were separate depths, each a small number,
-and their product came out around two percent — inaudible. What the ear
-cares about is the modulation index that actually reaches the bus, so that
-is the single quantity now pinned. Two plausible small factors multiplied
-together is a good way to build a stage that measures correct and does
-nothing.
+The spread between notes at one condition — 0.013 against 0.130 — is the
+per-note draw and is the point: some notes breathe and some barely do.
+
+Measured at the bus, which is the column that counts. Two renders of one
+note differing in nothing but the depth; envelope peak-to-peak per second
+at `condition = 0.5`:
+
+    MIDI     0s     1s     2s     3s     4s     5s
+      28   0.82   0.76   0.59   0.45   0.30   0.21
+      40   1.24   1.12   0.82   0.65   0.44   0.31
+      52   0.14   0.12   0.08   0.06   0.03   0.02
+      64   0.31   0.21   0.13   0.07   0.04   0.03
+      76   1.65   0.98   0.49   0.25   0.12   0.06
+      88   1.16   0.50   0.22   0.10   0.04   0.02
+
+**How this column is taken**, which this document did not say until
+2026-07-30 and should have. Two banks are struck identically at velocity
+110 and differ only in `COND_POLAR_DEPTH`, one at the shipped value and one
+at zero; the figure is the peak-to-peak spread, in dB, of the ratio between
+their windowed rms within each second. The ratio is the measurement because
+it divides out the note's own decay, which otherwise dominates any
+one-second window and is not what this table is about. The floors are off
+in both, since a noise floor blurs a ratio. **The window holds whole cycles
+of the fundamental**, at least 50 ms of them: a fixed 256-sample window is a
+fifth of one cycle at MIDI 28 and reports about a decibel of waveform phase
+as if it were envelope. Not writing this down cost a re-derivation when the
+rate moved, and the numbers above are all one method rather than two.
+
+The bus figures still sit under the ceilings above them, but no longer far
+under: at 0.040 the beat period is shorter than the breath at every note, so
+the envelope now completes cycles inside the window where the second plane
+is still alive. That is the change the rate bought, and it is why this table
+moved much further than the depth's own bracket ever did.
+
+### 16.1 It multiplied first, and that produced no beat
+
+Until 2026-07-29 this section applied the horizontal twin as a **gain** on
+the voice, `1 + a·sin`, on the argument that the chisel edge is
+perpendicular to the hammer's plane so lateral motion can only change how
+well the vertical couples. The argument is not wrong about the geometry. It
+is wrong about what comes out.
+
+Multiplying two nearly-equal frequencies gives their sum and their
+difference, not a beat in the envelope. Measured on that build, at MIDI 88
+and `condition = 1.0`, the stage's entire contribution was a line at
+`f1 + fh` — 2630 Hz, the octave — at −19.5 dB relative to the note, plus a
+line at `|f1 − fh|` of 0.54 Hz. That second line is where a beat would have
+to live, and it is subsonic: the coupling capacitor of section 6.2 removes
+it, which bypassing the 10 Hz highpass confirms directly, and even with the
+highpass out of the way a 0.54 Hz component added to a bus is not an
+envelope that moves. The envelope peak-to-peak over two seconds was
+**0.99 dB**, nearly all of it inside the attack. Summed instead, the same
+note at the same depth gives **3.68 dB**.
+
+Meanwhile the table this section published — up to 3.48 dB of "modulation
+peak-to-peak", with beat periods of 0.54 to 11.7 s — was the gain factor's
+index computed in isolation, and its period column did not match
+`|f1 − fh|` taken from the bank either. Nothing in it had been rendered.
+
+Two lessons, and the second is the sharper one. The first is already on the
+record from EP3: two plausible small factors multiplied together build a
+stage that measures correct and does nothing — and the same trap catches a
+stage whose *quantity* is right and whose *operation* is wrong. The second
+is that a stage's evidence has to be measured where the listener is. An
+index is not a bus, and a table of indices reads exactly like a table of
+results.
+
+### 16.2 The two planes do not decay alike
+
+`POLAR_T60_RATIO` is the horizontal plane's dwell as a fraction of the
+vertical fundamental's. It is not scaled by `condition` — it is the
+mechanism's own ratio, and the stage still vanishes at `condition = 0`
+through the depth alone.
+
+**The direction is sourced, and it is the fork.** The tine and the inertia
+bar lie in one plane and stand in "conventional tuning-fork relationship"
+there [EP-P61], so in that plane the two prongs counter-oscillate and the
+reaction at the base cancels — which is why a fork rings when held at its
+stem, while its out-of-plane and asymmetric modes are "not typically
+observed" once it is [AT20]. Perpendicular to that plane there is no
+partner and nothing cancels: the tine works alone against a high-mass,
+deliberately low-Q cast iron bar resting on felt [EP-P61]. The patent
+states the consequence as an experiment — strike the tine "in a direction
+90° from" the hammer's and "the tine will vibrate little, if any, and any
+vibration will be in the same plane as" the tine and the bar.
+
+That passage bounds how much out-of-plane motion a blow can raise, which is
+`COND_POLAR_DEPTH`'s business. What it settles for the dwell is only the
+sign: the plane the fork does not serve is the shorter-lived one. **No
+source gives the magnitude**, so it is a decision, and it went to a ballot.
+
+Rendered envelope peak-to-peak per second, `condition = 0.5`. These were
+taken at the depth and the rate shipped at the time, 0.60 and 0.004, both
+of which section 16.3 later moved — the depth down by half and the rate up
+tenfold — so no figure below is what the same arm gives today. The ballot
+compared arms against each other at one setting and that comparison is
+unaffected, so the table stands as the record of a closed decision rather
+than being re-rendered. It is left in the state it was decided in on
+purpose: re-rendering a closed decision to make its table look current
+would produce a prettier table and weaker evidence.
+
+    ratio    MIDI     0s     1s     2s     3s     4s
+    1.00       40   0.14   0.94   1.49   0.62   1.12    a permanent tremolo
+    1.00       88   1.28   1.69   2.35   0.78   2.19
+    0.60       40   0.22   0.75   0.50   0.07   0.29    <- shipped
+    0.60       88   1.23   0.29   0.30   0.03   0.05
+    0.35       40   0.55   0.42   0.07   0.04   0.03
+    0.35       88   1.17   0.03   0.01   0.00   0.00
+    0.20       40   0.82   0.14   0.00   0.00   0.00    gone inside a second
+    0.20       88   1.13   0.00   0.00   0.00   0.00
+
+**1.00 is the law this section shipped before**: the twin ran on the
+fundamental's own decrement, so the beat's depth held for as long as the
+note did. Below about 0.5 the breath does not survive one beat period —
+those periods are 3.7 to 20 s — and what is left is a wobble inside the
+attack, where the contact transient of section 5.5 already sits.
+
+**Closed by ear 2026-07-29: 0.60** — a note opens with movement and settles
+into a clean tine, which is what the ratio was added to produce. That was
+the shipped arm, so every signature logged with the ballot stands and
+nothing needed re-rendering. The takes stay in
+`renders/ep73-ballots-polar-20260729/` beside the field and slope ballots.
+
+The four arms sit within 0.23 dB of each other in rms, so unlike the slope
+ballot of section 6.1 no take needed a gain match — the ratio shortens a
+small modulation and does not move level.
+
+The damper is not part of the ratio. It lands on the tine rather than on one
+of its planes, so a damped horizontal runs on the damper's rate like
+everything else; that rate is the faster of the two at every note, which the
+test asserts rather than assumes.
+
+### 16.3 The depth and the rate, on ballots
+
+Both remaining constants were pinned while the stage put nothing on the bus,
+so neither has ever been heard. That is the reason for these two ballots and
+it is worth stating plainly: a number nobody could hear when it was chosen is
+not a shipped value, it is a placeholder that survived.
+
+**The compass sweep cannot decide either of them.** Its median note is
+0.30 s and the beats this section produces have periods of seconds, so the
+sweep would compare attack transients. The material is
+`renders/ep73-hold.mid` instead — seven E's held sixteen seconds each at
+velocity 110, the same seven again at velocity 45, and a held chord.
+Generator `renders/ep73-hold.py`, untracked beside it. The compass top is in
+it deliberately: that is where a split wide enough to be heard lower down
+stops being a beat.
+
+Each ballot holds the other constant at its shipped value, so each decides
+one thing. Both are level-matched to the shipped arm — the depth moves rms
+by up to 0.62 dB and the split by up to 0.27 dB, small but not nothing in a
+direct A/B, and after matching all fourteen takes sit within 0.0001 dB.
+
+**The depth.** `COND_POLAR_DEPTH` is the share of the fundamental the pickup
+senses of the second plane. Bus envelope peak-to-peak per second at
+`condition = 0.5`:
+
+    depth    MIDI     0s     1s     2s     3s
+    0.30       40   1.24   1.12   0.82   0.65     <- chosen, at 0.004
+    0.30       88   1.16   0.50   0.22   0.10
+    0.60       40   2.53   2.27   1.65   1.29
+    0.60       88   2.32   1.00   0.44   0.20
+    0.85       40   3.66   3.25   2.33   1.83
+    0.85       88   3.31   1.42   0.62   0.28
+    1.00       40   4.37   3.86   2.75   2.15
+    1.00       88   3.91   1.67   0.73   0.33
+
+**Re-measured at the rate that closed after it**, which is why the chosen
+row is marked with the rate it was chosen at rather than left unmarked. The
+arms keep their order and their near-linear spacing, so the ballot's own
+comparison is intact; what moved is the whole column, and it moved because
+the rate did.
+
+**Closed by ear 2026-07-29: 0.30**, the quietest arm on the ballot and half
+what the section shipped before it. Worth recording as more than a
+preference: the ear went to the bottom of a bracket whose top was chosen to
+be audible, which says the second polarisation earns its place as a
+disturbance in the texture and not as a feature anyone should be able to
+name. It also puts the shipped setting an octave below where the first
+by-ear complaint — "the instrument is too uniform" — might have suggested,
+and section 15's `condition` is where that complaint is actually answered.
+
+It scales very nearly linearly, which is what a share should do, and even
+the top arm stays a texture rather than an effect. **1.00 is the endpoint
+and the sources do not support it**: at `condition = 1` with a full draw the
+second plane would be sensed exactly as strongly as the fundamental and the
+beat would pass through a complete null. [EP-DAFx17 sec 4.2] measured the
+vertical plane as the larger one, and the sensing axis picks up only a share
+of the horizontal on top of that, so anything approaching 1 is on the ballot
+to be heard, not to be defended.
+
+**The rate.** `COND_POLAR_SPLIT` is the twin's frequency offset as a ratio.
+Same measurement, with each note's beat period beside it:
+
+    split    MIDI     0s     1s     2s     3s   beat period
+    0.004      40   0.17   0.41   0.24   0.04      7.40 s
+    0.004      76   0.47   0.39   0.06   0.07      6.49 s
+    0.004      88   0.61   0.15   0.15   0.02      3.68 s
+    0.010      40   0.82   0.28   0.58   0.43      2.96 s
+    0.010      76   1.17   0.43   0.19   0.19      2.60 s
+    0.010      88   1.02   0.37   0.17   0.09      1.47 s
+    0.020      40   1.24   0.78   0.79   0.62      1.48 s
+    0.020      76   1.53   0.71   0.46   0.18      1.30 s
+    0.020      88   1.14   0.50   0.20   0.09      0.74 s
+    0.040      40   1.24   1.12   0.82   0.65      0.74 s     <- chosen
+    0.040      76   1.65   0.98   0.49   0.25      0.65 s
+    0.040      88   1.16   0.50   0.22   0.10      0.37 s
+
+Re-measured and re-rendered at the chosen depth of 0.30 after the depth
+ballot closed. The arms had first been cut at 0.60, which would have left an
+open ballot sitting on a setting the ear had just rejected. All four arms
+were then re-measured together under the one window rule stated in section
+16 above, so no arm carries a method the others do not.
+
+**The rate is the stronger lever, and that was not the expectation.** Going
+from 0.004 to 0.040 moves the bus figure further than the whole depth
+bracket does, because at the shipped rate the envelope only traverses part
+of a cycle before section 16.2's dwell has taken the breath away. Depth sets
+how deep the swing is; the rate sets whether there is time for one. That
+also means the depth verdict above was taken with the rate at its slowest
+arm, and a faster rate would put more of the swing inside the window where
+the breath still exists — if the rate moves, the depth is worth hearing
+again.
+
+**Closed by ear 2026-07-30: 0.040**, the widest arm on the ballot — and the
+sentence above is now a debt rather than a caution. The depth was chosen at
+the bottom of its bracket while the rate was at its slowest, and the rate
+has since moved to its fastest; at 0.30 / 0.040 the bus figures are up
+everywhere — about twice through the middle and top of the compass, seven
+times at MIDI 40, more than twentyfold at MIDI 28. The reasoning that
+selected the quietest depth was made against a stage that could barely
+complete a swing, and it does not automatically survive a stage that
+completes several. **The depth is therefore reopened as register item 24**,
+against a fresh ballot cut at the closed rate. Nothing about the ear's
+verdict on the depth is being overruled here — it was simply taken under a
+condition that no longer holds, and this document said so in advance rather
+than discovering it later.
+
+What bounds the upper arms is the other end of the compass. A pair of tones
+stops beating and starts sounding rough somewhere past a separation of
+roughly fifteen hertz — the boundary is a listening matter, not a number
+this document can pin — so the table that matters for the wide arms is where
+the widest-drawn note sits:
+
+    split    widest separation, cond 0.5 / 1.0    notes past 15 Hz
+    0.004          4.07 Hz  /   8.13 Hz                 0  /  0
+    0.010         10.17 Hz  /  20.33 Hz                 0  /  3
+    0.020         20.34 Hz  /  40.65 Hz                 3  / 10
+    0.040         40.67 Hz  /  81.30 Hz                10  / 16
+
+The widest note is MIDI 99 in every arm, which is the draw and not the law.
+At 0.004 nothing in the compass is near the boundary at any condition. At
+0.040 ten notes are past it at the shipped condition and sixteen at the
+worn one, so that arm is not a faster breath but a different phenomenon in
+the top two octaves. **This is what section 1 of the hold material is for**:
+the last held note is the compass top, and it is the one that says whether
+an arm still breathes up there.
+
+**The chosen arm is the one that crosses that boundary, and it was chosen
+knowing so.** This is the reason the compass top was put in the hold
+material in the first place, so the crossing was heard rather than
+predicted, and the verdict is that the roughness up there is acceptable —
+the top two octaves of this instrument decay in under five seconds and the
+notes past 15 Hz of separation are the widest draws rather than the typical
+ones. What the table above is not is a licence to widen further: the
+separation scales with the constant, so the next step up puts the majority
+of the compass into roughness rather than a minority of its widest draws.
+**The boundary is now load-bearing** — it is what stops the rate, and it
+should be quoted against any future proposal to raise it.
+
+The rate is closed; **the depth is open again** — register item 24, owner
+the operator, for the reason given above. The takes are in
+`renders/ep73-ballots-polar2-20260729/`, named by the constant they carry,
+with `shipped-0.30-0.004` serving both ballots; a depth ballot re-cut at
+0.040 is what item 24 needs and it does not exist yet.
 
 ## 15. Condition — EP7
 
@@ -1096,16 +1401,15 @@ convention), reuses CC85 for drive, and continues upward from CC91.
 
     CC64    sustain pedal        >= 64 is down          EP2, wired
     CC85    drive                value / 127            EP5, wired
-    CC91    tremolo              value / 127, 0 = off   EP4
+    CC91    tremolo              value / 127, 0 = off   EP4, wired
     CC92    cabinet              value / 127, 0 = bypass EP6, wired
     CC93    condition            value / 127            EP7, wired
     CC120   all sound off        drops all dampers      EP2, wired
     CC123   all notes off        drops all dampers      EP2, wired
 
-Everything from CC85 upward is reserved, not implemented: the milestone
-named beside it wires it, and until then the message is parsed and
-ignored like any other. Each reserved control's zero is its bit-exact
-bypass, so wiring one later cannot move an earlier render.
+All controls listed above are wired by both the live and offline dispatch
+paths. Unknown CCs are ignored. Each model control's zero remains its
+bit-exact bypass, so adding a later stage did not move an earlier render.
 
 Deliberately unassigned:
 
@@ -1120,8 +1424,9 @@ Deliberately unassigned:
 - Note-on with velocity 0 is a note-off, per the MIDI convention the
   organ's parser already follows.
 
-Identity defaults, each a bit-exact bypass (the scanner-OFF discipline):
-`condition = 0`, tremolo off, `drive = 0`, cabinet bypass. The pickup
+Identity/bypass settings (the scanner-OFF discipline): `condition = 0`,
+tremolo off, `drive = 0`, cabinet bypass. The shipped condition default is
+`EP_CONDITION_DEFAULT = 0.5`; the other three start at bypass. The pickup
 nonlinearity of section 6 is **not** one of them: it is always on, because
 it is the instrument rather than a deviation from it. `condition` scales a
 spread *around* the pinned alpha, and `condition = 0` puts every voice at
@@ -1139,7 +1444,7 @@ exactly the pinned value.
 - **Cabinet / speaker.** Landed at EP6 — see section 14.
 - **Condition.** Landed at EP7 — see section 15.
 
-## 12. Open-items register
+## Open-items register
 
 Every item names the milestone that closes it. An item with no owner is a
 defect in this document.
@@ -1168,3 +1473,8 @@ defect in this document.
 | 17 | Reference-recording set for the by-ear pass | open | operator, before EP3 |
 | 18 | `EP_PICKUP_DRIVE_REF = 2^(-11/8)` — the manual's VOLUME adjustment | [decision] | operator |
 | 19 | `PICKUP_DRIVE_MAX` | **deleted at the field kernel** | — |
+| 20 | The six `COND_*` deviations and floors of sec 15 | [FOLK] | operator |
+| 21 | `EP_POLAR_SPLIT = 0.040` — the beat's rate | **closed by ear 2026-07-30** | — |
+| 22 | `COND_POLAR_DEPTH = 0.30` — the beat's depth | closed by ear 2026-07-29, **reopened as 24** | — |
+| 23 | `POLAR_T60_RATIO = 0.60`; direction sourced [EP-P61]/[AT20], magnitude not | **closed by ear 2026-07-29** | — |
+| 24 | `COND_POLAR_DEPTH` re-heard at the closed rate — 22 was decided at 0.004 | open, needs a ballot re-cut at 0.040 | operator, off a new sec 16.3 ballot |

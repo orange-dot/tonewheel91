@@ -96,19 +96,12 @@ float tw_drive_curve(float x) {
          + CURVE_MH[i + 1] * (t3 - t2);
 }
 
-/* 1 - exp(-x) by the alternating Taylor expansion of exp; valid for
- * x <= 0.25 (generator.c's smooth_coeff discipline); hostile args clamp. */
-static float one_pole_coeff(float x) {
-    if (!(x > 0.0f) || x > 0.25f) x = 0.25f;
-    return x * (1.0f - x * (0.5f - x * (1.0f / 6.0f - x / 24.0f)));
-}
-
 void tw_drive_init(tw_drive *d, float sample_rate_hz) {
-    if (!(sample_rate_hz >= 8000.0f)) sample_rate_hz = 48000.0f;
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     *d = (tw_drive){ 0 };
-    d->atk_c = one_pole_coeff(1.0f / (BIAS_ATK_S * sample_rate_hz));
-    d->rel_c = one_pole_coeff(1.0f / (BIAS_REL_S * sample_rate_hz));
-    d->hp_c = one_pole_coeff(6.28318531f * HP_HZ / sample_rate_hz);
+    d->atk_c = tw_one_pole_coeff(1.0f / (BIAS_ATK_S * sample_rate_hz));
+    d->rel_c = tw_one_pole_coeff(1.0f / (BIAS_REL_S * sample_rate_hz));
+    d->hp_c = tw_one_pole_coeff(6.28318531f * HP_HZ / sample_rate_hz);
     tw_drive_set_kernel(d, false); /* preamp default: the triode curve */
     tw_drive_set(d, 0.0f); /* bypass: the pre-M5 chain, bit-identical */
 }

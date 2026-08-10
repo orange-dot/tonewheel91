@@ -17,150 +17,21 @@
  * out-of-compass notes into 36..96, as a player would.
  */
 #define _DEFAULT_SOURCE 1
+#include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "../src/tonewheel.h"
 #include "../src/epiano.h"
+#include "host_parse.h"
+#include "midi_map.h"
+#include "smf.h"
 #include "wav.h"
 
-typedef struct {
-    uint64_t tick;
-    uint32_t seq; /* stable order for equal ticks: file order */
-    uint8_t status, d1, d2;
-} ev_t;
-
-typedef struct {
-    uint64_t tick;
-    uint32_t seq;
-    uint32_t us_per_q;
-} tempo_t;
-
-static uint64_t read_vlq(const uint8_t *d, size_t n, size_t *i) {
-    uint64_t v = 0;
-    while (*i < n) {
-        uint8_t b = d[(*i)++];
-        v = (v << 7) | (b & 0x7f);
-        if (!(b & 0x80)) break;
-    }
-    return v;
-}
-
-static int cmp_ev(const void *a, const void *b) {
-    const ev_t *x = a, *y = b;
-    if (x->tick != y->tick) return x->tick < y->tick ? -1 : 1;
-    return x->seq < y->seq ? -1 : x->seq > y->seq ? 1 : 0;
-}
-
-static int cmp_tempo(const void *a, const void *b) {
-    const tempo_t *x = a, *y = b;
-    if (x->tick != y->tick) return x->tick < y->tick ? -1 : 1;
-    return x->seq < y->seq ? -1 : x->seq > y->seq ? 1 : 0;
-}
-
-/* Octave-fold a note into the 61-key compass, as a player would. */
-static int fold_note(int n) {
-    while (n < TW_NOTE_MIN) n += 12;
-    while (n > TW_NOTE_MAX) n -= 12;
-    return n;
-}
-
-/* The same, into the ep73 compass. */
-static int fold_note_ep(int n) {
-    while (n < EP_NOTE_MIN) n += 12;
-    while (n > EP_NOTE_MAX) n -= 12;
-    return n;
-}
-
-static struct {
-    unsigned long notes, depths, ccs, folded;
-} stats;
-
-/* The tw91 channel-message map, minus the rawmidi plumbing. */
-static struct { bool on, third, slow, normal; } perc_state = { false, false, false, true };
-
-static void apply_msg(tw_instrument *ins, uint8_t status, uint8_t d1, uint8_t d2,
-                      bool fold) {
-    /* depth folds with its note or the two would address different keys */
-    int note = (fold && (status & 0xF0) <= 0xA0) ? fold_note(d1) : d1;
-    if (fold && note != d1) stats.folded++;
-    switch (status & 0xF0) {
-    case 0x90:
-        tw_organ_note(&ins->organ, note, d2 > 0, d2);
-        stats.notes++;
-        break;
-    case 0x80:
-        tw_organ_note(&ins->organ, note, false, d2);
-        stats.notes++;
-        break;
-    case 0xA0:
-        tw_organ_note_depth(&ins->organ, note, d2);
-        stats.depths++;
-        break;
-    case 0xB0:
-        stats.ccs++;
-        if (d1 == 11) tw_organ_set_swell(&ins->organ, (float)d2 / 127.0f);
-        else if (d1 >= 70 && d1 <= 78)
-            tw_organ_set_drawbar(&ins->organ, d1 - 70, (d2 * 8 + 63) / 127);
-        else if (d1 == 120 || d1 == 123) tw_organ_panic(&ins->organ);
-        else if (d1 == 80 || d1 == 81 || d1 == 82 || d1 == 83) {
-            if (d1 == 80) perc_state.on = d2 >= 64;
-            if (d1 == 81) perc_state.third = d2 >= 64;
-            if (d1 == 82) perc_state.slow = d2 >= 64;
-            if (d1 == 83) perc_state.normal = d2 >= 64;
-            tw_organ_set_percussion(&ins->organ, perc_state.on, perc_state.third,
-                                    perc_state.slow, perc_state.normal);
-        } else if (d1 == 84) tw_organ_set_vibrato(&ins->organ, d2 / 19);
-        else if (d1 == 85) tw_instrument_set_drive(ins, (float)d2 / 127.0f);
-        else if (d1 == 86) tw_rotary_set_mode(&ins->rotary, d2 / 32);
-        else if (d1 == 87)
-            tw_rotary_set_mode(&ins->rotary,
-                               d2 >= 64 ? TW_ROT_TREMOLO : TW_ROT_CHORALE);
-        else if (d1 == 88) tw_rotary_set_balance(&ins->rotary, (float)d2 / 127.0f);
-        else if (d1 == 89) tw_rotary_set_width(&ins->rotary, (float)d2 / 127.0f);
-        else if (d1 == 90) tw_rotary_set_drive(&ins->rotary, (float)d2 / 127.0f);
-        else stats.ccs--;
-        break;
-    default:
-        break;
-    }
-}
-
-/* The ep73 channel-message map (docs/ep-constants.md sec 10.1). The organ
- * options above are inert here and the piano's are inert there; the two
- * instruments share this file's SMF reader and nothing else. */
-static void apply_msg_ep(ep_piano *p, uint8_t status, uint8_t d1, uint8_t d2,
-                         bool fold) {
-    int note = (fold && (status & 0xF0) <= 0xA0) ? fold_note_ep(d1) : d1;
-    if (fold && note != d1) stats.folded++;
-    switch (status & 0xF0) {
-    case 0x90:
-        ep_piano_note(p, note, d2 > 0, d2);
-        stats.notes++;
-        break;
-    case 0x80:
-        ep_piano_note(p, note, false, 0);
-        stats.notes++;
-        break;
-    case 0xA0:
-        ep_piano_key_pressure(p, note, d2); /* parsed, ignored, counted */
-        stats.depths++;
-        break;
-    case 0xB0:
-        stats.ccs++;
-        if (d1 == 64) ep_piano_set_sustain(p, d2 >= 64);
-        else if (d1 == 85) ep_piano_set_drive(p, (float)d2 / 127.0f);
-        else if (d1 == 91) ep_piano_set_tremolo(p, d2);
-        else if (d1 == 92) ep_piano_set_cabinet(p, (float)d2 / 127.0f);
-        else if (d1 == 93) ep_piano_set_condition(p, (float)d2 / 127.0f);
-        else if (d1 == 120 || d1 == 123) ep_piano_panic(p);
-        else stats.ccs--;
-        break;
-    default:
-        break;
-    }
-}
+static constexpr double RENDER_MAX_SECONDS = 7200.0;
+static midi_map_stats stats;
 
 static void usage(const char *argv0) {
     fprintf(stderr,
@@ -177,7 +48,7 @@ static void usage(const char *argv0) {
             "  -f       octave-fold out-of-compass notes into 36..96\n"
             "  -g gain  master gain (default 0.125)\n"
             "  -w wear  M7 wear knob 0..1 (default 0 = idealized reference)\n"
-            "  -r rate  sample rate (default 48000)\n"
+            "  -r rate  sample rate 44100..192000 (default 48000)\n"
             "  -t secs  release tail after the last event (default 2)\n"
             "  -o path  output WAV (default render.wav)\n",
             argv0);
@@ -188,27 +59,28 @@ typedef struct {
     int vib, perc, rot;
     float drive, gain, wear, cab, cond;
     bool fold, ep;
-    float rate;
+    unsigned rate;
 } settings_t;
 
 /* The ep73 twin of render(). Stereo from the tremolo on; with it off the
  * two channels are identical, so the buffer, the WAV and the two-run FNV
  * contract are the organ's unchanged. */
-static double render_ep(const ev_t *ev, size_t nev, const settings_t *s,
-                        float *buf, int64_t frames, const int64_t *ev_frame,
+static double render_ep(const smf_event *ev, size_t nev, const settings_t *s,
+                        float *buf, size_t frames, const size_t *ev_frame,
                         uint32_t *out_of_compass) {
     ep_piano p;
     ep_piano_init(&p, s->rate);
     ep_piano_set_drive(&p, s->drive);  /* -D, the same flag the organ uses */
     ep_piano_set_cabinet(&p, s->cab);  /* -C, ep73 only                    */
     ep_piano_set_condition(&p, s->cond); /* -N, ep73 only                  */
-    memset(&stats, 0, sizeof stats);
+    ep_midi_map map;
+    ep_midi_map_init(&map, s->fold);
 
     size_t next = 0;
     float peak = 0.0f;
-    for (int64_t i = 0; i < frames; i++) {
+    for (size_t i = 0; i < frames; i++) {
         while (next < nev && ev_frame[next] <= i) {
-            apply_msg_ep(&p, ev[next].status, ev[next].d1, ev[next].d2, s->fold);
+            ep_midi_apply(&map, &p, ev[next].status, ev[next].d1, ev[next].d2);
             next++;
         }
         tw_stereo y = ep_piano_tick_stereo(&p);
@@ -218,12 +90,13 @@ static double render_ep(const ev_t *ev, size_t nev, const settings_t *s,
         if (a > peak) peak = a;
         if (b > peak) peak = b;
     }
+    stats = map.stats;
     *out_of_compass = p.bank.out_of_compass;
     return (double)peak;
 }
 
-static double render(const ev_t *ev, size_t nev, const settings_t *s,
-                     float *buf, int64_t frames, const int64_t *ev_frame,
+static double render(const smf_event *ev, size_t nev, const settings_t *s,
+                     float *buf, size_t frames, const size_t *ev_frame,
                      uint32_t *out_of_compass) {
     tw_instrument ins;
     tw_instrument_init(&ins, s->rate);
@@ -232,15 +105,15 @@ static double render(const ev_t *ev, size_t nev, const settings_t *s,
     tw_organ_set_vibrato(&ins.organ, s->vib);
     tw_instrument_set_drive(&ins, s->drive);
     tw_rotary_set_mode(&ins.rotary, s->rot);
-    perc_state = (typeof(perc_state)){ s->perc != 0, false, false, true };
-    tw_organ_set_percussion(&ins.organ, perc_state.on, false, false, true);
-    memset(&stats, 0, sizeof stats);
+    organ_midi_map map;
+    organ_midi_map_init(&map, s->fold, s->perc != 0);
+    tw_organ_set_percussion(&ins.organ, s->perc != 0, false, false, true);
 
     size_t next = 0;
     float peak = 0.0f;
-    for (int64_t i = 0; i < frames; i++) {
+    for (size_t i = 0; i < frames; i++) {
         while (next < nev && ev_frame[next] <= i) {
-            apply_msg(&ins, ev[next].status, ev[next].d1, ev[next].d2, s->fold);
+            organ_midi_apply(&map, &ins, ev[next].status, ev[next].d1, ev[next].d2);
             next++;
         }
         tw_stereo y = tw_instrument_tick_stereo(&ins);
@@ -250,19 +123,138 @@ static double render(const ev_t *ev, size_t nev, const settings_t *s,
         if (a > peak) peak = a;
         if (b > peak) peak = b;
     }
+    stats = map.stats;
     *out_of_compass = ins.organ.out_of_compass;
     return (double)peak;
 }
 
+static bool parse_channels(const char *text, uint16_t *out) {
+    if (!text || !*text) return false;
+    uint16_t mask = 0;
+    const char *p = text;
+    for (;;) {
+        if (*p < '0' || *p > '9') return false;
+        errno = 0;
+        char *end = 0;
+        unsigned long channel = strtoul(p, &end, 10);
+        if (errno == ERANGE || end == p || channel > 15) return false;
+        mask |= (uint16_t)(1u << channel);
+        if (!*end) break;
+        if (*end != ',' || !end[1]) return false;
+        p = end + 1;
+    }
+    *out = mask;
+    return true;
+}
+
+static bool parse_int(const char *text, unsigned min, unsigned max, int *out) {
+    uint64_t value = 0;
+    if (!host_parse_u64(text, min, max, &value)) return false;
+    *out = (int)value;
+    return true;
+}
+
+static bool parse_float(const char *text, double min, double max, float *out) {
+    double value = 0.0;
+    if (!host_parse_double(text, min, max, &value)) return false;
+    *out = (float)value;
+    return true;
+}
+
+static bool read_file(const char *path, uint8_t **out, size_t *out_size) {
+    *out = 0;
+    *out_size = 0;
+    FILE *file = fopen(path, "rb");
+    if (!file) return false;
+
+    bool ok = fseek(file, 0, SEEK_END) == 0;
+    long length = ok ? ftell(file) : -1;
+    if (length < 0 || (uintmax_t)length > SIZE_MAX) ok = false;
+    if (ok && fseek(file, 0, SEEK_SET) != 0) ok = false;
+
+    size_t size = ok ? (size_t)length : 0;
+    uint8_t *data = ok ? malloc(size ? size : 1) : 0;
+    if (!data) ok = false;
+    if (ok && fread(data, 1, size, file) != size) ok = false;
+    if (fclose(file) != 0) ok = false;
+    if (!ok) {
+        free(data);
+        return false;
+    }
+    *out = data;
+    *out_size = size;
+    return true;
+}
+
+static bool make_event_frames(const smf_file *midi, unsigned rate,
+                              double tail_seconds, size_t **out,
+                              size_t *out_frames) {
+    *out = 0;
+    *out_frames = 0;
+    size_t *frames = 0;
+    if (midi->event_count) {
+        size_t bytes = 0;
+        if (!host_size_mul(midi->event_count, sizeof *frames, &bytes))
+            return false;
+        frames = malloc(bytes);
+        if (!frames) return false;
+    }
+
+    double seconds = 0.0;
+    uint64_t segment_tick = 0;
+    uint32_t us_per_quarter = 500000;
+    size_t tempo = 0;
+    size_t last = 0;
+    double max_frame = RENDER_MAX_SECONDS * rate;
+    for (size_t event = 0; event < midi->event_count; event++) {
+        while (tempo < midi->tempo_count
+               && midi->tempos[tempo].tick <= midi->events[event].tick) {
+            seconds += (double)(midi->tempos[tempo].tick - segment_tick)
+                     * us_per_quarter * 1e-6 / midi->division;
+            segment_tick = midi->tempos[tempo].tick;
+            us_per_quarter = midi->tempos[tempo].us_per_quarter;
+            tempo++;
+        }
+        double at = seconds
+                  + (double)(midi->events[event].tick - segment_tick)
+                  * us_per_quarter * 1e-6 / midi->division;
+        double frame = at * rate + 0.5;
+        if (!isfinite(frame) || frame < 0.0 || frame > max_frame
+            || frame > SIZE_MAX) {
+            free(frames);
+            return false;
+        }
+        frames[event] = (size_t)frame;
+        last = frames[event];
+    }
+
+    double tail_frame_value = tail_seconds * rate;
+    if (!isfinite(tail_frame_value) || tail_frame_value > SIZE_MAX) {
+        free(frames);
+        return false;
+    }
+    size_t total = 0;
+    if (!host_size_add(last, (size_t)tail_frame_value, &total)
+        || (double)total > max_frame) {
+        free(frames);
+        return false;
+    }
+    *out = frames;
+    *out_frames = total;
+    return true;
+}
+
 int main(int argc, char **argv) {
     uint8_t reg[TW_DRAWBARS] = { 8, 8, 8, 0, 0, 0, 0, 0, 0 };
-    settings_t st = { reg, 0, 0, 0, 0.0f, 0.125f, 0.0f, 0.0f,
-                      EP_CONDITION_DEFAULT, /* -N overrides; never hardcode
-                                             * the shipped value here */
-                      false, false, 48000.0f };
+    settings_t st = {
+        .reg = reg,
+        .gain = 0.125f,
+        .cond = EP_CONDITION_DEFAULT,
+        .rate = 48000,
+    };
     const char *out_path = "render.wav";
     double tail_s = 2.0;
-    uint32_t chan_mask = 0xFFFF;
+    uint16_t chan_mask = UINT16_MAX;
 
     int c;
     while ((c = getopt(argc, argv, "I:c:R:v:D:C:N:m:p:fg:w:r:t:o:h")) != -1) {
@@ -271,131 +263,108 @@ int main(int argc, char **argv) {
             if (!strcmp(optarg, "ep73")) st.ep = true;
             else if (strcmp(optarg, "organ")) { usage(argv[0]); return 2; }
             break;
-        case 'c': {
-            chan_mask = 0;
-            for (const char *p = optarg; *p;) {
-                chan_mask |= 1u << (strtoul(p, (char **)&p, 10) & 15);
-                if (*p == ',') p++;
-            }
+        case 'c':
+            if (!parse_channels(optarg, &chan_mask)) { usage(argv[0]); return 2; }
             break;
-        }
         case 'R':
             if (strlen(optarg) != TW_DRAWBARS) { usage(argv[0]); return 2; }
-            for (int i = 0; i < TW_DRAWBARS; i++)
-                reg[i] = (uint8_t)(optarg[i] - '0') > 8 ? 8 : (uint8_t)(optarg[i] - '0');
+            for (int i = 0; i < TW_DRAWBARS; i++) {
+                if (optarg[i] < '0' || optarg[i] > '8') {
+                    usage(argv[0]);
+                    return 2;
+                }
+                reg[i] = (uint8_t)(optarg[i] - '0');
+            }
             break;
-        case 'v': st.vib = atoi(optarg); break;
-        case 'D': st.drive = (float)atof(optarg); break;
-        case 'C': st.cab = (float)atof(optarg); break;
-        case 'N': st.cond = (float)atof(optarg); break;
-        case 'm': st.rot = atoi(optarg); break;
-        case 'p': st.perc = atoi(optarg); break;
+        case 'v':
+            if (!parse_int(optarg, 0, 6, &st.vib)) { usage(argv[0]); return 2; }
+            break;
+        case 'D':
+            if (!parse_float(optarg, 0.0, 1.0, &st.drive)) { usage(argv[0]); return 2; }
+            break;
+        case 'C':
+            if (!parse_float(optarg, 0.0, 1.0, &st.cab)) { usage(argv[0]); return 2; }
+            break;
+        case 'N':
+            if (!parse_float(optarg, 0.0, 1.0, &st.cond)) { usage(argv[0]); return 2; }
+            break;
+        case 'm':
+            if (!parse_int(optarg, 0, 3, &st.rot)) { usage(argv[0]); return 2; }
+            break;
+        case 'p':
+            if (!parse_int(optarg, 0, 1, &st.perc)) { usage(argv[0]); return 2; }
+            break;
         case 'f': st.fold = true; break;
-        case 'g': st.gain = (float)atof(optarg); break;
-        case 'w': st.wear = (float)atof(optarg); break;
-        case 'r': st.rate = (float)atof(optarg); break;
-        case 't': tail_s = atof(optarg); break;
-        case 'o': out_path = optarg; break;
+        case 'g':
+            if (!parse_float(optarg, 0.0, 16.0, &st.gain)) { usage(argv[0]); return 2; }
+            break;
+        case 'w':
+            if (!parse_float(optarg, 0.0, 1.0, &st.wear)) { usage(argv[0]); return 2; }
+            break;
+        case 'r': {
+            uint64_t rate = 0;
+            if (!host_parse_u64(optarg, 44100, 192000, &rate)) {
+                usage(argv[0]);
+                return 2;
+            }
+            st.rate = (unsigned)rate;
+            break;
+        }
+        case 't':
+            if (!host_parse_double(optarg, 0.0, RENDER_MAX_SECONDS, &tail_s)) {
+                usage(argv[0]);
+                return 2;
+            }
+            break;
+        case 'o':
+            if (!*optarg) { usage(argv[0]); return 2; }
+            out_path = optarg;
+            break;
+        case 'h': usage(argv[0]); return 0;
         default: usage(argv[0]); return 2;
         }
     }
-    if (optind >= argc) { usage(argv[0]); return 2; }
+    if (optind + 1 != argc) { usage(argv[0]); return 2; }
 
-    FILE *fp = fopen(argv[optind], "rb");
-    if (!fp) { perror(argv[optind]); return 1; }
-    fseek(fp, 0, SEEK_END);
-    long fsz = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    uint8_t *d = malloc((size_t)fsz);
-    if (!d || fread(d, 1, (size_t)fsz, fp) != (size_t)fsz) {
-        fprintf(stderr, "read failed\n");
+    uint8_t *data = 0;
+    size_t data_size = 0;
+    if (!read_file(argv[optind], &data, &data_size)) {
+        fprintf(stderr, "render_midi: cannot read %s\n", argv[optind]);
         return 1;
     }
-    fclose(fp);
-    size_t n = (size_t)fsz;
-
-    if (n < 14 || memcmp(d, "MThd", 4) != 0) {
-        fprintf(stderr, "not a Standard MIDI File\n");
+    smf_file midi = { 0 };
+    smf_error smf_problem = { 0 };
+    if (!smf_parse(data, data_size, chan_mask, &midi, &smf_problem)) {
+        fprintf(stderr, "render_midi: SMF error at byte %zu: %s\n",
+                smf_problem.offset, smf_problem.message);
+        free(data);
         return 1;
     }
-    int fmt = d[8] << 8 | d[9];
-    int ntrk = d[10] << 8 | d[11];
-    int div = d[12] << 8 | d[13];
-    if (fmt > 1 || (div & 0x8000)) {
-        fprintf(stderr, "unsupported SMF: format %d, division 0x%04x"
-                        " (need format 0/1, PPQ)\n", fmt, div);
+    free(data);
+
+    size_t *event_frame = 0;
+    size_t frames = 0;
+    if (!make_event_frames(&midi, st.rate, tail_s, &event_frame, &frames)) {
+        fprintf(stderr, "render_midi: render exceeds the checked duration"
+                        " or allocation limits\n");
+        smf_dispose(&midi);
         return 1;
     }
-
-    /* one pass: channel events on selected channels + the tempo map */
-    ev_t *ev = malloc(n * sizeof *ev / 3 + 64);
-    tempo_t *tm = malloc(n * sizeof *tm / 3 + 64);
-    size_t nev = 0, ntm = 0;
-    uint32_t seq = 0;
-    size_t pos = 14;
-    for (int t = 0; t < ntrk && pos + 8 <= n; t++) {
-        if (memcmp(d + pos, "MTrk", 4) != 0) break;
-        size_t len = (size_t)d[pos + 4] << 24 | (size_t)d[pos + 5] << 16
-                   | (size_t)d[pos + 6] << 8 | d[pos + 7];
-        size_t i = pos + 8, end = i + len;
-        if (end > n) end = n;
-        uint64_t tick = 0;
-        uint8_t run = 0;
-        while (i < end) {
-            tick += read_vlq(d, end, &i);
-            if (i >= end) break;
-            uint8_t b = d[i];
-            if (b & 0x80) { run = b; i++; }
-            if (run == 0xFF) {
-                uint8_t mt = d[i++];
-                uint64_t l = read_vlq(d, end, &i);
-                if (mt == 0x51 && l == 3)
-                    tm[ntm++] = (tempo_t){ tick, seq++,
-                        (uint32_t)d[i] << 16 | (uint32_t)d[i + 1] << 8 | d[i + 2] };
-                i += l;
-            } else if (run == 0xF0 || run == 0xF7) {
-                i += read_vlq(d, end, &i);
-            } else {
-                uint8_t typ = run & 0xF0, ch = run & 0x0F;
-                uint8_t d1 = d[i], d2 = 0;
-                int two = typ != 0xC0 && typ != 0xD0;
-                if (two) d2 = d[i + 1];
-                i += two ? 2 : 1;
-                if ((typ == 0x80 || typ == 0x90 || typ == 0xA0 || typ == 0xB0)
-                    && (chan_mask & 1u << ch))
-                    ev[nev++] = (ev_t){ tick, seq++, run, d1, d2 };
-            }
-        }
-        pos += 8 + len;
+    size_t wav_limit = (UINT32_MAX - 48u) / (2u * sizeof(float));
+    if (frames > wav_limit) {
+        fprintf(stderr, "render_midi: render exceeds the RIFF/WAVE size limit\n");
+        free(event_frame);
+        smf_dispose(&midi);
+        return 1;
     }
-    qsort(ev, nev, sizeof *ev, cmp_ev);
-    qsort(tm, ntm, sizeof *tm, cmp_tempo);
-
-    /* ticks -> frames through the tempo map (120 bpm until the first
-     * tempo event, per the SMF default) */
-    int64_t *ev_frame = malloc(nev * sizeof *ev_frame + 8);
-    double sec = 0.0;
-    uint64_t seg_tick = 0;
-    uint32_t uspq = 500000;
-    size_t ti = 0;
-    for (size_t e = 0; e < nev; e++) {
-        while (ti < ntm && tm[ti].tick <= ev[e].tick) {
-            sec += (double)(tm[ti].tick - seg_tick) * uspq * 1e-6 / div;
-            seg_tick = tm[ti].tick;
-            uspq = tm[ti].us_per_q;
-            ti++;
-        }
-        double s = sec + (double)(ev[e].tick - seg_tick) * uspq * 1e-6 / div;
-        ev_frame[e] = (int64_t)(s * (double)st.rate + 0.5);
-    }
-    int64_t frames = (nev ? ev_frame[nev - 1] : 0)
-                   + (int64_t)(tail_s * (double)st.rate);
 
     printf("render_midi: %s\n", argv[optind]);
-    printf("  format %d, %d tracks, %d ticks/quarter, %zu tempo events\n",
-           fmt, ntrk, div, ntm);
+    printf("  format %u, %u tracks, %u ticks/quarter, %zu tempo events\n",
+           midi.format, midi.tracks, midi.division, midi.tempo_count);
     printf("  channels 0x%04x: %zu events, %.1f s + %.1f s tail at %.0f Hz\n",
-           chan_mask, nev, (double)(nev ? ev_frame[nev - 1] : 0) / st.rate,
+           chan_mask, midi.event_count,
+           (double)(midi.event_count ? event_frame[midi.event_count - 1] : 0)
+           / st.rate,
            tail_s, (double)st.rate);
     static const char *rot_name[4] = { "bypass", "chorale", "tremolo", "brake" };
     if (st.ep)
@@ -410,27 +379,45 @@ int main(int argc, char **argv) {
                rot_name[st.rot < 0 ? 0 : st.rot > 3 ? 3 : st.rot],
                (double)st.wear, (double)st.gain, st.fold ? ", octave-fold" : "");
 
-    float *buf = malloc(2 * (size_t)frames * sizeof *buf);
-    if (!buf) { fprintf(stderr, "out of memory (%lld frames)\n",
-                        (long long)frames); return 1; }
+    size_t samples = 0, buffer_bytes = 0;
+    if (!host_size_mul(frames, 2, &samples)
+        || !host_size_mul(samples, sizeof(float), &buffer_bytes)) {
+        fprintf(stderr, "render_midi: audio buffer size overflow\n");
+        free(event_frame);
+        smf_dispose(&midi);
+        return 1;
+    }
+    float *buf = malloc(buffer_bytes ? buffer_bytes : sizeof *buf);
+    if (!buf) {
+        fprintf(stderr, "render_midi: out of memory (%zu frames)\n", frames);
+        free(event_frame);
+        smf_dispose(&midi);
+        return 1;
+    }
 
     /* two-run FNV: the repo's determinism contract, applied to songs;
      * hashed over the interleaved stereo buffer since M6 */
     uint32_t ooc = 0;
-    double (*paint)(const ev_t *, size_t, const settings_t *, float *, int64_t,
-                    const int64_t *, uint32_t *) = st.ep ? render_ep : render;
-    double peak = paint(ev, nev, &st, buf, frames, ev_frame, &ooc);
-    uint64_t h1 = tw_fnv1a64(buf, 2 * (size_t)frames * sizeof *buf, 0);
-    peak = paint(ev, nev, &st, buf, frames, ev_frame, &ooc);
-    uint64_t h2 = tw_fnv1a64(buf, 2 * (size_t)frames * sizeof *buf, 0);
+    double (*paint)(const smf_event *, size_t, const settings_t *, float *, size_t,
+                    const size_t *, uint32_t *) = st.ep ? render_ep : render;
+    double peak = paint(midi.events, midi.event_count, &st, buf, frames,
+                        event_frame, &ooc);
+    uint64_t h1 = tw_fnv1a64(buf, buffer_bytes, 0);
+    peak = paint(midi.events, midi.event_count, &st, buf, frames,
+                 event_frame, &ooc);
+    uint64_t h2 = tw_fnv1a64(buf, buffer_bytes, 0);
     printf("  applied: %lu notes, %lu %s, %lu ccs, %lu folded,"
            " %u out-of-compass\n",
-           stats.notes, stats.depths, st.ep ? "key pressures" : "depths",
+           stats.notes, st.ep ? stats.pressures : stats.depths,
+           st.ep ? "key pressures" : "depths",
            stats.ccs, stats.folded, ooc);
     printf("  peak %.3f, FNV64 %016llx %s\n", peak, (unsigned long long)h1,
            h1 == h2 ? "(two runs identical)" : "MISMATCH");
 
-    int rc = wav_write_f32(out_path, buf, 2 * (long)frames, (int)st.rate, 2);
+    int rc = wav_write_f32(out_path, buf, frames, st.rate, 2);
     printf("  wav: %s%s\n", out_path, rc ? " (WRITE FAILED)" : "");
-    return (rc == 0 && h1 == h2) ? 0 : 1;
+    free(buf);
+    free(event_frame);
+    smf_dispose(&midi);
+    return rc == 0 && h1 == h2 ? 0 : 1;
 }

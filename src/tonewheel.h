@@ -3,8 +3,34 @@
 #ifndef TONEWHEEL_H
 #define TONEWHEEL_H
 
+#include <float.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+
+static_assert(CHAR_BIT == 8);
+static_assert(sizeof(float) == 4);
+static_assert(FLT_RADIX == 2 && FLT_MANT_DIG == 24);
+static_assert(FLT_MIN_EXP == -125 && FLT_MAX_EXP == 128);
+
+/* Public stateful APIs require initialized, non-null state pointers. Array
+ * parameters require the extent written in their declaration. Setters
+ * sanitize documented numeric inputs; tick paths assume state produced by
+ * the corresponding initializer and finite signal inputs. */
+
+/* One clock contract for every core component. Invalid and unsupported
+ * values, including NaN and infinities, select the 48 kHz default. */
+static inline float tw_sample_rate_hz(float sample_rate_hz) {
+    return sample_rate_hz >= 44100.0f && sample_rate_hz <= 192000.0f
+         ? sample_rate_hz : 48000.0f;
+}
+
+/* 1 - exp(-x), used by every core one-pole. The fourth-order alternating
+ * expansion is accurate over the supported x <= 0.25 interval. */
+static inline float tw_one_pole_coeff(float x) {
+    if (!(x > 0.0f) || x > 0.25f) x = 0.25f;
+    return x * (1.0f - x * (0.5f - x * (1.0f / 6.0f - x / 24.0f)));
+}
 
 enum {
     TW_WHEELS    = 91,
@@ -408,6 +434,7 @@ typedef struct {
 } tw_instrument;
 
 static inline void tw_instrument_init(tw_instrument *ins, float sample_rate_hz) {
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     tw_organ_init(&ins->organ, sample_rate_hz);
     tw_drive_init(&ins->drive, sample_rate_hz);
     tw_rotary_init(&ins->rotary, sample_rate_hz);

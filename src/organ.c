@@ -186,7 +186,7 @@ static void apply_contact(tw_organ *o, int key, int bus, bool closed) {
 }
 
 void tw_organ_init(tw_organ *o, float sample_rate_hz) {
-    if (!(sample_rate_hz >= 8000.0f)) sample_rate_hz = 48000.0f;
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     *o = (tw_organ){ 0 };
     o->rate = sample_rate_hz;
     o->rng = 0x7477393174773931u; /* fixed seed: determinism contract */

@@ -1,0 +1,208 @@
+#define _DEFAULT_SOURCE 1
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "../driver/host_parse.h"
+#include "../driver/live_io.h"
+#include "../driver/smf.h"
+#include "../driver/wav.h"
+
+static unsigned checks, failures;
+
+#define CHECK(condition, ...) do {                                            \
+    checks++;                                                                 \
+    if (!(condition)) {                                                       \
+        failures++;                                                           \
+        fprintf(stderr, "FAIL: ");                                           \
+        fprintf(stderr, __VA_ARGS__);                                         \
+        fputc('\n', stderr);                                                   \
+    }                                                                         \
+} while (0)
+
+static const uint8_t valid_smf[] = {
+    'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 0, 0, 1, 1, 0xe0,
+    'M', 'T', 'r', 'k', 0, 0, 0, 20,
+    0, 0xff, 0x51, 3, 0x07, 0xa1, 0x20,
+    0, 0x90, 60, 100,
+    0x81, 0x70, 0x80, 60, 0,
+    0, 0xff, 0x2f, 0,
+};
+
+static const uint8_t running_smf[] = {
+    'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 0, 0, 1, 0, 96,
+    'M', 'T', 'r', 'k', 0, 0, 0, 18,
+    0, 0x90, 60, 100,
+    96, 64, 80,
+    96, 0x80, 60, 0,
+    0, 64, 0,
+    0, 0xff, 0x2f, 0,
+};
+
+static void test_smf_valid(void) {
+    smf_file file = { 0 };
+    smf_error error = { 0 };
+    CHECK(smf_parse(valid_smf, sizeof valid_smf, UINT16_MAX, &file, &error),
+          "valid SMF rejected at %zu: %s", error.offset,
+          error.message ? error.message : "no error");
+    CHECK(file.format == 0 && file.tracks == 1 && file.division == 480,
+          "SMF header decoded incorrectly");
+    CHECK(file.event_count == 2 && file.tempo_count == 1,
+          "SMF event counts are %zu/%zu", file.event_count, file.tempo_count);
+    CHECK(file.event_count == 2 && file.events[0].tick == 0
+          && file.events[1].tick == 240,
+          "SMF event ticks decoded incorrectly");
+    CHECK(file.tempo_count == 1 && file.tempos[0].us_per_quarter == 500000,
+          "SMF tempo decoded incorrectly");
+    smf_dispose(&file);
+
+    CHECK(smf_parse(valid_smf, sizeof valid_smf, 0, &file, &error),
+          "tempo-only parse rejected");
+    CHECK(file.event_count == 0 && file.tempo_count == 1,
+          "channel mask did not filter events");
+    smf_dispose(&file);
+
+    CHECK(smf_parse(running_smf, sizeof running_smf, UINT16_MAX,
+                    &file, &error),
+          "valid running-status SMF rejected at %zu: %s", error.offset,
+          error.message ? error.message : "no error");
+    CHECK(file.event_count == 4 && file.events[1].status == 0x90
+          && file.events[1].d1 == 64 && file.events[3].status == 0x80,
+          "SMF running status was decoded incorrectly");
+    smf_dispose(&file);
+}
+
+static void test_smf_malformed(void) {
+    for (size_t size = 0; size < sizeof valid_smf; size++) {
+        smf_file file = { 0 };
+        smf_error error = { 0 };
+        bool ok = smf_parse(valid_smf, size, UINT16_MAX, &file, &error);
+        CHECK(!ok, "SMF truncation at byte %zu was accepted", size);
+        smf_dispose(&file);
+    }
+
+    uint8_t bad[sizeof valid_smf];
+    memcpy(bad, valid_smf, sizeof bad);
+    bad[12] = bad[13] = 0;
+    smf_file file = { 0 };
+    smf_error error = { 0 };
+    CHECK(!smf_parse(bad, sizeof bad, UINT16_MAX, &file, &error),
+          "zero PPQ division was accepted");
+
+    memcpy(bad, valid_smf, sizeof bad);
+    memset(bad + 22, 0x81, 4);
+    CHECK(!smf_parse(bad, sizeof bad, UINT16_MAX, &file, &error),
+          "overlong delta VLQ was accepted");
+
+    memcpy(bad, valid_smf, sizeof bad);
+    bad[31] = 0x80;
+    CHECK(!smf_parse(bad, sizeof bad, UINT16_MAX, &file, &error),
+          "status bit in channel data was accepted");
+
+    memcpy(bad, valid_smf, sizeof bad);
+    bad[21] = 16;
+    CHECK(!smf_parse(bad, sizeof bad - 4, UINT16_MAX, &file, &error),
+          "track without end-of-track was accepted");
+
+    memcpy(bad, valid_smf, sizeof bad);
+    bad[11] = 2;
+    CHECK(!smf_parse(bad, sizeof bad, UINT16_MAX, &file, &error),
+          "format-0 file with two tracks was accepted");
+
+    memcpy(bad, valid_smf, sizeof bad);
+    bad[18] = 0x7f;
+    CHECK(!smf_parse(bad, sizeof bad, UINT16_MAX, &file, &error),
+          "oversized track chunk was accepted");
+
+    uint8_t trailing[sizeof valid_smf + 1];
+    memcpy(trailing, valid_smf, sizeof valid_smf);
+    trailing[sizeof valid_smf] = 0;
+    CHECK(!smf_parse(trailing, sizeof trailing, UINT16_MAX, &file, &error),
+          "trailing data was accepted");
+}
+
+static uint32_t get_u32(const unsigned char *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8
+         | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static void test_wav(void) {
+    char path[] = "/tmp/tonewheel91-wav-XXXXXX";
+    int descriptor = mkstemp(path);
+    CHECK(descriptor >= 0, "could not create a temporary WAV fixture");
+    if (descriptor < 0) return;
+    close(descriptor);
+    float samples[4] = { -1.0f, 1.0f, 0.5f, -0.5f };
+    CHECK(wav_write_f32(path, samples, 2, 48000, 2) == 0,
+          "valid stereo WAV write failed");
+    FILE *file = fopen(path, "rb");
+    unsigned char bytes[72] = { 0 };
+    size_t size = file ? fread(bytes, 1, sizeof bytes, file) : 0;
+    if (file) fclose(file);
+    CHECK(size == 72, "WAV size is %zu, expected 72", size);
+    CHECK(!memcmp(bytes, "RIFF", 4) && !memcmp(bytes + 48, "data", 4),
+          "WAV chunk IDs are invalid");
+    CHECK(get_u32(bytes + 4) == 64 && get_u32(bytes + 44) == 2
+          && get_u32(bytes + 52) == 16,
+          "WAV sizes or fact frame count are invalid");
+    CHECK(wav_write_f32(path, samples, UINT32_MAX, 48000, 2) == -1,
+          "oversized RIFF was accepted");
+    CHECK(wav_write_f32(path, samples, 2, 0, 2) == -1,
+          "zero WAV rate was accepted");
+    CHECK(wav_write_f32(path, samples, 2, 48000, 0) == -1,
+          "zero WAV channel count was accepted");
+    CHECK(wav_write_f32(path, 0, 0, 48000, 2) == 0,
+          "zero-frame WAV with no sample storage was rejected");
+    CHECK(wav_write_f32(path, 0, 1, 48000, 2) == -1,
+          "nonempty WAV accepted a null sample pointer");
+    remove(path);
+}
+
+static void test_host_parse(void) {
+    uint64_t integer = 0;
+    double real = 0.0;
+    size_t size = 0;
+    CHECK(host_parse_u64("48000", 44100, 192000, &integer) && integer == 48000,
+          "valid integer option rejected");
+    CHECK(!host_parse_u64("-1", 0, 10, &integer)
+          && !host_parse_u64("4x", 0, 10, &integer),
+          "invalid integer option accepted");
+    CHECK(host_parse_double("0.25", 0.0, 1.0, &real) && real == 0.25,
+          "valid real option rejected");
+    CHECK(!host_parse_double("nan", 0.0, 1.0, &real)
+          && !host_parse_double("inf", 0.0, 1.0, &real),
+          "non-finite real option accepted");
+    CHECK(host_size_add(2, 3, &size) && size == 5
+          && !host_size_add(SIZE_MAX, 1, &size),
+          "checked size addition failed");
+    CHECK(host_size_mul(2, 3, &size) && size == 6
+          && !host_size_mul(SIZE_MAX, 2, &size),
+          "checked size multiplication failed");
+}
+
+static void test_live_layout(void) {
+    size_t samples = 0, floats = 0, output = 0;
+    CHECK(live_pcm_buffer_layout(128, &samples, &floats, &output)
+          && samples == 256 && floats == 256 * sizeof(float)
+          && output == 256 * sizeof(int32_t),
+          "live buffer layout does not follow the negotiated period");
+    CHECK(live_pcm_buffer_layout(LIVE_PERIOD_MAX, &samples, &floats, &output),
+          "maximum supported live period was rejected");
+    CHECK(!live_pcm_buffer_layout(0, &samples, &floats, &output)
+          && !live_pcm_buffer_layout((snd_pcm_uframes_t)LIVE_PERIOD_MAX + 1,
+                                     &samples, &floats, &output),
+          "invalid negotiated live period was accepted");
+}
+
+int main(void) {
+    test_smf_valid();
+    test_smf_malformed();
+    test_wav();
+    test_host_parse();
+    test_live_layout();
+    printf("hosted: %u checks, %u failures\n", checks, failures);
+    return failures ? 1 : 0;
+}

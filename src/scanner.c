@@ -92,7 +92,7 @@ static inline float snap0(float x) {
 }
 
 void tw_scanner_init(tw_scanner *s, float sample_rate_hz) {
-    if (!(sample_rate_hz >= 8000.0f)) sample_rate_hz = 48000.0f;
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     *s = (tw_scanner){ 0 };
     s->step = SCAN_RATE_HZ / sample_rate_hz;
 
