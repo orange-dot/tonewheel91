@@ -12,15 +12,15 @@ its internal sub-gates already has working code.
 ## Current position
 
 - Active milestone: **MA1 — complete one-voice hybrid**.
-- Active task: none. **MA1-5 — filter/amp envelopes and VCA** is the next
+- Active task: none. **MA1-6 — identity, overlays and smoothers** is the next
   queued task.
 - Last green aggregate run: GCC and Clang `make test`, 2026-08-25, at
-  tonewheel91 commit `7536e14` plus the MA working tree: core `107243`, hosted
+  tonewheel91 commit `8ba8bfd` plus the MA1-5 working tree: core `111261`, hosted
   `77`, MIDI map `22`; zero failures. Both core undefined-symbol audits pass.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
-- Core implementation status: MA0 and MA1-1 through MA1-4 are closed; work is
-  stopped at the boundary before MA1-5.
+- Core implementation status: MA0 and MA1-1 through MA1-5 are closed; work is
+  stopped at the boundary before MA1-6.
 
 ## MA0 task ledger
 
@@ -45,7 +45,7 @@ one.
 | MA1-2 | done | MA1-1 | Two mixed PolyBLEP VCOs, bandlimited triangle, noise, hard sync and bounded VCO2-to-VCO1 cross-mod; ordinary/sync/cross-mod alias tables meet the 20 dB gate. |
 | MA1-3 | done | MA1-2 | Per-voice Mozaik AUX with tile-boundary phason latch; integer traces equal MA0 donor vectors and mix zero is bit-identical. |
 | MA1-4 | done | MA1-3 | Normalized mixer, exact-bypass pressure and 2x nonlinear four-pole ladder; cutoff/self-oscillation/stability gates green. |
-| MA1-5 | queued | MA1-4 | Filter and amp RC ADSRs plus VCA; retrigger/release/epsilon behavior and hostile sweeps green. |
+| MA1-5 | done | MA1-4 | Filter and amp RC ADSRs plus VCA; retrigger/release/epsilon behavior and hostile sweeps green. |
 | MA1-6 | queued | MA1-5 | Linear five-macro identity resolver, zero-frame deltas, performance overlays and 6 ms smoothers; zero macros are bit-identical. |
 | MA1-7 | queued | MA1-6 | Centered dual-mono output, body bypass, DC block, safety diagnostics and deterministic signatures. |
 | MA1-8 | queued | MA1-7 | `make exhibit-ma1`, evidence document, cost table and operator listening verdict; public MA1 gate closes only here. |
@@ -63,6 +63,7 @@ one.
 | 2026-08-20 | Accept an 8x Q48 VCO edge path, two 31-tap boundaries into the 2x ladder, and an eight-substep C2 reset slew. | This is the first candidate to pass every pinned ordinary/sync/cross-mod case: 21.86–29.16 dB versus naive edges on both compilers. |
 | 2026-08-25 | Render Mozaik once per public audio frame after the sharp-edge VCO decimation, then complete the pinned normalized source sum there. | Hann tiles need no VCO oversampling; keeping their Q32/tile clock at the public sample rate preserves the donor duration contract and leaves the MA1-2 edge referee isolated. |
 | 2026-08-25 | At MA1-4, advance Mozaik in both 2x source phases, with its render rate doubled, and feed that native 2x bus directly into pressure and the ladder. Compile the historical MA1-2 alias referee with `MA_SOURCE_EVIDENCE`. | Doubling both Mozaik steps and its clock preserves tile duration and drift in wall time. The dedicated source-only build keeps later filter attenuation from being counted as oscillator anti-alias evidence. |
+| 2026-08-25 | Anchor zero filter-envelope level at the direct cutoff, then apply the donor's `.78` positive envelope span and `.42` keytrack slope; add the pinned velocity-filter contribution before clamping the effective amount. | The frozen MA0 text pinned the RC and VCO routes but omitted the cutoff equation. This preserves direct-cutoff meaning, uses the donor's bounded musical slope and makes the velocity law executable without introducing a new depth constant. |
 
 ## Entries
 
@@ -162,3 +163,31 @@ one.
   aggregate counts; the MA0 numeric audit reports `0.00834%` maximum
   effective-cutoff error; `git diff --check` passes.
 - Next: MA1-5 filter/amp RC ADSRs and VCA. No MA1-5 code has started.
+
+### 2026-08-25 — MA1-5 gate closed
+
+- Added explicit idle/attack/decay/sustain/release state for the filter and
+  amp envelopes. Both use the repository one-pole coefficient, the pinned
+  60 dB time interpretation and a stage-entry relative epsilon; targets snap
+  to literal one, sustain or zero before the next stage begins.
+- NoteOn retriggers both envelopes from their current levels. Matching
+  NoteOff enters ordinary release without muting the oscillator/filter
+  state. The VCA is the direct filtered sample multiplied by amp-envelope
+  level and the pinned velocity gain; pressure remains literal unity until
+  MA1-6 owns its state and smoothing.
+- The velocity-aware filter envelope drives the effective cutoff, VCO1
+  pitch and both pinned pulse-width deltas. Direct keytrack uses the bounded
+  donor slope. The effective amount and envelope level are calculated once
+  per public frame and held across the oversampled source/filter work.
+- Permanent tests close `10/20/30 ms` stages at `480/960/1440` frames at
+  48 kHz, prove exact sustain/zero snaps, release and retrigger continuity,
+  velocity-only VCA scaling, the 480 Hz full-depth VCO1 anchor, cutoff and
+  keytrack anchors, hostile extremes at all supported rates and byte-exact
+  repeated event scripts. The MA1-5 zero-Mozaik render signature is
+  `48685bb104788f11`.
+- GCC and Clang each pass core `111261`, hosted `77`, MIDI map `22`, with
+  zero failures and clean freestanding symbol audits. ASan/UBSan passes the
+  same aggregate counts; the MA0 derivation and all eight isolated MA1-2
+  alias cases remain green on both compilers; `git diff --check` passes.
+- Next: MA1-6 identity resolver, performance overlays and 6 ms smoothers.
+  No MA1-6 code has started.

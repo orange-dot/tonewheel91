@@ -1,6 +1,6 @@
 # tonewheel91 — Mamut Analog implementation backlog
 
-Date: 2026-08-20. Status: active; MA0 through MA1-4 are complete, and MA1-5
+Date: 2026-08-20. Status: active; MA0 through MA1-5 are complete, and MA1-6
 is the next queued task.
 This document is decision-complete for `MA0` and the first implementation
 slice; task state and validation results live in `docs/ma-dev-journal.md`.

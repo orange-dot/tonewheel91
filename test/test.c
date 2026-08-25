@@ -3999,6 +3999,11 @@ static void test_ma_foundation(void) {
           && synth.filter_adsr.sustain == 0.50f
           && synth.filter_adsr.release_ms == 2600.0f,
           "MA envelope factory controls");
+    CHECK(synth.amp_envelope.stage == MA_ENVELOPE_IDLE
+          && synth.amp_envelope.level == 0.0f
+          && synth.filter_envelope.stage == MA_ENVELOPE_IDLE
+          && synth.filter_envelope.level == 0.0f,
+          "MA envelopes must initialize idle at literal zero");
     CHECK(synth.body_drive == 0.10f && synth.width == 0.70f
           && synth.master_level == 0.18f
           && synth.noise_state == UINT64_C(0x4d414e4f49534531),
@@ -4040,6 +4045,14 @@ static void test_ma_foundation(void) {
           && synth.filter_adsr.sustain == 0.0f
           && synth.filter_adsr.release_ms == 20000.0f,
           "MA filter ADSR must clamp to its public domain");
+    ma_synth_set_filter_modulation(&synth, NAN, 2.0f);
+    CHECK(synth.filter_env_amount == 0.30f
+          && synth.filter_keytrack == 1.0f,
+          "MA filter modulation must default non-finite and clamp finite input");
+    ma_synth_set_filter_modulation(&synth, -1.0f, INFINITY);
+    CHECK(synth.filter_env_amount == 0.0f
+          && synth.filter_keytrack == 0.45f,
+          "MA filter modulation must clamp amount and default keytrack");
 
     ma_synth_set_macro(&synth, MA_MACRO_GRAVITACIJA, 2.0f);
     ma_synth_set_macro(&synth, MA_MACRO_BLOOM, NAN);
@@ -4068,6 +4081,11 @@ static void test_ma_oscillators(void) {
     ma_synth_init(&synth, 48000.0f);
     ma_synth_set_mozaik(&synth, 0.0f, 0.5601133f, 0.5150284f, 0.0f, 0.0f);
     ma_synth_set_filter(&synth, 20000.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_filter_modulation(&synth, 0.0f, 0.0f);
+    ma_synth_set_filter_adsr(&synth, (ma_adsr){
+        .attack_ms = 1.0f, .decay_ms = 1.0f,
+        .sustain = 0.0f, .release_ms = 1.0f,
+    });
     ma_synth_set_vco1(&synth, saw_only);
     ma_synth_set_vco2(&synth, silent, 0.0f, 0, 0.0f);
     ma_synth_set_oscillator_modulation(&synth, 0.0f, 0.0f, 0.0f, 0.0f);
@@ -4389,8 +4407,8 @@ static void test_ma_mozaik(void) {
               "MA Mozaik mix zero changed frame %d", frame);
         dry_hash = tw_fnv1a64(&a, sizeof a, dry_hash);
     }
-    CHECK(dry_hash == UINT64_C(0x72f6b0590bd87fd1),
-          "MA1-4 zero-Mozaik filtered baseline is %016llx",
+    CHECK(dry_hash == UINT64_C(0x48685bb104788f11),
+          "MA1-5 zero-Mozaik envelope/VCA baseline is %016llx",
           (unsigned long long)dry_hash);
 
     ma_synth_init(&synth, 48000.0f);
@@ -4416,6 +4434,11 @@ static void ma_filter_silence(ma_synth *synth, float cutoff_hz,
     ma_synth_set_oscillator_modulation(synth, 0.0f, 0.0f, 0.0f, 0.0f);
     ma_synth_set_mozaik(synth, 0.0f, 0.5601133f, 0.5150284f, 0.0f, 0.0f);
     ma_synth_set_filter(synth, cutoff_hz, resonance, 0.0f, 0.0f);
+    ma_synth_set_filter_modulation(synth, 0.0f, 0.0f);
+    ma_synth_set_filter_adsr(synth, (ma_adsr){
+        .attack_ms = 1.0f, .decay_ms = 1.0f,
+        .sustain = 0.0f, .release_ms = 1.0f,
+    });
     ma_synth_note_on(synth, 69, 127);
     synth->ladder.state[0] = 0.001f;
 }
@@ -4559,6 +4582,244 @@ static void test_ma_filter(void) {
     }
 }
 
+static void test_ma_envelopes(void) {
+    static const ma_adsr timing = {
+        .attack_ms = 10.0f,
+        .decay_ms = 20.0f,
+        .sustain = 0.40f,
+        .release_ms = 30.0f,
+    };
+    ma_synth synth;
+    ma_synth_init(&synth, 48000.0f);
+    ma_synth_set_amp_adsr(&synth, timing);
+    ma_synth_set_filter_adsr(&synth, timing);
+    ma_synth_note_on(&synth, 60, 127);
+    CHECK(synth.amp_envelope.stage == MA_ENVELOPE_ATTACK
+          && synth.filter_envelope.stage == MA_ENVELOPE_ATTACK
+          && synth.amp_envelope.level == 0.0f,
+          "MA NoteOn must attack from the current envelope level");
+
+    int attack_frames = 0;
+    while (synth.amp_envelope.stage == MA_ENVELOPE_ATTACK
+           && attack_frames < 1000) {
+        (void)ma_synth_tick(&synth);
+        attack_frames++;
+    }
+    CHECK(attack_frames >= 478 && attack_frames <= 482
+          && synth.amp_envelope.stage == MA_ENVELOPE_DECAY
+          && synth.amp_envelope.level == 1.0f,
+          "MA 10 ms attack closed in %d frames", attack_frames);
+
+    int decay_frames = 0;
+    while (synth.amp_envelope.stage == MA_ENVELOPE_DECAY
+           && decay_frames < 2000) {
+        (void)ma_synth_tick(&synth);
+        decay_frames++;
+    }
+    CHECK(decay_frames >= 958 && decay_frames <= 962
+          && synth.amp_envelope.stage == MA_ENVELOPE_SUSTAIN
+          && synth.amp_envelope.level == timing.sustain,
+          "MA 20 ms decay closed in %d frames", decay_frames);
+    for (int frame = 0; frame < 1024; frame++) (void)ma_synth_tick(&synth);
+    CHECK(synth.amp_envelope.level == timing.sustain
+          && synth.filter_envelope.level == timing.sustain,
+          "MA sustain must hold its literal target");
+
+    float release_start = synth.amp_envelope.level;
+    ma_synth_note_off(&synth, 60);
+    CHECK(!synth.note_active
+          && synth.amp_envelope.stage == MA_ENVELOPE_RELEASE
+          && synth.amp_envelope.level == release_start,
+          "MA NoteOff must release from the current level");
+    int release_frames = 0;
+    while (synth.amp_envelope.stage == MA_ENVELOPE_RELEASE
+           && release_frames < 2500) {
+        (void)ma_synth_tick(&synth);
+        release_frames++;
+    }
+    CHECK(release_frames >= 1438 && release_frames <= 1442
+          && synth.amp_envelope.stage == MA_ENVELOPE_IDLE
+          && synth.amp_envelope.level == 0.0f,
+          "MA 30 ms release closed in %d frames", release_frames);
+
+    ma_synth_init(&synth, 48000.0f);
+    ma_synth_set_amp_adsr(&synth, (ma_adsr){
+        .attack_ms = 100.0f, .decay_ms = 100.0f,
+        .sustain = 0.5f, .release_ms = 100.0f,
+    });
+    ma_synth_set_filter_adsr(&synth, synth.amp_adsr);
+    ma_synth_note_on(&synth, 57, 100);
+    for (int frame = 0; frame < 1000; frame++) (void)ma_synth_tick(&synth);
+    ma_synth_note_off(&synth, 57);
+    for (int frame = 0; frame < 200; frame++) (void)ma_synth_tick(&synth);
+    float retrigger_level = synth.amp_envelope.level;
+    ma_synth_note_on(&synth, 57, 100);
+    CHECK(synth.amp_envelope.stage == MA_ENVELOPE_ATTACK
+          && synth.amp_envelope.level == retrigger_level,
+          "MA retrigger must preserve the current level");
+    (void)ma_synth_tick(&synth);
+    CHECK(synth.amp_envelope.level > retrigger_level,
+          "MA retrigger attack must move upward from the release level");
+
+    static const ma_vco_controls saw_only = {
+        .saw_level = 1.0f,
+        .pulse_width = 0.5f,
+    };
+    static const ma_vco_controls silent = { .pulse_width = 0.5f };
+    ma_synth low_velocity;
+    ma_synth_init(&low_velocity, 48000.0f);
+    ma_synth_set_vco1(&low_velocity, saw_only);
+    ma_synth_set_vco2(&low_velocity, silent, 0.0f, 0, 0.0f);
+    ma_synth_set_oscillator_modulation(&low_velocity, 0.0f, 0.0f,
+                                       0.0f, 0.0f);
+    ma_synth_set_mozaik(&low_velocity, 0.0f, 0.5601133f, 0.5150284f,
+                        0.0f, 0.0f);
+    ma_synth_set_filter(&low_velocity, 20000.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_filter_modulation(&low_velocity, 0.0f, 0.0f);
+    ma_synth_set_amp_adsr(&low_velocity, (ma_adsr){
+        .attack_ms = 1.0f, .decay_ms = 1.0f,
+        .sustain = 1.0f, .release_ms = 1.0f,
+    });
+    ma_synth_set_filter_adsr(&low_velocity, (ma_adsr){
+        .attack_ms = 1.0f, .decay_ms = 1.0f,
+        .sustain = 0.0f, .release_ms = 1.0f,
+    });
+    ma_synth_note_on(&low_velocity, 69, 1);
+    for (int frame = 0; frame < 1000; frame++)
+        (void)ma_synth_tick(&low_velocity);
+    ma_synth high_velocity = low_velocity;
+    high_velocity.velocity = 127;
+    float low_gain = 0.25f + 0.75f * ma_velocity_level(1);
+    float vca_error = 0.0f;
+    float vca_energy = 0.0f;
+    for (int frame = 0; frame < 12000; frame++) {
+        ma_frame low = ma_synth_tick(&low_velocity);
+        ma_frame high = ma_synth_tick(&high_velocity);
+        float error = fabsf(low.left - high.left * low_gain);
+        if (error > vca_error) vca_error = error;
+        vca_energy += fabsf(high.left);
+    }
+    CHECK(vca_error < 2.0e-6f && vca_energy > 100.0f,
+          "MA velocity VCA error %.9f energy %.3f",
+          (double)vca_error, (double)vca_energy);
+
+    ma_synth pitched;
+    ma_synth_init(&pitched, 48000.0f);
+    ma_synth_set_vco1(&pitched, saw_only);
+    ma_synth_set_vco2(&pitched, silent, 0.0f, 0, 0.0f);
+    ma_synth_set_oscillator_modulation(&pitched, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_mozaik(&pitched, 0.0f, 0.5601133f, 0.5150284f,
+                        0.0f, 0.0f);
+    ma_synth_set_filter_modulation(&pitched, 1.0f, 0.0f);
+    ma_synth_set_filter_adsr(&pitched, (ma_adsr){
+        .attack_ms = 1.0f, .decay_ms = 1.0f,
+        .sustain = 1.0f, .release_ms = 1.0f,
+    });
+    ma_synth_note_on(&pitched, 69, 127);
+    for (int frame = 0; frame < 1000; frame++) (void)ma_synth_tick(&pitched);
+    int rising = 0;
+    float previous = pitched.ladder.pressure_input;
+    for (int frame = 1; frame < 48000; frame++) {
+        (void)ma_synth_tick(&pitched);
+        float sample = pitched.ladder.pressure_input;
+        rising += previous <= 0.0f && sample > 0.0f;
+        previous = sample;
+    }
+    CHECK(rising >= 478 && rising <= 482
+          && pitched.filter_cutoff_effective_hz
+             == 1.78f * pitched.filter_cutoff_hz,
+          "MA filter-envelope routes produced %d VCO1 crossings at %.3f Hz",
+          rising, (double)pitched.filter_cutoff_effective_hz);
+
+    ma_synth low_note, high_note;
+    ma_synth_init(&low_note, 48000.0f);
+    ma_synth_init(&high_note, 48000.0f);
+    ma_synth_set_filter_modulation(&low_note, 0.0f, 1.0f);
+    ma_synth_set_filter_modulation(&high_note, 0.0f, 1.0f);
+    ma_synth_set_filter_adsr(&low_note, (ma_adsr){
+        .attack_ms = 1.0f, .decay_ms = 1.0f,
+        .sustain = 0.0f, .release_ms = 1.0f,
+    });
+    ma_synth_set_filter_adsr(&high_note, low_note.filter_adsr);
+    ma_synth_note_on(&low_note, 36, 127);
+    ma_synth_note_on(&high_note, 84, 127);
+    for (int frame = 0; frame < 1000; frame++) {
+        (void)ma_synth_tick(&low_note);
+        (void)ma_synth_tick(&high_note);
+    }
+    CHECK(fabsf(low_note.filter_cutoff_effective_hz - 711.0f) < 0.001f
+          && fabsf(high_note.filter_cutoff_effective_hz - 1089.0f) < 0.001f,
+          "MA keytrack anchors are %.3f and %.3f Hz",
+          (double)low_note.filter_cutoff_effective_hz,
+          (double)high_note.filter_cutoff_effective_hz);
+
+    static const float rates[] = { 44100.0f, 48000.0f, 96000.0f, 192000.0f };
+    for (size_t rate = 0; rate < sizeof rates / sizeof *rates; rate++) {
+        ma_synth hostile;
+        ma_synth_init(&hostile, rates[rate]);
+        ma_synth_set_amp_adsr(&hostile, (ma_adsr){
+            .attack_ms = 1.0f, .decay_ms = 20000.0f,
+            .sustain = 1.0f, .release_ms = 20000.0f,
+        });
+        ma_synth_set_filter_adsr(&hostile, (ma_adsr){
+            .attack_ms = 20000.0f, .decay_ms = 1.0f,
+            .sustain = 0.0f, .release_ms = 1.0f,
+        });
+        ma_synth_set_filter_modulation(&hostile, 1.0f, 1.0f);
+        ma_synth_note_on(&hostile, 127, 255);
+        bool finite = true;
+        for (int frame = 0; frame < 12000; frame++) {
+            if (frame == 4000) ma_synth_note_off(&hostile, 127);
+            if (frame == 8000) ma_synth_note_on(&hostile, 0, 1);
+            ma_frame output = ma_synth_tick(&hostile);
+            finite = finite
+                  && isfinite(output.left) && isfinite(output.right)
+                  && isfinite(hostile.amp_envelope.level)
+                  && isfinite(hostile.filter_envelope.level)
+                  && hostile.amp_envelope.level >= 0.0f
+                  && hostile.amp_envelope.level <= 1.0f
+                  && hostile.filter_envelope.level >= 0.0f
+                  && hostile.filter_envelope.level <= 1.0f
+                  && hostile.filter_cutoff_effective_hz >= 20.0f
+                  && hostile.filter_cutoff_effective_hz
+                     <= 0.42f * hostile.sample_rate_hz;
+        }
+        CHECK(finite, "MA hostile envelope sweep failed at %.0f Hz",
+              (double)rates[rate]);
+    }
+
+    ma_synth first, second;
+    ma_synth_init(&first, 48000.0f);
+    ma_synth_init(&second, 48000.0f);
+    ma_synth_set_amp_adsr(&first, (ma_adsr){
+        .attack_ms = 7.0f, .decay_ms = 13.0f,
+        .sustain = 0.37f, .release_ms = 11.0f,
+    });
+    ma_synth_set_amp_adsr(&second, first.amp_adsr);
+    ma_synth_set_filter_adsr(&first, first.amp_adsr);
+    ma_synth_set_filter_adsr(&second, first.amp_adsr);
+    ma_synth_note_on(&first, 64, 99);
+    ma_synth_note_on(&second, 64, 99);
+    for (int frame = 0; frame < 4000; frame++) {
+        if (frame == 800) {
+            ma_synth_note_off(&first, 64);
+            ma_synth_note_off(&second, 64);
+        }
+        if (frame == 1200) {
+            ma_synth_note_on(&first, 67, 73);
+            ma_synth_note_on(&second, 67, 73);
+        }
+        ma_frame a = ma_synth_tick(&first);
+        ma_frame b = ma_synth_tick(&second);
+        CHECK(memcmp(&a, &b, sizeof a) == 0
+              && memcmp(&first.amp_envelope, &second.amp_envelope,
+                        sizeof first.amp_envelope) == 0
+              && memcmp(&first.filter_envelope, &second.filter_envelope,
+                        sizeof first.filter_envelope) == 0,
+              "MA envelope render diverged at frame %d", frame);
+    }
+}
+
 int main(void) {
     test_frequency_table();
     test_foldback();
@@ -4616,6 +4877,7 @@ int main(void) {
     test_ma_oscillators();
     test_ma_mozaik();
     test_ma_filter();
+    test_ma_envelopes();
     printf("%d checks, %d failures\n", checks, fails);
     return fails ? 1 : 0;
 }

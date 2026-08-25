@@ -3,6 +3,9 @@
 #include "mamutanalog.h"
 
 static constexpr uint64_t NOISE_SEED = UINT64_C(0x4d414e4f49534531);
+#if !defined(MA_SOURCE_EVIDENCE)
+static constexpr float LN1000 = 6.907755278982137f;
+#endif
 static constexpr uint32_t MOZAIK_SLOPE_MIN_Q32 = UINT32_C(0x73333333);
 static constexpr uint32_t MOZAIK_SLOPE_MAX_Q32 = UINT32_C(0xc0000000);
 static constexpr uint32_t MOZAIK_GOLDEN_Q32 = UINT32_C(0x9e3779b9);
@@ -446,6 +449,88 @@ static ma_adsr sanitize_adsr(ma_adsr value, ma_adsr fallback) {
     };
 }
 
+static void start_envelope_stage(ma_envelope *envelope,
+                                 ma_envelope_stage stage, float target) {
+    float error = 0.001f * tw_fabsf(target - envelope->level);
+    envelope->completion_error = error > 1.0e-9f ? error : 1.0e-9f;
+    envelope->stage = stage;
+}
+
+#if !defined(MA_SOURCE_EVIDENCE)
+static float envelope_coefficient(float time_ms, float sample_rate_hz) {
+    float x = LN1000 / (0.001f * time_ms * sample_rate_hz);
+    return tw_one_pole_coeff(x);
+}
+
+static float render_envelope(ma_envelope *envelope, ma_adsr controls,
+                             float sample_rate_hz) {
+    float target = 0.0f;
+    float time_ms = controls.release_ms;
+    switch (envelope->stage) {
+    case MA_ENVELOPE_IDLE:
+        envelope->level = 0.0f;
+        return 0.0f;
+    case MA_ENVELOPE_ATTACK:
+        target = 1.0f;
+        time_ms = controls.attack_ms;
+        break;
+    case MA_ENVELOPE_DECAY:
+        target = controls.sustain;
+        time_ms = controls.decay_ms;
+        break;
+    case MA_ENVELOPE_SUSTAIN:
+        envelope->level = controls.sustain;
+        return envelope->level;
+    case MA_ENVELOPE_RELEASE:
+        break;
+    }
+
+    float coefficient = envelope_coefficient(time_ms, sample_rate_hz);
+    envelope->level += coefficient * (target - envelope->level);
+    if (tw_fabsf(target - envelope->level) > envelope->completion_error)
+        return envelope->level;
+
+    envelope->level = target;
+    switch (envelope->stage) {
+    case MA_ENVELOPE_ATTACK:
+        start_envelope_stage(envelope, MA_ENVELOPE_DECAY, controls.sustain);
+        break;
+    case MA_ENVELOPE_DECAY:
+        envelope->completion_error = 0.0f;
+        envelope->stage = MA_ENVELOPE_SUSTAIN;
+        break;
+    case MA_ENVELOPE_RELEASE:
+        envelope->completion_error = 0.0f;
+        envelope->stage = MA_ENVELOPE_IDLE;
+        break;
+    case MA_ENVELOPE_IDLE:
+    case MA_ENVELOPE_SUSTAIN:
+        break;
+    }
+    return envelope->level;
+}
+
+static float filter_envelope_amount(const ma_synth *s) {
+    return clamp_signal(s->filter_env_amount
+                        + 0.25f * ma_velocity_filter(s->velocity),
+                        0.0f, 1.0f);
+}
+
+static float effective_filter_cutoff(const ma_synth *s,
+                                     float envelope_amount) {
+    float envelope = 1.0f + 0.78f * s->filter_envelope.level
+                                  * envelope_amount;
+    float keytrack = 1.0f
+                   + ((float)s->note - 60.0f) * (1.0f / 48.0f)
+                   * s->filter_keytrack * 0.42f;
+    keytrack = clamp_signal(keytrack, 0.55f, 1.35f);
+    float cutoff = s->filter_cutoff_hz * envelope * keytrack;
+    float cutoff_max = 0.42f * s->sample_rate_hz;
+    if (cutoff_max > 20000.0f) cutoff_max = 20000.0f;
+    return clamp_signal(cutoff, 20.0f, cutoff_max);
+}
+#endif
+
 float ma_note_frequency_hz(uint8_t note) {
     return note < 128 ? NOTE_HZ[note] : 0.0f;
 }
@@ -479,6 +564,7 @@ void ma_synth_init(ma_synth *s, float sample_rate_hz) {
         .mozaik_drift = 0.05f,
         .mixer_pressure = 0.15f,
         .filter_cutoff_hz = 900.0f,
+        .filter_cutoff_effective_hz = 900.0f,
         .filter_resonance = 0.18f,
         .filter_drive = 0.12f,
         .filter_env_amount = 0.30f,
@@ -511,6 +597,8 @@ void ma_synth_init(ma_synth *s, float sample_rate_hz) {
     reset_mozaik(&s->mozaik, s->mozaik_phason_q32);
     ma_synth_set_filter(s, s->filter_cutoff_hz, s->filter_resonance,
                         s->filter_drive, s->mixer_pressure);
+    ma_synth_set_filter_modulation(s, s->filter_env_amount,
+                                   s->filter_keytrack);
 }
 
 void ma_synth_note_on(ma_synth *s, uint8_t note, uint8_t velocity) {
@@ -522,28 +610,52 @@ void ma_synth_note_on(ma_synth *s, uint8_t note, uint8_t velocity) {
     s->note = note;
     s->velocity = velocity < 128 ? velocity : 127;
     s->note_active = true;
+    start_envelope_stage(&s->amp_envelope, MA_ENVELOPE_ATTACK, 1.0f);
+    start_envelope_stage(&s->filter_envelope, MA_ENVELOPE_ATTACK, 1.0f);
     reset_mozaik(&s->mozaik, s->mozaik_phason_q32);
 }
 
 void ma_synth_note_off(ma_synth *s, uint8_t note) {
-    if (note < 128 && s->note_active && s->note == note)
+    if (note < 128 && s->note_active && s->note == note) {
         s->note_active = false;
+        if (s->amp_envelope.stage != MA_ENVELOPE_IDLE)
+            start_envelope_stage(&s->amp_envelope, MA_ENVELOPE_RELEASE, 0.0f);
+        if (s->filter_envelope.stage != MA_ENVELOPE_IDLE)
+            start_envelope_stage(&s->filter_envelope,
+                                 MA_ENVELOPE_RELEASE, 0.0f);
+    }
 }
 
 static float render_source_substep(ma_synth *s, float noise,
-                                   float guard1, float guard2) {
+                                   float guard1, float guard2,
+                                   float filter_modulation) {
     float oversampled_rate_hz = 8.0f * s->sample_rate_hz;
     float base_hz = ma_note_frequency_hz(s->note);
+    ma_vco_controls vco1_controls = s->vco1;
+    ma_vco_controls vco2_controls = s->vco2;
+#if !defined(MA_SOURCE_EVIDENCE)
+    vco1_controls.pulse_width = clamp_signal(
+        vco1_controls.pulse_width + 0.120f * filter_modulation,
+        0.05f, 0.95f);
+    vco2_controls.pulse_width = clamp_signal(
+        vco2_controls.pulse_width - 0.080f * filter_modulation,
+        0.05f, 0.95f);
+#else
+    (void)filter_modulation;
+#endif
     float fine_ratio = octave_ratio_small(s->vco2_fine_cents / 1200.0f);
     float vco2_hz = base_hz * interval_ratio(s->vco2_interval) * fine_ratio;
     float vco2_step = phase_step(vco2_hz, oversampled_rate_hz);
     uint64_t vco2_step_q48 = phase_step_q48(vco2_step);
     vco2_step = phase_turns(vco2_step_q48);
-    float vco2_preview = preview_oscillator(&s->oscillator2, s->vco2,
+    float vco2_preview = preview_oscillator(&s->oscillator2, vco2_controls,
                                             vco2_step);
     float cross_ratio = clamp_signal(
         1.0f + vco2_preview * s->crossmod_amount * 0.25f, 0.25f, 4.0f);
     float vco1_hz = base_hz * cross_ratio;
+#if !defined(MA_SOURCE_EVIDENCE)
+    vco1_hz *= octave_ratio_small(0.125f * filter_modulation);
+#endif
     float vco1_step = phase_step(vco1_hz, oversampled_rate_hz);
     uint64_t vco1_step_q48 = phase_step_q48(vco1_step);
     vco1_step = phase_turns(vco1_step_q48);
@@ -573,16 +685,17 @@ static float render_source_substep(ma_synth *s, float noise,
             & PHASE_MASK_Q48;
         float sync_event_phase = phase_turns(sync_event_phase_q48);
         float sync_reset_phase = phase_turns(sync_reset_phase_q48);
-        float jump = raw_wave_mix(sync_reset_phase, s->vco2)
-                   - raw_wave_mix(sync_event_phase, s->vco2);
+        float jump = raw_wave_mix(sync_reset_phase, vco2_controls)
+                   - raw_wave_mix(sync_event_phase, vco2_controls);
         float before = 0.5f * (1.0f - event_fraction);
         float after = 1.0f - 0.5f * event_fraction;
         sync_now = jump * smoothstep5(before);
         sync_next = jump * (smoothstep5(after) - 1.0f);
     }
 
-    float vco1 = render_oscillator(&s->oscillator1, s->vco1, vco1_step, 0.0f);
-    float vco2 = render_oscillator(&s->oscillator2, s->vco2, vco2_step,
+    float vco1 = render_oscillator(&s->oscillator1, vco1_controls,
+                                   vco1_step, 0.0f);
+    float vco2 = render_oscillator(&s->oscillator2, vco2_controls, vco2_step,
                                    sync_now);
     s->oscillator2.sync_residual += sync_next;
     advance_phase(&s->oscillator1, vco1_step_q48);
@@ -670,7 +783,7 @@ static void reset_ladder(ma_ladder *ladder) {
     ladder->reset_count++;
 }
 
-static float render_ladder_2x(ma_synth *s, float input) {
+static float render_ladder_2x(ma_synth *s, float input, float filter_g) {
     ma_ladder *ladder = &s->ladder;
     float y[4] = { 0 };
     float v[4] = { 0 };
@@ -681,7 +794,7 @@ static float render_ladder_2x(ma_synth *s, float input) {
     for (int iteration = 0; iteration < 2; iteration++) {
         float u = tw_sat(input_gain * input - feedback * y4_guess);
         for (int stage = 0; stage < 4; stage++) {
-            v[stage] = (tw_sat(u) - ladder->state[stage]) * s->filter_g;
+            v[stage] = (tw_sat(u) - ladder->state[stage]) * filter_g;
             y[stage] = v[stage] + ladder->state[stage];
             u = y[stage];
         }
@@ -724,6 +837,20 @@ static float decimate_filter(const ma_ladder *ladder) {
 #endif
 
 ma_frame ma_synth_tick(ma_synth *s) {
+#if !defined(MA_SOURCE_EVIDENCE)
+    (void)render_envelope(&s->filter_envelope, s->filter_adsr,
+                          s->sample_rate_hz);
+    (void)render_envelope(&s->amp_envelope, s->amp_adsr,
+                          s->sample_rate_hz);
+    float envelope_amount = filter_envelope_amount(s);
+    float filter_modulation = s->filter_envelope.level * envelope_amount;
+    s->filter_cutoff_effective_hz = effective_filter_cutoff(
+        s, envelope_amount);
+    float filter_g = filter_prewarp(s->filter_cutoff_effective_hz,
+                                    s->sample_rate_hz);
+#else
+    float filter_modulation = 0.0f;
+#endif
     float guard1 = s->oscillator1.guard_gain;
     float guard2 = s->oscillator2.guard_gain;
     float noise = next_noise(&s->noise_state);
@@ -731,10 +858,12 @@ ma_frame ma_synth_tick(ma_synth *s) {
         for (int at_4x = 0; at_4x < 2; at_4x++) {
             push_oversample_history(
                 s->oversample_history[0], &s->oversample_history_pos[0],
-                render_source_substep(s, noise, guard1, guard2));
+                render_source_substep(s, noise, guard1, guard2,
+                                      filter_modulation));
             push_oversample_history(
                 s->oversample_history[0], &s->oversample_history_pos[0],
-                render_source_substep(s, noise, guard1, guard2));
+                render_source_substep(s, noise, guard1, guard2,
+                                      filter_modulation));
             float sample_4x = decimate_oversample(
                 s->oversample_history[0], s->oversample_history_pos[0]);
             push_oversample_history(
@@ -757,14 +886,15 @@ ma_frame ma_synth_tick(ma_synth *s) {
         float pressured = apply_mixer_pressure(source, s->mixer_pressure);
         s->ladder.pressure_input = source;
         s->ladder.pressure_output = pressured;
-        push_filter_history(&s->ladder, render_ladder_2x(s, pressured));
+        push_filter_history(&s->ladder,
+                            render_ladder_2x(s, pressured, filter_g));
 #endif
     }
     (void)next_guard_gain(&s->oscillator1);
     (void)next_guard_gain(&s->oscillator2);
 
-    float level = s->note_active ? ma_velocity_level(s->velocity) : 0.0f;
 #if defined(MA_SOURCE_EVIDENCE)
+    float level = s->note_active ? ma_velocity_level(s->velocity) : 0.0f;
     float analog = decimate_oversample(
         s->oversample_history[2], s->oversample_history_pos[2]);
     float mozaik_gain = s->mozaik.guard_gain;
@@ -774,7 +904,9 @@ ma_frame ma_synth_tick(ma_synth *s) {
     float output = mix_source_2x(s, analog, guard1, guard2,
                                  mozaik_gain, mozaik) * level;
 #else
-    float output = decimate_filter(&s->ladder) * level;
+    float velocity_gain = 0.25f + 0.75f * ma_velocity_level(s->velocity);
+    float output = decimate_filter(&s->ladder)
+                 * s->amp_envelope.level * velocity_gain;
 #endif
     return (ma_frame){ .left = output, .right = output };
 }
@@ -830,9 +962,16 @@ void ma_synth_set_filter(ma_synth *s, float cutoff_hz, float resonance,
     if (cutoff_max > 20000.0f) cutoff_max = 20000.0f;
     s->filter_cutoff_hz = clamp_control(cutoff_hz, 20.0f, cutoff_max, 900.0f);
     s->filter_g = filter_prewarp(s->filter_cutoff_hz, s->sample_rate_hz);
+    s->filter_cutoff_effective_hz = s->filter_cutoff_hz;
     s->filter_resonance = clamp_control(resonance, 0.0f, 1.0f, 0.18f);
     s->filter_drive = clamp_control(drive, 0.0f, 1.0f, 0.12f);
     s->mixer_pressure = clamp_control(mixer_pressure, 0.0f, 1.0f, 0.15f);
+}
+
+void ma_synth_set_filter_modulation(ma_synth *s, float envelope_amount,
+                                    float keytrack) {
+    s->filter_env_amount = clamp_control(envelope_amount, 0.0f, 1.0f, 0.30f);
+    s->filter_keytrack = clamp_control(keytrack, 0.0f, 1.0f, 0.45f);
 }
 
 void ma_synth_set_amp_adsr(ma_synth *s, ma_adsr adsr) {

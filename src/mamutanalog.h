@@ -12,6 +12,20 @@ typedef struct {
     float release_ms;
 } ma_adsr;
 
+typedef enum {
+    MA_ENVELOPE_IDLE,
+    MA_ENVELOPE_ATTACK,
+    MA_ENVELOPE_DECAY,
+    MA_ENVELOPE_SUSTAIN,
+    MA_ENVELOPE_RELEASE,
+} ma_envelope_stage;
+
+typedef struct {
+    float level;
+    float completion_error;
+    ma_envelope_stage stage;
+} ma_envelope;
+
 typedef struct {
     float left;
     float right;
@@ -88,12 +102,15 @@ typedef struct {
     float mixer_pressure;
     float filter_cutoff_hz;
     float filter_g;
+    float filter_cutoff_effective_hz;
     float filter_resonance;
     float filter_drive;
     float filter_env_amount;
     float filter_keytrack;
     ma_adsr amp_adsr;
     ma_adsr filter_adsr;
+    ma_envelope amp_envelope;
+    ma_envelope filter_envelope;
     float macro[MA_MACRO_COUNT];
     float body_drive;
     float width;
@@ -137,6 +154,8 @@ void ma_synth_set_mozaik(ma_synth *s, float mix, float slope,
                          float contrast, float phason, float drift);
 void ma_synth_set_filter(ma_synth *s, float cutoff_hz, float resonance,
                          float drive, float mixer_pressure);
+void ma_synth_set_filter_modulation(ma_synth *s, float envelope_amount,
+                                    float keytrack);
 void ma_synth_set_amp_adsr(ma_synth *s, ma_adsr adsr);
 void ma_synth_set_filter_adsr(ma_synth *s, ma_adsr adsr);
 void ma_synth_set_macro(ma_synth *s, ma_macro_id macro, float value);

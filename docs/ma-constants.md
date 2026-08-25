@@ -179,9 +179,9 @@ depth]:
 cross_ratio = clamp(1 + vco2_sample * crossmod * 0.25, 0.25, 4)
 ```
 
-The filter envelope route uses
-`m = filter_envelope * filter_envelope_amount` and the fixed full-depth
-deltas [DECISION]:
+The filter envelope route uses `m = filter_envelope * effective_amount`,
+where section 7 defines the velocity-aware effective amount, and the fixed
+full-depth deltas [DECISION]:
 
 ```text
 VCO1 pitch       +0.125 octave * m
@@ -447,9 +447,28 @@ target and advances the stage. Sustain is held exactly. NoteOn attacks from
 the current level; NoteOff releases from it. Release completion snaps level
 to literal zero and marks the envelope idle [DECISION].
 
+The effective positive filter route is [DONOR coefficients from
+`mamut-engine/src/engine/macro_state.rs`; DECISION: the direct cutoff is the
+unity zero-envelope anchor instead of inheriting the donor's `.42` floor]:
+
+```text
+effective_amount = clamp(filter_env_amount + .25*velocity_filter, 0, 1)
+keytrack = clamp(1 + ((note-60)/48)*filter_keytrack*.42, .55, 1.35)
+cutoff = clamp(direct_cutoff
+               * (1 + .78*filter_envelope*effective_amount)
+               * keytrack,
+               20, min(20000, .42*sample_rate))
+```
+
+The same `filter_envelope*effective_amount` product is `m` for the section
+3.2 oscillator routes. It is evaluated once per public frame and held over
+that frame's eight VCO and two ladder substeps [DECISION].
+
 The amp VCA multiplies the filtered sample by
 `amp_envelope * velocity_gain * pressure_gain`. Velocity and pressure laws
-are in sections 9 and 10. No extra VCA saturator exists in MA1 [DECISION].
+are in sections 9 and 10. `pressure_gain` is literal one at MA1-5; MA1-6
+owns per-note pressure state and smoothing. No extra VCA saturator exists in
+MA1 [DECISION].
 
 ## 8. Identity resolver
 
