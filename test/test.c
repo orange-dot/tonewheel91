@@ -4,6 +4,7 @@
 #include <string.h>
 #include "../src/tonewheel.h"
 #include "../src/epiano.h"
+#include "../src/mamutanalog.h"
 
 static int fails, checks;
 static const double TAU_D = 6.283185307179586;
@@ -3902,6 +3903,662 @@ static void test_ep_condition(void) {
           "the instrument must ship with tolerance, not idealized");
 }
 
+static void test_ma_foundation(void) {
+    CHECK(ma_note_frequency_hz(69) == 440.0f,
+          "MA MIDI note 69 must be exactly 440 Hz");
+    CHECK(ma_note_frequency_hz(128) == 0.0f
+          && ma_note_frequency_hz(255) == 0.0f,
+          "MA hostile note-table indices must return zero");
+
+    double previous_hz = 0.0;
+    double worst_pitch_relative = 0.0;
+    for (int note = 0; note < 128; note++) {
+        double got = ma_note_frequency_hz((uint8_t)note);
+        double expected = 440.0 * pow(2.0, (note - 69) / 12.0);
+        double relative = fabs(got / expected - 1.0);
+        if (relative > worst_pitch_relative) worst_pitch_relative = relative;
+        CHECK(got > previous_hz,
+              "MA note table must rise at note %d: %.9g after %.9g",
+              note, got, previous_hz);
+        previous_hz = got;
+    }
+    CHECK(worst_pitch_relative < 1.0e-7,
+          "MA note table worst relative error %.3g", worst_pitch_relative);
+
+    CHECK(ma_velocity_level(0) == 0.0f
+          && ma_velocity_filter(0) == 0.0f
+          && ma_velocity_level(127) == 1.0f
+          && ma_velocity_filter(127) == 1.0f,
+          "MA velocity table endpoints");
+    CHECK(ma_velocity_level(128) == 0.0f
+          && ma_velocity_filter(255) == 0.0f,
+          "MA hostile velocity-table indices must return zero");
+    double previous_level = 0.0, previous_filter = 0.0;
+    double worst_level_relative = 0.0, worst_filter_relative = 0.0;
+    for (int velocity = 1; velocity < 128; velocity++) {
+        double level = ma_velocity_level((uint8_t)velocity);
+        double filter = ma_velocity_filter((uint8_t)velocity);
+        double x = velocity / 127.0;
+        double level_relative = fabs(level / pow(x, 0.78) - 1.0);
+        double filter_relative = fabs(filter / pow(x, 1.08) - 1.0);
+        if (level_relative > worst_level_relative)
+            worst_level_relative = level_relative;
+        if (filter_relative > worst_filter_relative)
+            worst_filter_relative = filter_relative;
+        CHECK(level > previous_level && filter > previous_filter,
+              "MA velocity tables must rise at velocity %d", velocity);
+        previous_level = level;
+        previous_filter = filter;
+    }
+    CHECK(worst_level_relative < 1.0e-7
+          && worst_filter_relative < 1.0e-7,
+          "MA velocity table relative errors %.3g / %.3g",
+          worst_level_relative, worst_filter_relative);
+
+    ma_synth synth;
+    ma_synth_init(&synth, 48000.0f);
+    CHECK(synth.sample_rate_hz == 48000.0f,
+          "MA sample rate must reach the public state");
+    CHECK(synth.vco1.saw_level == 0.70f
+          && synth.vco1.pulse_level == 0.25f
+          && synth.vco1.triangle_level == 0.15f
+          && synth.vco1.pulse_width == 0.50f,
+          "MA VCO1 factory controls");
+    CHECK(synth.vco2.saw_level == 0.35f
+          && synth.vco2.pulse_level == 0.20f
+          && synth.vco2.triangle_level == 0.55f
+          && synth.vco2.pulse_width == 0.50f
+          && synth.vco2_level == 0.62f
+          && synth.vco2_interval == 0
+          && synth.vco2_fine_cents == 7.0f,
+          "MA VCO2 factory controls");
+    CHECK(synth.sync_amount == 0.0f
+          && synth.sync_softness == 0.0f
+          && synth.crossmod_amount == 0.0f
+          && synth.noise_level == 0.02f,
+          "MA oscillator-modulation and noise defaults");
+    CHECK(synth.mozaik_mix == 0.20f
+          && synth.mozaik_contrast == 1.618034f
+          && synth.mozaik_slope_q32 == UINT32_C(0x9e3779b9)
+          && synth.mozaik_phason_q32 == 0
+          && synth.mozaik_drift == 0.05f,
+          "MA Mozaik factory controls");
+    CHECK(synth.mixer_pressure == 0.15f
+          && synth.filter_cutoff_hz == 900.0f
+          && synth.filter_resonance == 0.18f
+          && synth.filter_drive == 0.12f
+          && synth.filter_env_amount == 0.30f
+          && synth.filter_keytrack == 0.45f,
+          "MA mixer/filter factory controls");
+    CHECK(synth.amp_adsr.attack_ms == 600.0f
+          && synth.amp_adsr.decay_ms == 1600.0f
+          && synth.amp_adsr.sustain == 0.82f
+          && synth.amp_adsr.release_ms == 3000.0f
+          && synth.filter_adsr.attack_ms == 350.0f
+          && synth.filter_adsr.decay_ms == 1800.0f
+          && synth.filter_adsr.sustain == 0.50f
+          && synth.filter_adsr.release_ms == 2600.0f,
+          "MA envelope factory controls");
+    CHECK(synth.body_drive == 0.10f && synth.width == 0.70f
+          && synth.master_level == 0.18f
+          && synth.noise_state == UINT64_C(0x4d414e4f49534531),
+          "MA output and deterministic-noise defaults");
+    for (int macro = 0; macro < MA_MACRO_COUNT; macro++)
+        CHECK(synth.macro[macro] == 0.0f,
+              "MA macro %d must initialize to exact bypass", macro);
+
+    ma_synth hostile;
+    ma_synth_init(&hostile, NAN);
+    CHECK(hostile.sample_rate_hz == 48000.0f,
+          "MA non-finite sample rate must select 48 kHz");
+    ma_synth_init(&hostile, 192001.0f);
+    CHECK(hostile.sample_rate_hz == 48000.0f,
+          "MA out-of-domain sample rate must select 48 kHz");
+    ma_synth_init(&hostile, 44100.0f);
+    CHECK(hostile.sample_rate_hz == 44100.0f,
+          "MA lower sample-rate boundary must be accepted");
+
+    ma_synth_set_amp_adsr(&synth, (ma_adsr){
+        .attack_ms = -4.0f,
+        .decay_ms = NAN,
+        .sustain = 3.0f,
+        .release_ms = INFINITY,
+    });
+    CHECK(synth.amp_adsr.attack_ms == 1.0f
+          && synth.amp_adsr.decay_ms == 1600.0f
+          && synth.amp_adsr.sustain == 1.0f
+          && synth.amp_adsr.release_ms == 3000.0f,
+          "MA amp ADSR must clamp finite values and default non-finite ones");
+    ma_synth_set_filter_adsr(&synth, (ma_adsr){
+        .attack_ms = 25000.0f,
+        .decay_ms = 0.0f,
+        .sustain = -1.0f,
+        .release_ms = 25000.0f,
+    });
+    CHECK(synth.filter_adsr.attack_ms == 20000.0f
+          && synth.filter_adsr.decay_ms == 1.0f
+          && synth.filter_adsr.sustain == 0.0f
+          && synth.filter_adsr.release_ms == 20000.0f,
+          "MA filter ADSR must clamp to its public domain");
+
+    ma_synth_set_macro(&synth, MA_MACRO_GRAVITACIJA, 2.0f);
+    ma_synth_set_macro(&synth, MA_MACRO_BLOOM, NAN);
+    CHECK(synth.macro[MA_MACRO_GRAVITACIJA] == 1.0f
+          && synth.macro[MA_MACRO_BLOOM] == 0.0f,
+          "MA macro setter must sanitize to [0,1]");
+    float macros_before[MA_MACRO_COUNT];
+    memcpy(macros_before, synth.macro, sizeof macros_before);
+    ma_synth_set_macro(&synth, (ma_macro_id)MA_MACRO_COUNT, 0.5f);
+    CHECK(memcmp(macros_before, synth.macro, sizeof macros_before) == 0,
+          "MA invalid macro identifiers must be a no-op");
+    CHECK(sizeof synth < 1024u * 1024u,
+          "MA caller-owned state unexpectedly large: %zu bytes", sizeof synth);
+}
+
+static void test_ma_oscillators(void) {
+    static const ma_vco_controls saw_only = {
+        .saw_level = 1.0f,
+        .pulse_width = 0.5f,
+    };
+    static const ma_vco_controls silent = {
+        .pulse_width = 0.5f,
+    };
+
+    ma_synth synth;
+    ma_synth_init(&synth, 48000.0f);
+    ma_synth_set_mozaik(&synth, 0.0f, 0.5601133f, 0.5150284f, 0.0f, 0.0f);
+    ma_synth_set_filter(&synth, 20000.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_vco1(&synth, saw_only);
+    ma_synth_set_vco2(&synth, silent, 0.0f, 0, 0.0f);
+    ma_synth_set_oscillator_modulation(&synth, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_note_on(&synth, 69, 127);
+    for (int i = 0; i < 1024; i++) (void)ma_synth_tick(&synth);
+    int rising = 0;
+    float peak = 0.0f;
+    (void)ma_synth_tick(&synth);
+    float previous = synth.ladder.pressure_input;
+    for (int i = 1; i < 48000; i++) {
+        ma_frame frame = ma_synth_tick(&synth);
+        CHECK(frame.left == frame.right && isfinite(frame.left),
+              "MA source tick %d must be finite dual mono", i);
+        float source = synth.ladder.pressure_input;
+        if (previous <= 0.0f && source > 0.0f) rising++;
+        if (fabsf(source) > peak) peak = fabsf(source);
+        previous = source;
+    }
+    CHECK(rising >= 438 && rising <= 442,
+          "MA VCO1 A4 produced %d rising crossings", rising);
+    CHECK(peak > 0.90f && peak <= 1.25f,
+          "MA PolyBLEP saw peak %.6f outside its contract", (double)peak);
+
+    ma_synth_set_vco1(&synth, (ma_vco_controls){
+        .saw_level = NAN,
+        .pulse_level = -2.0f,
+        .triangle_level = 8.0f,
+        .pulse_width = INFINITY,
+    });
+    CHECK(synth.vco1.saw_level == 0.70f
+          && synth.vco1.pulse_level == 0.0f
+          && synth.vco1.triangle_level == 1.0f
+          && synth.vco1.pulse_width == 0.50f,
+          "MA VCO1 setter must default non-finite and clamp finite input");
+    ma_synth_set_vco2(&synth, (ma_vco_controls){
+        .saw_level = -1.0f,
+        .pulse_level = 2.0f,
+        .triangle_level = NAN,
+        .pulse_width = 0.99f,
+    }, INFINITY, -99, -80.0f);
+    CHECK(synth.vco2.saw_level == 0.0f
+          && synth.vco2.pulse_level == 1.0f
+          && synth.vco2.triangle_level == 0.55f
+          && synth.vco2.pulse_width == 0.95f
+          && synth.vco2_level == 0.62f
+          && synth.vco2_interval == -24
+          && synth.vco2_fine_cents == -50.0f,
+          "MA VCO2 grouped setter sanitization");
+    ma_synth_set_oscillator_modulation(&synth, INFINITY, -1.0f, 2.0f, NAN);
+    CHECK(synth.sync_amount == 0.0f && synth.sync_softness == 0.0f
+          && synth.crossmod_amount == 1.0f && synth.noise_level == 0.02f,
+          "MA oscillator-modulation setter sanitization");
+
+    ma_synth_init(&synth, 48000.0f);
+    ma_synth_note_on(&synth, 60, 200);
+    CHECK(synth.note_active && synth.note == 60 && synth.velocity == 127,
+          "MA note-on must accept the note and clamp hostile velocity");
+    ma_synth_note_off(&synth, 61);
+    CHECK(synth.note_active, "MA nonmatching note-off must not release");
+    ma_synth_note_on(&synth, 200, 100);
+    CHECK(synth.note_active && synth.note == 60,
+          "MA hostile note-on must leave the voice unchanged");
+    ma_synth_note_on(&synth, 60, 0);
+    CHECK(!synth.note_active, "MA velocity-zero note-on must release");
+    CHECK(ma_synth_tick(&synth).left == 0.0f,
+          "MA released source must be inaudible while state advances");
+
+    ma_synth no_sync, zero_sync;
+    ma_synth_init(&no_sync, 48000.0f);
+    ma_synth_init(&zero_sync, 48000.0f);
+    ma_synth_set_oscillator_modulation(&no_sync, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_oscillator_modulation(&zero_sync, 0.0f, 1.0f, 0.0f, 0.0f);
+    ma_synth_note_on(&no_sync, 96, 127);
+    ma_synth_note_on(&zero_sync, 96, 127);
+    int sync_zero_mismatch = 0;
+    for (int i = 0; i < 12000; i++) {
+        ma_frame a = ma_synth_tick(&no_sync);
+        ma_frame b = ma_synth_tick(&zero_sync);
+        sync_zero_mismatch += memcmp(&a, &b, sizeof a) != 0;
+    }
+    CHECK(sync_zero_mismatch == 0,
+          "MA sync amount zero must skip reset and residual exactly");
+
+    ma_synth free_run, hard_sync;
+    ma_synth_init(&free_run, 48000.0f);
+    ma_synth_init(&hard_sync, 48000.0f);
+    ma_synth_set_vco1(&free_run, silent);
+    ma_synth_set_vco1(&hard_sync, silent);
+    ma_synth_set_vco2(&free_run, saw_only, 1.0f, 7, 0.0f);
+    ma_synth_set_vco2(&hard_sync, saw_only, 1.0f, 7, 0.0f);
+    ma_synth_set_oscillator_modulation(&free_run, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_oscillator_modulation(&hard_sync, 1.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_note_on(&free_run, 72, 127);
+    ma_synth_note_on(&hard_sync, 72, 127);
+    int hard_sync_delta = 0;
+    for (int i = 0; i < 12000; i++) {
+        ma_frame a = ma_synth_tick(&free_run);
+        ma_frame b = ma_synth_tick(&hard_sync);
+        hard_sync_delta += memcmp(&a, &b, sizeof a) != 0;
+        CHECK(isfinite(b.left) && fabsf(b.left) <= 1.25f,
+              "MA hard-sync sample %d escaped its bound", i);
+    }
+    CHECK(hard_sync_delta > 1000,
+          "MA full sync must audibly change the slave, %d samples differ",
+          hard_sync_delta);
+
+    ma_synth plain, crossed;
+    ma_synth_init(&plain, 48000.0f);
+    ma_synth_init(&crossed, 48000.0f);
+    ma_synth_set_vco1(&plain, saw_only);
+    ma_synth_set_vco1(&crossed, saw_only);
+    ma_synth_set_vco2(&plain, saw_only, 0.0f, 12, 0.0f);
+    ma_synth_set_vco2(&crossed, saw_only, 0.0f, 12, 0.0f);
+    ma_synth_set_oscillator_modulation(&plain, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_oscillator_modulation(&crossed, 0.0f, 0.0f, 1.0f, 0.0f);
+    ma_synth_note_on(&plain, 84, 127);
+    ma_synth_note_on(&crossed, 84, 127);
+    int crossmod_delta = 0;
+    for (int i = 0; i < 12000; i++) {
+        ma_frame a = ma_synth_tick(&plain);
+        ma_frame b = ma_synth_tick(&crossed);
+        crossmod_delta += memcmp(&a, &b, sizeof a) != 0;
+        CHECK(isfinite(b.left) && fabsf(b.left) <= 1.25f,
+              "MA cross-mod sample %d escaped its bound", i);
+    }
+    CHECK(crossmod_delta > 1000,
+          "MA cross-mod must alter VCO1, %d samples differ", crossmod_delta);
+
+    ma_synth noise_off, noise_on;
+    ma_synth_init(&noise_off, 48000.0f);
+    ma_synth_init(&noise_on, 48000.0f);
+    ma_synth_set_vco1(&noise_off, silent);
+    ma_synth_set_vco1(&noise_on, silent);
+    ma_synth_set_vco2(&noise_off, silent, 0.0f, 0, 0.0f);
+    ma_synth_set_vco2(&noise_on, silent, 0.0f, 0, 0.0f);
+    ma_synth_set_oscillator_modulation(&noise_off, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_oscillator_modulation(&noise_on, 0.0f, 0.0f, 0.0f, 1.0f);
+    ma_synth_note_on(&noise_off, 60, 127);
+    ma_synth_note_on(&noise_on, 60, 127);
+    for (int i = 0; i < 1000; i++) {
+        (void)ma_synth_tick(&noise_off);
+        (void)ma_synth_tick(&noise_on);
+    }
+    ma_synth_set_oscillator_modulation(&noise_off, 0.0f, 0.0f, 0.0f, 1.0f);
+    CHECK(memcmp(&noise_off.noise_state, &noise_on.noise_state,
+                 sizeof noise_on.noise_state) == 0,
+          "MA noise timeline must advance while its level is zero");
+    /* Flush the VCO boundary. The downstream nonlinear ladder legitimately
+     * remembers the earlier source level, so compare its exact input. */
+    for (int i = 0; i < 28; i++) {
+        (void)ma_synth_tick(&noise_off);
+        (void)ma_synth_tick(&noise_on);
+    }
+    for (int i = 0; i < 972; i++) {
+        (void)ma_synth_tick(&noise_off);
+        (void)ma_synth_tick(&noise_on);
+        CHECK(memcmp(&noise_off.ladder.pressure_input,
+                     &noise_on.ladder.pressure_input,
+                     sizeof noise_on.ladder.pressure_input) == 0,
+              "MA noise timeline diverged after zero-level frame %d", i);
+    }
+
+    ma_synth guarded;
+    ma_synth_init(&guarded, 44100.0f);
+    ma_synth_set_vco1(&guarded, silent);
+    ma_synth_set_vco2(&guarded, saw_only, 1.0f, 24, 0.0f);
+    ma_synth_set_oscillator_modulation(&guarded, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_note_on(&guarded, 127, 127);
+    for (int i = 0; i < 512; i++) (void)ma_synth_tick(&guarded);
+    CHECK(guarded.oscillator2.guard_gain == 0.0f
+          && guarded.oscillator2.guard_frames == 0
+          && guarded.ladder.pressure_input == 0.0f,
+          "MA source guard must fade an out-of-domain VCO to exact zero");
+}
+
+static uint64_t ma_mozaik_kinds(ma_synth *synth, int count) {
+    uint64_t kinds = 0;
+    for (int tile = 0; tile < count; tile++) {
+        synth->mozaik.tile_pos = synth->mozaik.tile_len;
+        (void)ma_synth_tick(synth);
+        if (synth->mozaik.tile_sign > 0.0f)
+            kinds |= UINT64_C(1) << tile;
+    }
+    return kinds;
+}
+
+static void ma_mozaik_reseat(ma_synth *synth, uint32_t slope,
+                             uint32_t phason) {
+    ma_synth_init(synth, 48000.0f);
+    ma_synth_set_mozaik(synth, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    synth->mozaik_slope_q32 = slope;
+    synth->mozaik = (ma_mozaik){
+        .frac_q32 = phason,
+        .applied_phason_q32 = phason,
+        .tile_sign = 1.0f,
+        .guard_gain = 1.0f,
+        .guard_target = 1.0f,
+    };
+}
+
+static void test_ma_mozaik(void) {
+    static const uint32_t slopes[5] = {
+        UINT32_C(0x80000000), UINT32_C(0x9999999a),
+        UINT32_C(0x9e3779b9), UINT32_C(0xa0000000),
+        UINT32_C(0xaaaaaaab),
+    };
+    static const uint32_t phasons[3] = {
+        0, UINT32_C(0x12345678), UINT32_C(0xdeadbeef),
+    };
+    static const uint64_t expected_kinds[5][3] = {
+        { UINT64_C(0xaaaaaaaaaaaaaaaa), UINT64_C(0xaaaaaaaaaaaaaaaa),
+          UINT64_C(0x5555555555555555) },
+        { UINT64_C(0xad6b5ad6b5ad6b5a), UINT64_C(0xad6b5ad6b5ad6b5a),
+          UINT64_C(0xb5ad6b5ad6b5ad6b) },
+        { UINT64_C(0xadad6d6b6b6b5b5a), UINT64_C(0x6d6d6b6b6b5b5ada),
+          UINT64_C(0xb5adadad6d6d6b6b) },
+        { UINT64_C(0xdadadadadadadada), UINT64_C(0xdadadadadadadada),
+          UINT64_C(0x6b6b6b6b6b6b6b6b) },
+        { UINT64_C(0x6db6db6db6db6db6), UINT64_C(0x6db6db6db6db6db6),
+          UINT64_C(0xb6db6db6db6db6db) },
+    };
+    static const uint32_t expected_frac[5][3] = {
+        { 0, UINT32_C(0x12345678), UINT32_C(0xdeadbeef) },
+        { UINT32_C(0x66666680), UINT32_C(0x789abcf8),
+          UINT32_C(0x4514256f) },
+        { UINT32_C(0x8dde6e40), UINT32_C(0xa012c4b8),
+          UINT32_C(0x6c8c2d2f) },
+        { 0, UINT32_C(0x12345678), UINT32_C(0xdeadbeef) },
+        { UINT32_C(0xaaaaaac0), UINT32_C(0xbcdf0138),
+          UINT32_C(0x895869af) },
+    };
+
+    ma_synth synth;
+    for (size_t slope = 0; slope < 5; slope++) {
+        for (size_t phason = 0; phason < 3; phason++) {
+            ma_mozaik_reseat(&synth, slopes[slope], phasons[phason]);
+            uint64_t kinds = ma_mozaik_kinds(&synth, 64);
+            CHECK(kinds == expected_kinds[slope][phason],
+                  "MA Mozaik donor word %zu/%zu: %016llx",
+                  slope, phason, (unsigned long long)kinds);
+            CHECK(synth.mozaik.frac_q32 == expected_frac[slope][phason],
+                  "MA Mozaik donor fraction %zu/%zu: %08x",
+                  slope, phason, synth.mozaik.frac_q32);
+        }
+    }
+
+    ma_mozaik_reseat(&synth, UINT32_C(0x9e3779b9), UINT32_C(0x01020304));
+    CHECK(ma_mozaik_kinds(&synth, 16) == UINT64_C(0x5b5a),
+          "MA Mozaik pre-phason golden word");
+    synth.mozaik.pending_phason_q32 = synth.mozaik.applied_phason_q32
+                                    + UINT32_C(0x10203040);
+    synth.mozaik.has_pending_phason = true;
+    CHECK(ma_mozaik_kinds(&synth, 16) == UINT64_C(0x6b5b)
+          && synth.mozaik.frac_q32 == UINT32_C(0xd8116a64),
+          "MA Mozaik boundary-phason donor golden");
+
+    ma_synth_init(&synth, 48000.0f);
+    ma_synth_set_mozaik(&synth, -1.0f, 1.0f / 6.0f, 2.0f,
+                        -0.25f, 2.0f);
+    CHECK(synth.mozaik_mix == 0.0f
+          && synth.mozaik_slope_q32 == UINT32_C(0x80000000)
+          && synth.mozaik_contrast == 2.2f
+          && synth.mozaik_phason_q32 == UINT32_C(0xc0000000)
+          && synth.mozaik_drift == 1.0f,
+          "MA Mozaik grouped setter maps and clamps controls");
+    ma_synth_set_mozaik(&synth, NAN, NAN, NAN, INFINITY, NAN);
+    CHECK(synth.mozaik_mix == 0.20f
+          && synth.mozaik_slope_q32 == UINT32_C(0x9e3779b9)
+          && synth.mozaik_contrast == 1.618034f
+          && synth.mozaik_phason_q32 == 0
+          && synth.mozaik_drift == 0.05f,
+          "MA Mozaik non-finite controls restore factory values");
+
+    ma_synth_init(&synth, 48000.0f);
+    ma_synth_set_mozaik(&synth, 0.0f, 0.5601133f, 0.5150284f, 0.0f, 1.0f);
+    ma_synth_note_on(&synth, 69, 127);
+    uint32_t drift_step = (uint32_t)(0.5f * 0x1p32f / 96000.0f + 0.5f);
+    for (int frame = 0; frame < 8; frame++) (void)ma_synth_tick(&synth);
+    CHECK(synth.mozaik.applied_phason_q32 == drift_step
+          && synth.mozaik.pending_phason_q32 == 16u * drift_step
+          && synth.mozaik.has_pending_phason,
+          "MA Mozaik drift requests must accumulate within a tile");
+
+    ma_synth early, late;
+    ma_synth_init(&early, 48000.0f);
+    ma_synth_init(&late, 48000.0f);
+    ma_synth_set_mozaik(&early, 1.0f, 0.5601133f, 0.5150284f, 0.0f, 0.0f);
+    ma_synth_set_mozaik(&late, 1.0f, 0.5601133f, 0.5150284f, 0.0f, 0.0f);
+    ma_synth_note_on(&early, 69, 127);
+    ma_synth_note_on(&late, 69, 127);
+    for (int frame = 0; frame < 500; frame++) {
+        if (frame == 2)
+            ma_synth_set_mozaik(&early, 1.0f, 0.5601133f, 0.5150284f,
+                                0.25f, 0.0f);
+        if (frame == 12)
+            ma_synth_set_mozaik(&late, 1.0f, 0.5601133f, 0.5150284f,
+                                0.25f, 0.0f);
+        ma_frame a = ma_synth_tick(&early);
+        ma_frame b = ma_synth_tick(&late);
+        CHECK(memcmp(&a, &b, sizeof a) == 0,
+              "MA Mozaik phason split an active tile at frame %d", frame);
+    }
+    CHECK(early.mozaik.applied_phason_q32 == UINT32_C(0x40000000)
+          && late.mozaik.applied_phason_q32 == UINT32_C(0x40000000),
+          "MA Mozaik pending phason must land at a tile boundary");
+
+    ma_synth dry, moved;
+    ma_synth_init(&dry, 48000.0f);
+    ma_synth_init(&moved, 48000.0f);
+    ma_synth_set_mozaik(&dry, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_mozaik(&moved, 0.0f, 1.0f, 1.0f, 0.75f, 1.0f);
+    ma_synth_note_on(&dry, 57, 111);
+    ma_synth_note_on(&moved, 57, 111);
+    uint64_t dry_hash = 0;
+    for (int frame = 0; frame < 12000; frame++) {
+        ma_frame a = ma_synth_tick(&dry);
+        ma_frame b = ma_synth_tick(&moved);
+        CHECK(memcmp(&a, &b, sizeof a) == 0,
+              "MA Mozaik mix zero changed frame %d", frame);
+        dry_hash = tw_fnv1a64(&a, sizeof a, dry_hash);
+    }
+    CHECK(dry_hash == UINT64_C(0x72f6b0590bd87fd1),
+          "MA1-4 zero-Mozaik filtered baseline is %016llx",
+          (unsigned long long)dry_hash);
+
+    ma_synth_init(&synth, 48000.0f);
+    ma_synth_set_vco1(&synth, (ma_vco_controls){ .pulse_width = 0.5f });
+    ma_synth_set_vco2(&synth, (ma_vco_controls){ .pulse_width = 0.5f },
+                      0.0f, 0, 0.0f);
+    ma_synth_set_oscillator_modulation(&synth, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_mozaik(&synth, 1.0f, 0.5601133f, 0.5150284f, 0.0f, 0.0f);
+    ma_synth_note_on(&synth, 0, 127);
+    for (int frame = 0; frame < 512; frame++) (void)ma_synth_tick(&synth);
+    CHECK(synth.mozaik.guard_gain == 0.0f
+          && synth.mozaik.guard_frames == 0
+          && synth.ladder.pressure_input == 0.0f,
+          "MA Mozaik source guard must mute out-of-domain fundamentals");
+}
+
+static void ma_filter_silence(ma_synth *synth, float cutoff_hz,
+                              float resonance) {
+    static const ma_vco_controls silent = { .pulse_width = 0.5f };
+    ma_synth_init(synth, 48000.0f);
+    ma_synth_set_vco1(synth, silent);
+    ma_synth_set_vco2(synth, silent, 0.0f, 0, 0.0f);
+    ma_synth_set_oscillator_modulation(synth, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_mozaik(synth, 0.0f, 0.5601133f, 0.5150284f, 0.0f, 0.0f);
+    ma_synth_set_filter(synth, cutoff_hz, resonance, 0.0f, 0.0f);
+    ma_synth_note_on(synth, 69, 127);
+    synth->ladder.state[0] = 0.001f;
+}
+
+static double ma_filter_rms(float resonance) {
+    ma_synth synth;
+    ma_filter_silence(&synth, 440.0f, resonance);
+    for (int frame = 0; frame < 96000; frame++) (void)ma_synth_tick(&synth);
+    double square_sum = 0.0;
+    for (int frame = 0; frame < 48000; frame++) {
+        double sample = ma_synth_tick(&synth).left;
+        square_sum += sample * sample;
+    }
+    return sqrt(square_sum / 48000.0);
+}
+
+static void test_ma_filter(void) {
+    static const float rates[] = { 44100.0f, 48000.0f, 96000.0f, 192000.0f };
+    static const float cutoff_control[] = {
+        20.0f, 65.4064f, 261.626f, 900.0f, 3000.0f, 10000.0f, 20000.0f,
+    };
+    double worst_cutoff_relative = 0.0;
+    for (size_t rate = 0; rate < sizeof rates / sizeof *rates; rate++) {
+        for (size_t cutoff = 0;
+             cutoff < sizeof cutoff_control / sizeof *cutoff_control;
+             cutoff++) {
+            ma_synth synth;
+            ma_synth_init(&synth, rates[rate]);
+            ma_synth_set_filter(&synth, cutoff_control[cutoff], 0.0f,
+                                0.0f, 0.0f);
+            double tangent = synth.filter_g / (1.0 - synth.filter_g);
+            double recovered = 2.0 * rates[rate] * atan(tangent)
+                             / (0.5 * TAU_D);
+            double relative = fabs(recovered / synth.filter_cutoff_hz - 1.0);
+            if (relative > worst_cutoff_relative)
+                worst_cutoff_relative = relative;
+        }
+    }
+    CHECK(worst_cutoff_relative < 0.02,
+          "MA ladder cutoff recovery error %.6f%%",
+          100.0 * worst_cutoff_relative);
+
+    ma_synth dry, pressured;
+    ma_synth_init(&dry, 48000.0f);
+    ma_synth_init(&pressured, 48000.0f);
+    ma_synth_set_filter(&dry, 900.0f, 0.18f, 0.12f, 0.0f);
+    ma_synth_set_filter(&pressured, 900.0f, 0.18f, 0.12f, 1.0f);
+    ma_synth_note_on(&dry, 57, 127);
+    ma_synth_note_on(&pressured, 57, 127);
+    int pressure_delta = 0;
+    for (int frame = 0; frame < 12000; frame++) {
+        (void)ma_synth_tick(&dry);
+        (void)ma_synth_tick(&pressured);
+        CHECK(memcmp(&dry.ladder.pressure_input,
+                     &dry.ladder.pressure_output,
+                     sizeof dry.ladder.pressure_input) == 0,
+              "MA pressure zero changed source frame %d", frame);
+        pressure_delta += memcmp(&pressured.ladder.pressure_input,
+                                 &pressured.ladder.pressure_output,
+                                 sizeof pressured.ladder.pressure_input) != 0;
+    }
+    CHECK(pressure_delta > 1000,
+          "MA pressure endpoint changed only %d source frames", pressure_delta);
+
+    static const float c_frequency[] = {
+        65.4064f, 130.813f, 261.626f, 523.251f, 1046.50f, 2093.00f,
+    };
+    for (size_t note = 0; note < sizeof c_frequency / sizeof *c_frequency;
+         note++) {
+        ma_synth synth;
+        ma_filter_silence(&synth, c_frequency[note], 1.0f);
+        for (int frame = 0; frame < 96000; frame++)
+            (void)ma_synth_tick(&synth);
+        int rising = 0;
+        float peak = 0.0f;
+        float previous = ma_synth_tick(&synth).left;
+        for (int frame = 1; frame < 48000; frame++) {
+            float sample = ma_synth_tick(&synth).left;
+            rising += previous <= 0.0f && sample > 0.0f;
+            if (fabsf(sample) > peak) peak = fabsf(sample);
+            previous = sample;
+        }
+        double cents = 1200.0 * log2(rising / (double)c_frequency[note]);
+        CHECK(fabs(cents) < 30.0,
+              "MA self-oscillation C%zu tuning %.3f cents", note + 2, cents);
+        CHECK(peak <= 1.0f && synth.ladder.reset_count == 0,
+              "MA self-oscillation C%zu escaped bounds", note + 2);
+    }
+
+    double previous_rms = ma_filter_rms(0.86f);
+    for (int step = 1; step <= 7; step++) {
+        float resonance = 0.86f + 0.02f * step;
+        double rms = ma_filter_rms(resonance);
+        CHECK(rms > previous_rms,
+              "MA self-oscillation RMS fell at resonance %.2f: %.9f <= %.9f",
+              (double)resonance, rms, previous_rms);
+        previous_rms = rms;
+    }
+
+    ma_synth hostile;
+    ma_synth_init(&hostile, 48000.0f);
+    ma_synth_set_filter(&hostile, NAN, INFINITY, -1.0f, 2.0f);
+    CHECK(hostile.filter_cutoff_hz == 900.0f
+          && hostile.filter_resonance == 0.18f
+          && hostile.filter_drive == 0.0f
+          && hostile.mixer_pressure == 1.0f,
+          "MA filter setter must default non-finite and clamp finite controls");
+    ma_vco_controls silent = { .pulse_width = 0.5f };
+    ma_synth_set_vco1(&hostile, silent);
+    ma_synth_set_vco2(&hostile, silent, 0.0f, 0, 0.0f);
+    ma_synth_set_oscillator_modulation(&hostile, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_set_mozaik(&hostile, 0.0f, 0.5601133f, 0.5150284f,
+                        0.0f, 0.0f);
+    hostile.ladder.state[2] = NAN;
+    ma_synth_note_on(&hostile, 60, 127);
+    (void)ma_synth_tick(&hostile);
+    CHECK(hostile.ladder.reset_count == 1
+          && hostile.ladder.state[0] == 0.0f
+          && hostile.ladder.state[1] == 0.0f
+          && hostile.ladder.state[2] == 0.0f
+          && hostile.ladder.state[3] == 0.0f
+          && hostile.ladder.y4_guess == 0.0f,
+          "MA non-finite ladder state must reset deterministically");
+
+    for (size_t rate = 0; rate < sizeof rates / sizeof *rates; rate++) {
+        ma_synth synth;
+        ma_synth_init(&synth, rates[rate]);
+        ma_synth_set_filter(&synth, 1.0e9f, 1.0f, 1.0f, 1.0f);
+        ma_synth_note_on(&synth, 127, 255);
+        float peak = 0.0f;
+        bool finite = true;
+        for (int frame = 0; frame < 12000; frame++) {
+            ma_frame output = ma_synth_tick(&synth);
+            finite = finite && isfinite(output.left) && isfinite(output.right);
+            if (fabsf(output.left) > peak) peak = fabsf(output.left);
+        }
+        CHECK(finite && peak <= 1.0f && synth.ladder.reset_count == 0,
+              "MA hostile ladder sweep at %.0f Hz: finite=%d peak=%.6f resets=%u",
+              (double)rates[rate], finite, (double)peak,
+              synth.ladder.reset_count);
+    }
+}
+
 int main(void) {
     test_frequency_table();
     test_foldback();
@@ -3955,6 +4612,10 @@ int main(void) {
     test_ep_drive();
     test_ep_cabinet();
     test_ep_condition();
+    test_ma_foundation();
+    test_ma_oscillators();
+    test_ma_mozaik();
+    test_ma_filter();
     printf("%d checks, %d failures\n", checks, fails);
     return fails ? 1 : 0;
 }

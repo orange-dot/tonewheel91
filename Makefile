@@ -15,6 +15,10 @@ CORE_OBJS := $(BUILD)/generator.o $(BUILD)/midi.o $(BUILD)/organ.o $(BUILD)/scan
 # shared kernels. No organ object depends on it.
 EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
+# The Mamut Analog line is a sibling core. Keep it out of the organ and EP
+# products; the aggregate core test and symbol audit are its first hosts.
+MA_OBJS := $(BUILD)/ma_voice.o
+
 all: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/exhibit_viz $(BUILD)/exhibit_ep_voice $(BUILD)/render_midi $(BUILD)/tw91 $(BUILD)/ep73
 
 $(BUILD):
@@ -25,6 +29,12 @@ $(BUILD)/%.o: src/%.c src/tonewheel.h | $(BUILD)
 
 $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o: $(BUILD)/%.o: src/%.c src/epiano.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
+
+$(BUILD)/ma_voice.o: src/ma_voice.c src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
+
+$(BUILD)/ma_voice_source.o: src/ma_voice.c src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -DMA_SOURCE_EVIDENCE -c $< -o $@
 
 $(BUILD)/wav.o: driver/wav.c driver/wav.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
@@ -47,8 +57,8 @@ $(BUILD)/ep_midi_map.o: driver/ep_midi_map.c driver/midi_map.h driver/midi_owner
 $(BUILD)/viz.o: driver/viz.c driver/viz.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/test: test/test.c $(CORE_OBJS) $(EP_OBJS) src/tonewheel.h src/epiano.h | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) test/test.c $(CORE_OBJS) $(EP_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/test: test/test.c $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS) src/tonewheel.h src/epiano.h src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) test/test.c $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 $(BUILD)/test_hosted: test/hosted.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/live_io.o | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) test/hosted.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/live_io.o $(LDFLAGS) -o $@ -lasound $(LDLIBS)
@@ -104,8 +114,14 @@ $(BUILD)/ep73: driver/ep73.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/e
 $(BUILD)/fuzz_smf: test/fuzz_smf.c driver/smf.c driver/smf.h | $(BUILD)
 	$(FUZZ_CC) -std=c23 -O1 -g -fsanitize=fuzzer,address,undefined test/fuzz_smf.c driver/smf.c -o $@
 
-check-core-symbols: $(CORE_OBJS) $(EP_OBJS)
-	sh test/check_core_symbols.sh "$(CC)" "$(BUILD)/core-combined.o" $(CORE_OBJS) $(EP_OBJS)
+$(BUILD)/derive_ma_constants: driver/derive_ma_constants.c | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) driver/derive_ma_constants.c $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+$(BUILD)/exhibit_ma_osc: driver/exhibit_ma_osc.c $(BUILD)/ma_voice_source.o src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DMA_SOURCE_EVIDENCE driver/exhibit_ma_osc.c $(BUILD)/ma_voice_source.o $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+check-core-symbols: $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
+	sh test/check_core_symbols.sh "$(CC)" "$(BUILD)/core-combined.o" $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
 
 test: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(TEST_EXTRA)
 	$(BUILD)/test
@@ -124,6 +140,14 @@ analyze:
 fuzz-smf: $(BUILD)/fuzz_smf renders/ep73-d5.mid
 	ASAN_OPTIONS=detect_leaks=0 $(BUILD)/fuzz_smf \
 		-seed_inputs=renders/ep73-d5.mid -runs=1000
+
+# MA0 development tool. Its reviewed output is pasted into the constants
+# contract; neither the core build nor make test generates source code.
+derive-ma-constants: $(BUILD)/derive_ma_constants
+	./$(BUILD)/derive_ma_constants
+
+exhibit-ma1-osc: $(BUILD)/exhibit_ma_osc
+	./$(BUILD)/exhibit_ma_osc
 
 exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_ep_voice
 	./$(BUILD)/exhibit_phase
@@ -176,4 +200,4 @@ viz: $(BUILD)/exhibit_viz
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-clang sanitize analyze fuzz-smf check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean
+.PHONY: all test test-clang sanitize analyze fuzz-smf derive-ma-constants exhibit-ma1-osc check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean
