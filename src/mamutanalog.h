@@ -48,6 +48,72 @@ typedef struct {
 } ma_vco_controls;
 
 typedef struct {
+    float current;
+    float target;
+    float step;
+    uint16_t remaining;
+} ma_smoother;
+
+typedef struct {
+    ma_smoother saw_level;
+    ma_smoother pulse_level;
+    ma_smoother triangle_level;
+    ma_smoother pulse_width;
+} ma_vco_smoothers;
+
+typedef struct {
+    ma_vco_smoothers vco1;
+    ma_vco_smoothers vco2;
+    ma_smoother vco2_level;
+    ma_smoother vco2_fine_cents;
+    ma_smoother sync_amount;
+    ma_smoother sync_softness;
+    ma_smoother crossmod_amount;
+    ma_smoother noise_level;
+    ma_smoother mozaik_mix;
+    ma_smoother mozaik_slope;
+    ma_smoother mozaik_contrast;
+    ma_smoother mozaik_drift;
+    ma_smoother mixer_pressure;
+    ma_smoother filter_cutoff_hz;
+    ma_smoother filter_resonance;
+    ma_smoother filter_drive;
+    ma_smoother filter_env_amount;
+    ma_smoother filter_keytrack;
+    ma_smoother pitch_bend_semitones;
+    ma_smoother poly_pressure;
+    ma_smoother body_drive;
+    ma_smoother body_load_ratio;
+    ma_smoother width;
+    ma_smoother crossfeed;
+} ma_control_smoothers;
+
+typedef struct {
+    float gravitacija;
+    float bloom;
+    float heat;
+    float ruin;
+    float swarm;
+    float horizont_open;
+    float horizont_air;
+    float horizont_span;
+    float pec_mass;
+    float pec_heat;
+    float pec_pressure;
+    float baklja_ready;
+    float baklja_edge;
+    float baklja_sync_bias;
+    float grav_pull;
+    float mass;
+    float strain;
+    float headroom;
+    float body_focus;
+    float rupture_threshold;
+    float rupture_response;
+    float spatial_dispersion;
+} ma_identity;
+
+typedef struct {
     uint64_t phase_q48;
     float triangle;
     float sync_residual;
@@ -95,6 +161,8 @@ typedef struct {
     float crossmod_amount;
     float noise_level;
     float mozaik_mix;
+    float mozaik_slope;
+    float mozaik_contrast_control;
     float mozaik_contrast;
     uint32_t mozaik_slope_q32;
     uint32_t mozaik_phason_q32;
@@ -112,8 +180,17 @@ typedef struct {
     ma_envelope amp_envelope;
     ma_envelope filter_envelope;
     float macro[MA_MACRO_COUNT];
+    float pitch_bend_semitones;
+    float channel_pressure;
+    float poly_pressure;
+    float mod_wheel;
+    ma_identity identity_zero;
+    ma_identity identity;
+    ma_control_smoothers smoothers;
     float body_drive;
+    float body_load_ratio;
     float width;
+    float crossfeed;
     float master_level;
     uint64_t noise_state;
     ma_oscillator oscillator1;
@@ -129,6 +206,8 @@ typedef struct {
 #endif
     uint8_t note;
     uint8_t velocity;
+    uint8_t channel;
+    uint32_t ignored_release_velocities;
     bool note_active;
 } ma_synth;
 
@@ -139,9 +218,17 @@ typedef struct {
 [[nodiscard]] float ma_velocity_filter(uint8_t velocity);
 
 void ma_synth_init(ma_synth *s, float sample_rate_hz);
-void ma_synth_note_on(ma_synth *s, uint8_t note, uint8_t velocity);
-void ma_synth_note_off(ma_synth *s, uint8_t note);
+void ma_synth_note_on(ma_synth *s, uint8_t channel, uint8_t note,
+                      uint8_t velocity);
+void ma_synth_note_off(ma_synth *s, uint8_t channel, uint8_t note,
+                       uint8_t release_velocity);
 [[nodiscard]] ma_frame ma_synth_tick(ma_synth *s);
+
+void ma_synth_set_pitch_bend(ma_synth *s, float semitones);
+void ma_synth_set_channel_pressure(ma_synth *s, float pressure);
+void ma_synth_set_poly_pressure(ma_synth *s, uint8_t channel, uint8_t note,
+                                float pressure);
+void ma_synth_set_mod_wheel(ma_synth *s, float amount);
 
 void ma_synth_set_vco1(ma_synth *s, ma_vco_controls controls);
 void ma_synth_set_vco2(ma_synth *s, ma_vco_controls controls, float level,

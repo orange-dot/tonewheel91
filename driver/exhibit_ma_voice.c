@@ -79,9 +79,9 @@ static void configure(ma_synth *synth, take_kind kind) {
 
 static void apply_event(ma_synth *synth, note_event event) {
     if (event.on)
-        ma_synth_note_on(synth, event.note, event.velocity);
+        ma_synth_note_on(synth, 0, event.note, event.velocity);
     else
-        ma_synth_note_off(synth, event.note);
+        ma_synth_note_off(synth, 0, event.note, 0);
 }
 
 static bool render(audition_take take, float *dst, audition_metrics *metrics) {

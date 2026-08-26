@@ -76,3 +76,14 @@ that the finer factory/Mozaik A/B questions have been answered.
 Remaining unknowns are the finer factory/Mozaik A/B judgment, MA1-6
 macro/performance motion, and MA1-7 DC/output conditioning. Polyphony, stereo
 body and live MIDI remain owned by later public milestones.
+
+## Post-MA1-6 compatibility note
+
+The table above remains the historical MA1-5 result at its stated provenance.
+After MA1-6 added the required continuous-control smoothers, GCC and Clang
+still produce the exact factory and analog-only signatures. The explicitly
+reconfigured Mozaik-focus take now produces `10c5d8f963d0a2ed`: its controls
+move through the new 6 ms state while the pre-note DSP timeline advances.
+Peak, RMS and DC figures are unchanged at the displayed precision, and the
+take remains finite, dual-mono, below the monitoring headroom limit and
+byte-identical on repeat.

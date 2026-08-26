@@ -110,7 +110,7 @@ static void configure_core(ma_synth *synth, const alias_case *test) {
             synth, 0.0f, 0.0f,
             test->kind == CASE_CROSSMOD ? test->amount : 0.0f, 0.0f);
     }
-    ma_synth_note_on(synth, test->note, 127);
+    ma_synth_note_on(synth, 0, test->note, 127);
 }
 
 static void render_core(float output[FFT_N], const alias_case *test) {

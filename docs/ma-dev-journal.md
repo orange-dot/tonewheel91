@@ -12,17 +12,17 @@ its internal sub-gates already has working code.
 ## Current position
 
 - Active milestone: **MA1 — complete one-voice hybrid**.
-- Active task: none. **MA1-6 — identity, overlays and smoothers** is the next
+- Active task: none. **MA1-7 — output and safety** is the next
   queued task.
 - Last green aggregate run: GCC and Clang `make test`, 2026-08-26, at
-  tonewheel91 commit `96cb1b9` plus the MA1-AUD working tree: core `111261`,
+  tonewheel91 commit `4da5ae3` plus the MA1-6 working tree: core `111286`,
   hosted `77`, MIDI map `22`; zero failures. Both core undefined-symbol audits
   pass.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
-- Core implementation status: MA0 and MA1-1 through MA1-5 are closed;
-  interstitial hosted task MA1-AUD is closed; work is stopped at the boundary
-  before MA1-6.
+- Core implementation status: MA0 and MA1-1 through MA1-6 are closed;
+  interstitial hosted tasks MA1-AUD and MA1-6-AUD are closed; work is stopped
+  at the boundary before MA1-7.
 
 ## MA0 task ledger
 
@@ -49,7 +49,8 @@ one.
 | MA1-4 | done | MA1-3 | Normalized mixer, exact-bypass pressure and 2x nonlinear four-pole ladder; cutoff/self-oscillation/stability gates green. |
 | MA1-5 | done | MA1-4 | Filter and amp RC ADSRs plus VCA; retrigger/release/epsilon behavior and hostile sweeps green. |
 | MA1-AUD | done | MA1-5 | Hosted deterministic one-voice listening reel; three checked WAVs expose the landed MA1-5 path without changing the core or closing a later MA1 gate. |
-| MA1-6 | queued | MA1-5 | Linear five-macro identity resolver, zero-frame deltas, performance overlays and 6 ms smoothers; zero macros are bit-identical. |
+| MA1-6 | done | MA1-5 | Linear five-macro identity resolver, zero-frame deltas, performance overlays and 6 ms smoothers; zero macros are bit-identical. |
+| MA1-6-AUD | done | MA1-6 | Ten deterministic reference/macro/performance WAVs expose every MA1-6 identity and expression route without changing the core. |
 | MA1-7 | queued | MA1-6 | Centered dual-mono output, body bypass, DC block, safety diagnostics and deterministic signatures. |
 | MA1-8 | queued | MA1-7 | `make exhibit-ma1`, evidence document, cost table and operator listening verdict; public MA1 gate closes only here. |
 
@@ -68,6 +69,8 @@ one.
 | 2026-08-25 | At MA1-4, advance Mozaik in both 2x source phases, with its render rate doubled, and feed that native 2x bus directly into pressure and the ladder. Compile the historical MA1-2 alias referee with `MA_SOURCE_EVIDENCE`. | Doubling both Mozaik steps and its clock preserves tile duration and drift in wall time. The dedicated source-only build keeps later filter attenuation from being counted as oscillator anti-alias evidence. |
 | 2026-08-25 | Anchor zero filter-envelope level at the direct cutoff, then apply the donor's `.78` positive envelope span and `.42` keytrack slope; add the pinned velocity-filter contribution before clamping the effective amount. | The frozen MA0 text pinned the RC and VCO routes but omitted the cutoff equation. This preserves direct-cutoff meaning, uses the donor's bounded musical slope and makes the velocity law executable without introducing a new depth constant. |
 | 2026-08-26 | Insert MA1-AUD as a non-gating hosted exhibit between MA1-5 and MA1-6. | The landed source-to-VCA path is already audible; a deterministic WAV handoff obtains the first operator evidence without pulling live MIDI, final output conditioning or later product ownership forward. |
+| 2026-08-26 | Snapshot every smoothed destination once per public frame and hold it across the 8x source and 2x filter work. | Identity and performance changes then have one unambiguous sample boundary without creating substep-rate control motion. |
+| 2026-08-26 | Add channel ownership and ignored release-velocity accounting to the MA1 one-voice boundary, but leave sustain and panic semantics to MA2. | Matching poly pressure needs the pinned channel/note identity now; allocator, held/sustained ownership and panic transitions still belong to the five-card task. |
 
 ## Entries
 
@@ -218,3 +221,55 @@ one.
   "odličan jeziv zvuk". The finer factory/Mozaik A/B questions remain open;
   no provisional control value was retuned from this first reaction.
 - Next implementation gate remains MA1-6; no MA1-6 code has started.
+
+### 2026-08-26 — MA1-6 identity, overlays and smoothers closed
+
+- Added the complete caller-owned `ma_identity` zero/effective frames and the
+  pinned linear Gravitacija, Bloom, Heat, Ruin and Swarm resolver. Every
+  additive destination subtracts the stored zero frame and every
+  multiplicative destination resolves to literal unity at zero macros.
+- Routed identity into cutoff, resonance, filter drive/envelope/keytrack,
+  sync, cross-mod, Mozaik mix/contrast/phason/drift and the MA1-7-owned
+  body/width/crossfeed targets. Channel pressure temporarily overlays
+  Gravitacija/Ruin and mod wheel overlays Bloom/Swarm without changing the
+  stored base macros.
+- Pinned the channel-aware one-voice event boundary. Pitch bend is a smoothed
+  `+/-2` semitone contribution shared by both VCOs and Mozaik. Matching
+  channel/note poly pressure has its own smoother and contributes a quarter
+  octave of cutoff plus a `1.10` VCA multiplier at full pressure. Release
+  velocity is accepted, ignored and counted. Sustain, allocator ownership and
+  panic remain untouched for MA2.
+- Added explicit named linear smoother state for every continuous MA1 render
+  destination. At 48 kHz a target closes in exactly `288` frames and at high
+  rates the common limit is `512`; the final frame snaps to the exact target.
+  Envelope times retain their own RC coefficient rule and Mozaik phason keeps
+  its tile-boundary latch. Literal Mozaik-off and mixer-pressure-off paths
+  remain immediate exact bypasses.
+- Permanent tests cover the full resolved frame and destination values,
+  overlay/base ownership, hostile performance inputs, smoother length and
+  exact target snap, channel/note matching, release-velocity accounting,
+  pitch-bend tuning, poly-pressure cutoff/VCA routes and byte-exact zero-macro
+  PCM. The MA1-5 zero-Mozaik anchor remains `48685bb104788f11`.
+- GCC and Clang each pass core `111286`, hosted `77`, MIDI map `22`, with zero
+  failures and clean freestanding symbol audits. ASan/UBSan/
+  float-cast-overflow passes the same aggregate counts. The MA0 derivation and
+  all eight alias cases pass on both compilers at `21.86..30.00 dB`; the
+  factory and analog-only audition signatures remain `ff6f374aa5f6d149` and
+  `af9bcbea779b3359`. `git diff --check` passes.
+- Work stops here. MA1-7 output body, DC blocker and safety code has not
+  started.
+
+### 2026-08-26 — MA1-6 listening companion closed
+
+- Added `make audition-ma1-6` and a fixed 9-second A/B script for one
+  reference, all five individual macros, channel aftertouch, mod wheel,
+  pitch bend and matching poly pressure. The common timeline makes the
+  unchanged, active and returned-to-zero regions directly comparable.
+- Each take renders twice, writes one stereo float WAV and must be finite,
+  dual-mono, below the `.5` monitoring headroom limit, byte-identical on
+  repeat and distinct from the reference for more than one second. All nine
+  controlled takes pass; exact paths, timestamps and signatures are recorded
+  in `docs/ma1-6-audition.md`.
+- GCC, Clang and ASan/UBSan/float-cast-overflow builds agree on all ten PCM
+  signatures. This task added hosted evidence only; `src/ma_voice.c` and
+  `src/mamutanalog.h` did not change, and MA1-7 remains unstarted.

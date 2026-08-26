@@ -17,6 +17,35 @@ typedef struct {
     uint32_t q32;
 } mozaik_detent;
 
+typedef struct {
+    ma_vco_controls vco1;
+    ma_vco_controls vco2;
+    float vco2_level;
+    float vco2_fine_cents;
+    float sync_amount;
+    float sync_softness;
+    float crossmod_amount;
+    float noise_level;
+    float mozaik_mix;
+    uint32_t mozaik_slope_q32;
+    float mozaik_contrast;
+    float mozaik_drift;
+    float mixer_pressure;
+    float filter_cutoff_hz;
+    float filter_resonance;
+    float filter_drive;
+    float filter_env_amount;
+    float filter_keytrack;
+    float pitch_bend_semitones;
+    float poly_pressure;
+    float body_drive;
+    float body_load_ratio;
+    float width;
+    float crossfeed;
+} ma_render_controls;
+
+static float filter_prewarp(float cutoff_hz, float sample_rate_hz);
+
 static constexpr mozaik_detent MOZAIK_DETENT[5] = {
     { .sigma = 0x1.3c6ef4p-1f, .q32 = UINT32_C(0x9e3779b9) },
     { .sigma = 0.5f,          .q32 = UINT32_C(0x80000000) },
@@ -294,6 +323,66 @@ static uint16_t smoothing_frames(float sample_rate_hz) {
     return (uint16_t)frames;
 }
 
+static ma_smoother initialized_smoother(float value) {
+    return (ma_smoother){ .current = value, .target = value };
+}
+
+static void set_smoother_target(ma_smoother *smoother, float target,
+                                float sample_rate_hz) {
+    if (target == smoother->target) return;
+    smoother->target = target;
+    smoother->remaining = smoothing_frames(sample_rate_hz);
+    smoother->step = (target - smoother->current)
+                   / (float)smoother->remaining;
+}
+
+static void set_bypass_smoother_target(ma_smoother *smoother, float target,
+                                       float sample_rate_hz) {
+    if (target == 0.0f) {
+        *smoother = initialized_smoother(0.0f);
+        return;
+    }
+    set_smoother_target(smoother, target, sample_rate_hz);
+}
+
+static float next_smoother(ma_smoother *smoother) {
+    if (smoother->remaining == 0) return smoother->current;
+    smoother->current += smoother->step;
+    smoother->remaining--;
+    if (smoother->remaining == 0) smoother->current = smoother->target;
+    return smoother->current;
+}
+
+static ma_vco_smoothers initialized_vco_smoothers(ma_vco_controls value) {
+    return (ma_vco_smoothers){
+        .saw_level = initialized_smoother(value.saw_level),
+        .pulse_level = initialized_smoother(value.pulse_level),
+        .triangle_level = initialized_smoother(value.triangle_level),
+        .pulse_width = initialized_smoother(value.pulse_width),
+    };
+}
+
+static void set_vco_targets(ma_vco_smoothers *smoothers,
+                            ma_vco_controls value, float sample_rate_hz) {
+    set_smoother_target(&smoothers->saw_level, value.saw_level,
+                        sample_rate_hz);
+    set_smoother_target(&smoothers->pulse_level, value.pulse_level,
+                        sample_rate_hz);
+    set_smoother_target(&smoothers->triangle_level, value.triangle_level,
+                        sample_rate_hz);
+    set_smoother_target(&smoothers->pulse_width, value.pulse_width,
+                        sample_rate_hz);
+}
+
+static ma_vco_controls next_vco_controls(ma_vco_smoothers *smoothers) {
+    return (ma_vco_controls){
+        .saw_level = next_smoother(&smoothers->saw_level),
+        .pulse_level = next_smoother(&smoothers->pulse_level),
+        .triangle_level = next_smoother(&smoothers->triangle_level),
+        .pulse_width = next_smoother(&smoothers->pulse_width),
+    };
+}
+
 static void set_mozaik_guard_target(ma_mozaik *mozaik, float target,
                                     float sample_rate_hz) {
     if (target == mozaik->guard_target) return;
@@ -361,6 +450,290 @@ static uint32_t mozaik_phason_q32(float phason) {
     return (uint32_t)(uint64_t)(phason * Q32_ONE_F);
 }
 
+static float late_macro(float value, float threshold) {
+    if (value <= threshold) return 0.0f;
+    return clamp_signal((value - threshold) / (1.0f - threshold),
+                        0.0f, 1.0f);
+}
+
+static ma_identity resolve_identity(float gravitacija, float bloom,
+                                    float heat, float ruin, float swarm) {
+    float late_gravitacija = late_macro(gravitacija, 0.68f);
+    float extreme_swarm = late_macro(swarm, 0.82f);
+    ma_identity identity = {
+        .gravitacija = gravitacija,
+        .bloom = bloom,
+        .heat = heat,
+        .ruin = ruin,
+        .swarm = swarm,
+    };
+    identity.horizont_open = clamp_signal(
+        0.70f * bloom + 0.25f * (1.0f - gravitacija)
+        - 0.10f * ruin - 0.05f * heat, 0.0f, 1.0f);
+    identity.horizont_air = clamp_signal(
+        0.78f * bloom + 0.08f * (1.0f - heat)
+        - 0.18f * late_gravitacija, 0.0f, 1.0f);
+    identity.horizont_span = clamp_signal(
+        0.58f * bloom + 0.32f * swarm - 0.16f * gravitacija,
+        0.0f, 1.0f);
+    identity.pec_mass = clamp_signal(
+        0.60f * heat + 0.25f * gravitacija + 0.05f * swarm
+        - 0.05f * bloom, 0.0f, 1.0f);
+    identity.pec_heat = clamp_signal(
+        0.80f * heat + 0.12f * gravitacija, 0.0f, 1.0f);
+    identity.pec_pressure = clamp_signal(
+        0.58f * gravitacija + 0.24f * heat + 0.08f * ruin,
+        0.0f, 1.0f);
+    identity.baklja_ready = clamp_signal(
+        0.56f * ruin + 0.28f * gravitacija + 0.08f * extreme_swarm,
+        0.0f, 1.0f);
+    identity.baklja_edge = clamp_signal(
+        0.68f * ruin + 0.40f * late_gravitacija, 0.0f, 1.0f);
+    identity.baklja_sync_bias = clamp_signal(
+        0.72f * ruin + 0.06f * heat, 0.0f, 1.0f);
+    identity.grav_pull = gravitacija;
+    identity.mass = clamp_signal(
+        0.70f * identity.pec_mass + 0.20f * identity.pec_heat
+        + 0.10f * identity.grav_pull, 0.0f, 1.0f);
+    identity.strain = clamp_signal(
+        0.40f * identity.baklja_edge + 0.38f * identity.pec_pressure
+        + 0.22f * identity.grav_pull, 0.0f, 1.0f);
+    identity.headroom = clamp_signal(
+        0.78f + 0.18f * identity.horizont_air + 0.08f * bloom
+        - 0.46f * identity.grav_pull - 0.14f * heat
+        - 0.08f * identity.baklja_ready, 0.0f, 1.0f);
+    identity.body_focus = clamp_signal(
+        0.50f * identity.pec_mass + 0.28f * identity.grav_pull
+        - 0.18f * bloom, 0.0f, 1.0f);
+    identity.rupture_threshold = clamp_signal(
+        0.78f - 0.22f * identity.baklja_ready
+        - 0.16f * identity.grav_pull, 0.0f, 1.0f);
+    identity.rupture_response = clamp_signal(
+        0.55f * identity.baklja_edge + 0.25f * identity.strain
+        + 0.20f * ruin, 0.0f, 1.0f);
+    identity.spatial_dispersion = clamp_signal(
+        0.55f * identity.horizont_span + 0.33f * swarm
+        - 0.10f * identity.grav_pull, 0.0f, 1.0f);
+    return identity;
+}
+
+static void resolve_effective_identity(ma_synth *s) {
+    float gravitacija = clamp_signal(
+        s->macro[MA_MACRO_GRAVITACIJA] + 0.45f * s->channel_pressure,
+        0.0f, 1.0f);
+    float bloom = clamp_signal(
+        s->macro[MA_MACRO_BLOOM] + 0.35f * s->mod_wheel,
+        0.0f, 1.0f);
+    float heat = s->macro[MA_MACRO_HEAT];
+    float ruin = clamp_signal(
+        s->macro[MA_MACRO_RUIN] + 0.35f * s->channel_pressure,
+        0.0f, 1.0f);
+    float swarm = clamp_signal(
+        s->macro[MA_MACRO_SWARM] + 0.50f * s->mod_wheel,
+        0.0f, 1.0f);
+    s->identity = resolve_identity(gravitacija, bloom, heat, ruin, swarm);
+}
+
+static ma_render_controls target_render_controls(const ma_synth *s) {
+    ma_identity const *identity = &s->identity;
+    ma_identity const *zero = &s->identity_zero;
+    float cutoff_ratio = 1.0f
+                       + (0.62f * identity->bloom
+                          + 0.18f * (identity->horizont_air
+                                     - zero->horizont_air)
+                          - 0.40f * identity->gravitacija) / 0.9144f;
+    float cutoff_max = 0.42f * s->sample_rate_hz;
+    if (cutoff_max > 20000.0f) cutoff_max = 20000.0f;
+    float resonance_delta = 0.14f * identity->baklja_edge
+                          + 0.06f * identity->ruin
+                          - 0.04f * identity->mass;
+    float filter_drive_delta = 0.18f * identity->pec_heat
+                             + 0.10f * identity->strain;
+    float filter_env_delta = 0.12f * (identity->horizont_open
+                                     - zero->horizont_open);
+    float keytrack_ratio = 1.0f - 0.12f * identity->mass / 0.92f;
+    float sync_delta = 0.30f * identity->baklja_sync_bias;
+    float crossmod_delta = 0.24f * identity->baklja_ready;
+    float width_delta = 0.18f * identity->horizont_span
+                      - 0.20f * identity->body_focus;
+    float crossfeed_delta = 0.28f * identity->body_focus
+                          + 0.10f * identity->grav_pull
+                          - 0.10f * identity->spatial_dispersion;
+    float body_drive_delta = 0.25f * identity->body_focus;
+    float body_load_ratio = 1.0f + 0.14f * identity->mass
+                          + 0.08f * identity->strain
+                          + 0.25f * (zero->headroom - identity->headroom);
+    return (ma_render_controls){
+        .vco1 = s->vco1,
+        .vco2 = s->vco2,
+        .vco2_level = s->vco2_level,
+        .vco2_fine_cents = s->vco2_fine_cents,
+        .sync_amount = clamp_signal(s->sync_amount + sync_delta,
+                                    0.0f, 1.0f),
+        .sync_softness = s->sync_softness,
+        .crossmod_amount = clamp_signal(s->crossmod_amount + crossmod_delta,
+                                        0.0f, 1.0f),
+        .noise_level = s->noise_level,
+        .mozaik_mix = clamp_signal(s->mozaik_mix
+                                   + 0.10f * identity->bloom, 0.0f, 1.0f),
+        .mozaik_slope_q32 = mozaik_slope_q32(s->mozaik_slope),
+        .mozaik_contrast = 1.0f + 1.2f * clamp_signal(
+            s->mozaik_contrast_control + 0.20f * identity->heat,
+            0.0f, 1.0f),
+        .mozaik_drift = clamp_signal(s->mozaik_drift
+                                     + 0.35f * identity->swarm,
+                                     0.0f, 1.0f),
+        .mixer_pressure = s->mixer_pressure,
+        .filter_cutoff_hz = clamp_signal(s->filter_cutoff_hz * cutoff_ratio,
+                                         20.0f, cutoff_max),
+        .filter_resonance = clamp_signal(s->filter_resonance
+                                         + resonance_delta, 0.0f, 1.0f),
+        .filter_drive = clamp_signal(s->filter_drive + filter_drive_delta,
+                                     0.0f, 1.0f),
+        .filter_env_amount = clamp_signal(s->filter_env_amount
+                                          + filter_env_delta, 0.0f, 1.0f),
+        .filter_keytrack = clamp_signal(s->filter_keytrack * keytrack_ratio,
+                                        0.0f, 1.0f),
+        .pitch_bend_semitones = s->pitch_bend_semitones,
+        .poly_pressure = s->poly_pressure,
+        .body_drive = clamp_signal(s->body_drive + body_drive_delta,
+                                   0.0f, 1.0f),
+        .body_load_ratio = clamp_signal(body_load_ratio, 0.75f, 1.50f),
+        .width = clamp_signal(s->width + width_delta, 0.0f, 1.0f),
+        .crossfeed = clamp_signal(s->crossfeed + crossfeed_delta,
+                                  0.0f, 1.0f),
+    };
+}
+
+static void initialize_control_smoothers(ma_synth *s) {
+    ma_render_controls target = target_render_controls(s);
+    s->smoothers = (ma_control_smoothers){
+        .vco1 = initialized_vco_smoothers(target.vco1),
+        .vco2 = initialized_vco_smoothers(target.vco2),
+        .vco2_level = initialized_smoother(target.vco2_level),
+        .vco2_fine_cents = initialized_smoother(target.vco2_fine_cents),
+        .sync_amount = initialized_smoother(target.sync_amount),
+        .sync_softness = initialized_smoother(target.sync_softness),
+        .crossmod_amount = initialized_smoother(target.crossmod_amount),
+        .noise_level = initialized_smoother(target.noise_level),
+        .mozaik_mix = initialized_smoother(target.mozaik_mix),
+        .mozaik_slope = initialized_smoother(s->mozaik_slope),
+        .mozaik_contrast = initialized_smoother(target.mozaik_contrast),
+        .mozaik_drift = initialized_smoother(target.mozaik_drift),
+        .mixer_pressure = initialized_smoother(target.mixer_pressure),
+        .filter_cutoff_hz = initialized_smoother(target.filter_cutoff_hz),
+        .filter_resonance = initialized_smoother(target.filter_resonance),
+        .filter_drive = initialized_smoother(target.filter_drive),
+        .filter_env_amount = initialized_smoother(target.filter_env_amount),
+        .filter_keytrack = initialized_smoother(target.filter_keytrack),
+        .pitch_bend_semitones = initialized_smoother(
+            target.pitch_bend_semitones),
+        .poly_pressure = initialized_smoother(target.poly_pressure),
+        .body_drive = initialized_smoother(target.body_drive),
+        .body_load_ratio = initialized_smoother(target.body_load_ratio),
+        .width = initialized_smoother(target.width),
+        .crossfeed = initialized_smoother(target.crossfeed),
+    };
+}
+
+static void update_control_targets(ma_synth *s) {
+    ma_render_controls target = target_render_controls(s);
+    set_vco_targets(&s->smoothers.vco1, target.vco1, s->sample_rate_hz);
+    set_vco_targets(&s->smoothers.vco2, target.vco2, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.vco2_level, target.vco2_level,
+                        s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.vco2_fine_cents,
+                        target.vco2_fine_cents, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.sync_amount, target.sync_amount,
+                        s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.sync_softness, target.sync_softness,
+                        s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.crossmod_amount,
+                        target.crossmod_amount, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.noise_level, target.noise_level,
+                        s->sample_rate_hz);
+    set_bypass_smoother_target(&s->smoothers.mozaik_mix, target.mozaik_mix,
+                               s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.mozaik_slope, s->mozaik_slope,
+                        s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.mozaik_contrast,
+                        target.mozaik_contrast, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.mozaik_drift, target.mozaik_drift,
+                        s->sample_rate_hz);
+    set_bypass_smoother_target(&s->smoothers.mixer_pressure,
+                               target.mixer_pressure, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.filter_cutoff_hz,
+                        target.filter_cutoff_hz, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.filter_resonance,
+                        target.filter_resonance, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.filter_drive, target.filter_drive,
+                        s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.filter_env_amount,
+                        target.filter_env_amount, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.filter_keytrack,
+                        target.filter_keytrack, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.pitch_bend_semitones,
+                        target.pitch_bend_semitones, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.poly_pressure, target.poly_pressure,
+                        s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.body_drive, target.body_drive,
+                        s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.body_load_ratio,
+                        target.body_load_ratio, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.width, target.width,
+                        s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.crossfeed, target.crossfeed,
+                        s->sample_rate_hz);
+}
+
+static ma_render_controls next_render_controls(ma_synth *s) {
+    float slope = next_smoother(&s->smoothers.mozaik_slope);
+    return (ma_render_controls){
+        .vco1 = next_vco_controls(&s->smoothers.vco1),
+        .vco2 = next_vco_controls(&s->smoothers.vco2),
+        .vco2_level = next_smoother(&s->smoothers.vco2_level),
+        .vco2_fine_cents = next_smoother(&s->smoothers.vco2_fine_cents),
+        .sync_amount = next_smoother(&s->smoothers.sync_amount),
+        .sync_softness = next_smoother(&s->smoothers.sync_softness),
+        .crossmod_amount = next_smoother(&s->smoothers.crossmod_amount),
+        .noise_level = next_smoother(&s->smoothers.noise_level),
+        .mozaik_mix = next_smoother(&s->smoothers.mozaik_mix),
+        .mozaik_slope_q32 = mozaik_slope_q32(slope),
+        .mozaik_contrast = next_smoother(&s->smoothers.mozaik_contrast),
+        .mozaik_drift = next_smoother(&s->smoothers.mozaik_drift),
+        .mixer_pressure = next_smoother(&s->smoothers.mixer_pressure),
+        .filter_cutoff_hz = next_smoother(&s->smoothers.filter_cutoff_hz),
+        .filter_resonance = next_smoother(&s->smoothers.filter_resonance),
+        .filter_drive = next_smoother(&s->smoothers.filter_drive),
+        .filter_env_amount = next_smoother(
+            &s->smoothers.filter_env_amount),
+        .filter_keytrack = next_smoother(&s->smoothers.filter_keytrack),
+        .pitch_bend_semitones = next_smoother(
+            &s->smoothers.pitch_bend_semitones),
+        .poly_pressure = next_smoother(&s->smoothers.poly_pressure),
+        .body_drive = next_smoother(&s->smoothers.body_drive),
+        .body_load_ratio = next_smoother(&s->smoothers.body_load_ratio),
+        .width = next_smoother(&s->smoothers.width),
+        .crossfeed = next_smoother(&s->smoothers.crossfeed),
+    };
+}
+
+static uint32_t effective_phason_q32(const ma_synth *s) {
+    uint32_t identity_delta = (uint32_t)(uint64_t)(
+        0.15f * s->identity.ruin * Q32_ONE_F);
+    return s->mozaik_phason_q32 + identity_delta;
+}
+
+static void queue_effective_phason(ma_synth *s) {
+    uint32_t target = effective_phason_q32(s);
+    uint32_t current_target = s->mozaik.has_pending_phason
+                            ? s->mozaik.pending_phason_q32
+                            : s->mozaik.applied_phason_q32;
+    if (target == current_target) return;
+    s->mozaik.pending_phason_q32 = target;
+    s->mozaik.has_pending_phason = true;
+}
+
 static void reset_mozaik(ma_mozaik *mozaik, uint32_t phason_q32) {
     *mozaik = (ma_mozaik){
         .frac_q32 = phason_q32,
@@ -379,8 +752,9 @@ static void shift_mozaik_phason(ma_mozaik *mozaik, uint32_t delta_q32) {
     mozaik->has_pending_phason = true;
 }
 
-static void start_mozaik_tile(ma_synth *s, float f0_hz,
-                              float render_rate_hz) {
+static void start_mozaik_tile(ma_synth *s,
+                              const ma_render_controls *controls,
+                              float f0_hz, float render_rate_hz) {
     ma_mozaik *mozaik = &s->mozaik;
     float leftover = mozaik->tile_pos > mozaik->tile_len
                    ? mozaik->tile_pos - mozaik->tile_len : 0.0f;
@@ -391,12 +765,13 @@ static void start_mozaik_tile(ma_synth *s, float f0_hz,
         mozaik->has_pending_phason = false;
     }
     uint32_t previous = mozaik->frac_q32;
-    mozaik->frac_q32 += s->mozaik_slope_q32;
+    mozaik->frac_q32 += controls->mozaik_slope_q32;
     bool is_long = mozaik->frac_q32 < previous;
-    float sigma = (float)s->mozaik_slope_q32 / Q32_ONE_F;
+    float sigma = (float)controls->mozaik_slope_q32 / Q32_ONE_F;
     float mean_samples = render_rate_hz / (2.0f * f0_hz);
-    float mean_factor = (1.0f - sigma) + sigma * s->mozaik_contrast;
-    float kind_factor = is_long ? s->mozaik_contrast : 1.0f;
+    float mean_factor = (1.0f - sigma)
+                      + sigma * controls->mozaik_contrast;
+    float kind_factor = is_long ? controls->mozaik_contrast : 1.0f;
     mozaik->tile_len = mean_samples * kind_factor / mean_factor;
     if (mozaik->tile_len < 4.0f) mozaik->tile_len = 4.0f;
     mozaik->tile_pos = leftover;
@@ -404,18 +779,20 @@ static void start_mozaik_tile(ma_synth *s, float f0_hz,
     mozaik->tiles_emitted++;
 }
 
-static float render_mozaik(ma_synth *s, float f0_hz, float render_rate_hz) {
+static float render_mozaik(ma_synth *s,
+                           const ma_render_controls *controls,
+                           float f0_hz, float render_rate_hz) {
     float upper_hz = 0.125f * s->sample_rate_hz;
     if (upper_hz > 8000.0f) upper_hz = 8000.0f;
     set_mozaik_guard_target(&s->mozaik,
                             f0_hz >= 20.0f && f0_hz <= upper_hz ? 1.0f : 0.0f,
                             render_rate_hz);
-    uint32_t drift_q32 = (uint32_t)(0.5f * s->mozaik_drift
-                                   * s->mozaik_drift * Q32_ONE_F
+    uint32_t drift_q32 = (uint32_t)(0.5f * controls->mozaik_drift
+                                   * controls->mozaik_drift * Q32_ONE_F
                                    / render_rate_hz + 0.5f);
     if (drift_q32) shift_mozaik_phason(&s->mozaik, drift_q32);
     if (s->mozaik.tile_pos >= s->mozaik.tile_len)
-        start_mozaik_tile(s, f0_hz, render_rate_hz);
+        start_mozaik_tile(s, controls, f0_hz, render_rate_hz);
     float unit_pos = s->mozaik.tile_pos / s->mozaik.tile_len;
     float hann = 0.5f * (1.0f - tw_sin_turns(wrap_phase(unit_pos + 0.25f)));
     s->mozaik.tile_pos += 1.0f;
@@ -510,21 +887,25 @@ static float render_envelope(ma_envelope *envelope, ma_adsr controls,
     return envelope->level;
 }
 
-static float filter_envelope_amount(const ma_synth *s) {
-    return clamp_signal(s->filter_env_amount
+static float filter_envelope_amount(const ma_synth *s,
+                                    const ma_render_controls *controls) {
+    return clamp_signal(controls->filter_env_amount
                         + 0.25f * ma_velocity_filter(s->velocity),
                         0.0f, 1.0f);
 }
 
 static float effective_filter_cutoff(const ma_synth *s,
+                                     const ma_render_controls *controls,
                                      float envelope_amount) {
     float envelope = 1.0f + 0.78f * s->filter_envelope.level
                                   * envelope_amount;
     float keytrack = 1.0f
                    + ((float)s->note - 60.0f) * (1.0f / 48.0f)
-                   * s->filter_keytrack * 0.42f;
+                   * controls->filter_keytrack * 0.42f;
     keytrack = clamp_signal(keytrack, 0.55f, 1.35f);
-    float cutoff = s->filter_cutoff_hz * envelope * keytrack;
+    float cutoff = controls->filter_cutoff_hz * envelope * keytrack;
+    if (controls->poly_pressure > 0.0f)
+        cutoff *= octave_ratio_small(0.25f * controls->poly_pressure);
     float cutoff_max = 0.42f * s->sample_rate_hz;
     if (cutoff_max > 20000.0f) cutoff_max = 20000.0f;
     return clamp_signal(cutoff, 20.0f, cutoff_max);
@@ -558,6 +939,8 @@ void ma_synth_init(ma_synth *s, float sample_rate_hz) {
         .crossmod_amount = 0.0f,
         .noise_level = 0.02f,
         .mozaik_mix = 0.20f,
+        .mozaik_slope = (MOZAIK_DETENT[0].sigma - 0.45f) / 0.30f,
+        .mozaik_contrast_control = (MOZAIK_GOLDEN_CONTRAST - 1.0f) / 1.2f,
         .mozaik_contrast = MOZAIK_GOLDEN_CONTRAST,
         .mozaik_slope_q32 = MOZAIK_GOLDEN_Q32,
         .mozaik_phason_q32 = 0,
@@ -572,8 +955,14 @@ void ma_synth_init(ma_synth *s, float sample_rate_hz) {
         .amp_adsr = AMP_ADSR_DEFAULT,
         .filter_adsr = FILTER_ADSR_DEFAULT,
         .macro = { 0 },
+        .pitch_bend_semitones = 0.0f,
+        .channel_pressure = 0.0f,
+        .poly_pressure = 0.0f,
+        .mod_wheel = 0.0f,
         .body_drive = 0.10f,
+        .body_load_ratio = 1.0f,
         .width = 0.70f,
+        .crossfeed = 0.0f,
         .master_level = 0.18f,
         .noise_state = NOISE_SEED,
         .oscillator1 = {
@@ -592,31 +981,40 @@ void ma_synth_init(ma_synth *s, float sample_rate_hz) {
         },
         .note = 69,
         .velocity = 0,
+        .channel = 0,
         .note_active = false,
     };
-    reset_mozaik(&s->mozaik, s->mozaik_phason_q32);
-    ma_synth_set_filter(s, s->filter_cutoff_hz, s->filter_resonance,
-                        s->filter_drive, s->mixer_pressure);
-    ma_synth_set_filter_modulation(s, s->filter_env_amount,
-                                   s->filter_keytrack);
+    s->identity_zero = resolve_identity(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    s->identity = s->identity_zero;
+    initialize_control_smoothers(s);
+    reset_mozaik(&s->mozaik, effective_phason_q32(s));
+    s->filter_g = filter_prewarp(s->filter_cutoff_hz, s->sample_rate_hz);
 }
 
-void ma_synth_note_on(ma_synth *s, uint8_t note, uint8_t velocity) {
-    if (note >= 128) return;
+void ma_synth_note_on(ma_synth *s, uint8_t channel, uint8_t note,
+                      uint8_t velocity) {
+    if (channel >= 16 || note >= 128) return;
     if (velocity == 0) {
-        ma_synth_note_off(s, note);
+        ma_synth_note_off(s, channel, note, 0);
         return;
     }
+    s->channel = channel;
     s->note = note;
     s->velocity = velocity < 128 ? velocity : 127;
     s->note_active = true;
+    s->poly_pressure = 0.0f;
+    s->smoothers.poly_pressure = initialized_smoother(0.0f);
     start_envelope_stage(&s->amp_envelope, MA_ENVELOPE_ATTACK, 1.0f);
     start_envelope_stage(&s->filter_envelope, MA_ENVELOPE_ATTACK, 1.0f);
-    reset_mozaik(&s->mozaik, s->mozaik_phason_q32);
+    reset_mozaik(&s->mozaik, effective_phason_q32(s));
 }
 
-void ma_synth_note_off(ma_synth *s, uint8_t note) {
-    if (note < 128 && s->note_active && s->note == note) {
+void ma_synth_note_off(ma_synth *s, uint8_t channel, uint8_t note,
+                       uint8_t release_velocity) {
+    if (channel >= 16 || note >= 128) return;
+    (void)release_velocity;
+    s->ignored_release_velocities++;
+    if (s->note_active && s->channel == channel && s->note == note) {
         s->note_active = false;
         if (s->amp_envelope.stage != MA_ENVELOPE_IDLE)
             start_envelope_stage(&s->amp_envelope, MA_ENVELOPE_RELEASE, 0.0f);
@@ -626,13 +1024,14 @@ void ma_synth_note_off(ma_synth *s, uint8_t note) {
     }
 }
 
-static float render_source_substep(ma_synth *s, float noise,
+static float render_source_substep(ma_synth *s,
+                                   const ma_render_controls *controls,
+                                   float base_hz, float noise,
                                    float guard1, float guard2,
                                    float filter_modulation) {
     float oversampled_rate_hz = 8.0f * s->sample_rate_hz;
-    float base_hz = ma_note_frequency_hz(s->note);
-    ma_vco_controls vco1_controls = s->vco1;
-    ma_vco_controls vco2_controls = s->vco2;
+    ma_vco_controls vco1_controls = controls->vco1;
+    ma_vco_controls vco2_controls = controls->vco2;
 #if !defined(MA_SOURCE_EVIDENCE)
     vco1_controls.pulse_width = clamp_signal(
         vco1_controls.pulse_width + 0.120f * filter_modulation,
@@ -643,7 +1042,8 @@ static float render_source_substep(ma_synth *s, float noise,
 #else
     (void)filter_modulation;
 #endif
-    float fine_ratio = octave_ratio_small(s->vco2_fine_cents / 1200.0f);
+    float fine_ratio = octave_ratio_small(
+        controls->vco2_fine_cents / 1200.0f);
     float vco2_hz = base_hz * interval_ratio(s->vco2_interval) * fine_ratio;
     float vco2_step = phase_step(vco2_hz, oversampled_rate_hz);
     uint64_t vco2_step_q48 = phase_step_q48(vco2_step);
@@ -651,7 +1051,8 @@ static float render_source_substep(ma_synth *s, float noise,
     float vco2_preview = preview_oscillator(&s->oscillator2, vco2_controls,
                                             vco2_step);
     float cross_ratio = clamp_signal(
-        1.0f + vco2_preview * s->crossmod_amount * 0.25f, 0.25f, 4.0f);
+        1.0f + vco2_preview * controls->crossmod_amount * 0.25f,
+        0.25f, 4.0f);
     float vco1_hz = base_hz * cross_ratio;
 #if !defined(MA_SOURCE_EVIDENCE)
     vco1_hz *= octave_ratio_small(0.125f * filter_modulation);
@@ -666,8 +1067,9 @@ static float render_source_substep(ma_synth *s, float noise,
     set_guard_target(&s->oscillator2, vco2_hz < guard_hz ? 1.0f : 0.0f,
                      s->sample_rate_hz);
     bool master_wrap = phase_will_wrap(&s->oscillator1, vco1_step_q48);
-    float sync = s->sync_amount
-               * clamp_signal(1.0f - 0.75f * s->sync_softness, 0.0f, 1.0f);
+    float sync = controls->sync_amount
+               * clamp_signal(1.0f - 0.75f * controls->sync_softness,
+                              0.0f, 1.0f);
     float sync_now = 0.0f;
     float sync_next = 0.0f;
     float event_fraction = 1.0f;
@@ -719,11 +1121,11 @@ static float render_source_substep(ma_synth *s, float noise,
     }
 
     float vco1_weight = guard1 > 0.0f ? 1.0f : 0.0f;
-    float vco2_weight = guard2 > 0.0f ? s->vco2_level : 0.0f;
-    float weights = vco1_weight + vco2_weight + s->noise_level;
+    float vco2_weight = guard2 > 0.0f ? controls->vco2_level : 0.0f;
+    float weights = vco1_weight + vco2_weight + controls->noise_level;
     if (weights < 1.0f) weights = 1.0f;
-    return (guard1 * vco1 + guard2 * s->vco2_level * vco2
-            + s->noise_level * noise) / weights;
+    return (guard1 * vco1 + guard2 * controls->vco2_level * vco2
+            + controls->noise_level * noise) / weights;
 }
 
 static void push_oversample_history(float history[31], uint8_t *position,
@@ -756,17 +1158,18 @@ static float filter_prewarp(float cutoff_hz, float sample_rate_hz) {
     return x * (z * b1 - b2 + PREWARP_CHEB[0]);
 }
 
-static float mix_source_2x(const ma_synth *s, float analog,
+static float mix_source_2x(const ma_render_controls *controls, float analog,
                            float guard1, float guard2,
                            float mozaik_gain, float mozaik) {
-    if (!(s->mozaik_mix > 0.0f && mozaik_gain > 0.0f)) return analog;
+    if (!(controls->mozaik_mix > 0.0f && mozaik_gain > 0.0f)) return analog;
     float vco1_weight = guard1 > 0.0f ? 1.0f : 0.0f;
-    float vco2_weight = guard2 > 0.0f ? s->vco2_level : 0.0f;
-    float analog_weight = vco1_weight + vco2_weight + s->noise_level;
+    float vco2_weight = guard2 > 0.0f ? controls->vco2_level : 0.0f;
+    float analog_weight = vco1_weight + vco2_weight
+                        + controls->noise_level;
     if (analog_weight < 1.0f) analog_weight = 1.0f;
     return (analog_weight * analog
-            + s->mozaik_mix * mozaik_gain * mozaik)
-         / (analog_weight + s->mozaik_mix);
+            + controls->mozaik_mix * mozaik_gain * mozaik)
+         / (analog_weight + controls->mozaik_mix);
 }
 
 #if !defined(MA_SOURCE_EVIDENCE)
@@ -783,14 +1186,17 @@ static void reset_ladder(ma_ladder *ladder) {
     ladder->reset_count++;
 }
 
-static float render_ladder_2x(ma_synth *s, float input, float filter_g) {
+static float render_ladder_2x(ma_synth *s,
+                              const ma_render_controls *controls,
+                              float input, float filter_g) {
     ma_ladder *ladder = &s->ladder;
     float y[4] = { 0 };
     float v[4] = { 0 };
     float next_state[4] = { 0 };
     float y4_guess = ladder->y4_guess;
-    float input_gain = 1.0f + 3.0f * s->filter_drive * s->filter_drive;
-    float feedback = 4.65f * s->filter_resonance;
+    float input_gain = 1.0f + 3.0f * controls->filter_drive
+                     * controls->filter_drive;
+    float feedback = 4.65f * controls->filter_resonance;
     for (int iteration = 0; iteration < 2; iteration++) {
         float u = tw_sat(input_gain * input - feedback * y4_guess);
         for (int stage = 0; stage < 4; stage++) {
@@ -837,15 +1243,19 @@ static float decimate_filter(const ma_ladder *ladder) {
 #endif
 
 ma_frame ma_synth_tick(ma_synth *s) {
+    ma_render_controls controls = next_render_controls(s);
+    float base_hz = ma_note_frequency_hz(s->note);
+    if (controls.pitch_bend_semitones != 0.0f)
+        base_hz *= octave_ratio_small(controls.pitch_bend_semitones / 12.0f);
 #if !defined(MA_SOURCE_EVIDENCE)
     (void)render_envelope(&s->filter_envelope, s->filter_adsr,
                           s->sample_rate_hz);
     (void)render_envelope(&s->amp_envelope, s->amp_adsr,
                           s->sample_rate_hz);
-    float envelope_amount = filter_envelope_amount(s);
+    float envelope_amount = filter_envelope_amount(s, &controls);
     float filter_modulation = s->filter_envelope.level * envelope_amount;
     s->filter_cutoff_effective_hz = effective_filter_cutoff(
-        s, envelope_amount);
+        s, &controls, envelope_amount);
     float filter_g = filter_prewarp(s->filter_cutoff_effective_hz,
                                     s->sample_rate_hz);
 #else
@@ -858,11 +1268,13 @@ ma_frame ma_synth_tick(ma_synth *s) {
         for (int at_4x = 0; at_4x < 2; at_4x++) {
             push_oversample_history(
                 s->oversample_history[0], &s->oversample_history_pos[0],
-                render_source_substep(s, noise, guard1, guard2,
+                render_source_substep(s, &controls, base_hz, noise,
+                                      guard1, guard2,
                                       filter_modulation));
             push_oversample_history(
                 s->oversample_history[0], &s->oversample_history_pos[0],
-                render_source_substep(s, noise, guard1, guard2,
+                render_source_substep(s, &controls, base_hz, noise,
+                                      guard1, guard2,
                                       filter_modulation));
             float sample_4x = decimate_oversample(
                 s->oversample_history[0], s->oversample_history_pos[0]);
@@ -878,16 +1290,18 @@ ma_frame ma_synth_tick(ma_synth *s) {
             sample_2x);
 #else
         float mozaik_gain = s->mozaik.guard_gain;
-        float mozaik = render_mozaik(s, ma_note_frequency_hz(s->note),
+        float mozaik = render_mozaik(s, &controls, base_hz,
                                      2.0f * s->sample_rate_hz);
         (void)next_mozaik_guard_gain(&s->mozaik);
-        float source = mix_source_2x(s, sample_2x, guard1, guard2,
+        float source = mix_source_2x(&controls, sample_2x, guard1, guard2,
                                      mozaik_gain, mozaik);
-        float pressured = apply_mixer_pressure(source, s->mixer_pressure);
+        float pressured = apply_mixer_pressure(source,
+                                                controls.mixer_pressure);
         s->ladder.pressure_input = source;
         s->ladder.pressure_output = pressured;
         push_filter_history(&s->ladder,
-                            render_ladder_2x(s, pressured, filter_g));
+                            render_ladder_2x(s, &controls, pressured,
+                                             filter_g));
 #endif
     }
     (void)next_guard_gain(&s->oscillator1);
@@ -898,16 +1312,18 @@ ma_frame ma_synth_tick(ma_synth *s) {
     float analog = decimate_oversample(
         s->oversample_history[2], s->oversample_history_pos[2]);
     float mozaik_gain = s->mozaik.guard_gain;
-    float mozaik = render_mozaik(s, ma_note_frequency_hz(s->note),
+    float mozaik = render_mozaik(s, &controls, base_hz,
                                  s->sample_rate_hz);
     (void)next_mozaik_guard_gain(&s->mozaik);
-    float output = mix_source_2x(s, analog, guard1, guard2,
+    float output = mix_source_2x(&controls, analog, guard1, guard2,
                                  mozaik_gain, mozaik) * level;
 #else
     float velocity_gain = 0.25f + 0.75f * ma_velocity_level(s->velocity);
     float output = decimate_filter(&s->ladder)
                  * s->amp_envelope.level * velocity_gain;
 #endif
+    if (controls.poly_pressure > 0.0f)
+        output *= 1.0f + 0.10f * controls.poly_pressure;
     return (ma_frame){ .left = output, .right = output };
 }
 
@@ -917,6 +1333,7 @@ void ma_synth_set_vco1(ma_synth *s, ma_vco_controls controls) {
         .triangle_level = 0.15f, .pulse_width = 0.50f,
     };
     s->vco1 = sanitize_vco(controls, fallback);
+    update_control_targets(s);
 }
 
 void ma_synth_set_vco2(ma_synth *s, ma_vco_controls controls, float level,
@@ -929,6 +1346,7 @@ void ma_synth_set_vco2(ma_synth *s, ma_vco_controls controls, float level,
     s->vco2_level = clamp_control(level, 0.0f, 1.0f, 0.62f);
     s->vco2_interval = interval < -24 ? -24 : interval > 24 ? 24 : interval;
     s->vco2_fine_cents = clamp_control(fine_cents, -50.0f, 50.0f, 7.0f);
+    update_control_targets(s);
 }
 
 void ma_synth_set_oscillator_modulation(ma_synth *s, float sync_amount,
@@ -939,6 +1357,7 @@ void ma_synth_set_oscillator_modulation(ma_synth *s, float sync_amount,
     s->sync_softness = clamp_control(sync_softness, 0.0f, 1.0f, 0.0f);
     s->crossmod_amount = clamp_control(crossmod_amount, 0.0f, 1.0f, 0.0f);
     s->noise_level = clamp_control(noise_level, 0.0f, 1.0f, 0.02f);
+    update_control_targets(s);
 }
 
 void ma_synth_set_mozaik(ma_synth *s, float mix, float slope,
@@ -946,14 +1365,16 @@ void ma_synth_set_mozaik(ma_synth *s, float mix, float slope,
     s->mozaik_mix = clamp_control(mix, 0.0f, 1.0f, 0.20f);
     slope = clamp_control(slope, 0.0f, 1.0f,
                           (MOZAIK_DETENT[0].sigma - 0.45f) / 0.30f);
+    s->mozaik_slope = slope;
     s->mozaik_slope_q32 = mozaik_slope_q32(slope);
     contrast = clamp_control(contrast, 0.0f, 1.0f,
                              (MOZAIK_GOLDEN_CONTRAST - 1.0f) / 1.2f);
+    s->mozaik_contrast_control = contrast;
     s->mozaik_contrast = 1.0f + 1.2f * contrast;
     s->mozaik_phason_q32 = mozaik_phason_q32(phason);
-    s->mozaik.pending_phason_q32 = s->mozaik_phason_q32;
-    s->mozaik.has_pending_phason = true;
     s->mozaik_drift = clamp_control(drift, 0.0f, 1.0f, 0.05f);
+    update_control_targets(s);
+    queue_effective_phason(s);
 }
 
 void ma_synth_set_filter(ma_synth *s, float cutoff_hz, float resonance,
@@ -966,12 +1387,14 @@ void ma_synth_set_filter(ma_synth *s, float cutoff_hz, float resonance,
     s->filter_resonance = clamp_control(resonance, 0.0f, 1.0f, 0.18f);
     s->filter_drive = clamp_control(drive, 0.0f, 1.0f, 0.12f);
     s->mixer_pressure = clamp_control(mixer_pressure, 0.0f, 1.0f, 0.15f);
+    update_control_targets(s);
 }
 
 void ma_synth_set_filter_modulation(ma_synth *s, float envelope_amount,
                                     float keytrack) {
     s->filter_env_amount = clamp_control(envelope_amount, 0.0f, 1.0f, 0.30f);
     s->filter_keytrack = clamp_control(keytrack, 0.0f, 1.0f, 0.45f);
+    update_control_targets(s);
 }
 
 void ma_synth_set_amp_adsr(ma_synth *s, ma_adsr adsr) {
@@ -985,4 +1408,35 @@ void ma_synth_set_filter_adsr(ma_synth *s, ma_adsr adsr) {
 void ma_synth_set_macro(ma_synth *s, ma_macro_id macro, float value) {
     if ((unsigned)macro >= MA_MACRO_COUNT) return;
     s->macro[macro] = clamp_control(value, 0.0f, 1.0f, 0.0f);
+    resolve_effective_identity(s);
+    update_control_targets(s);
+    queue_effective_phason(s);
+}
+
+void ma_synth_set_pitch_bend(ma_synth *s, float semitones) {
+    s->pitch_bend_semitones = clamp_control(semitones, -2.0f, 2.0f, 0.0f);
+    update_control_targets(s);
+}
+
+void ma_synth_set_channel_pressure(ma_synth *s, float pressure) {
+    s->channel_pressure = clamp_control(pressure, 0.0f, 1.0f, 0.0f);
+    resolve_effective_identity(s);
+    update_control_targets(s);
+    queue_effective_phason(s);
+}
+
+void ma_synth_set_poly_pressure(ma_synth *s, uint8_t channel, uint8_t note,
+                                float pressure) {
+    if (channel >= 16 || note >= 128 || s->channel != channel
+        || s->note != note || s->amp_envelope.stage == MA_ENVELOPE_IDLE)
+        return;
+    s->poly_pressure = clamp_control(pressure, 0.0f, 1.0f, 0.0f);
+    set_smoother_target(&s->smoothers.poly_pressure, s->poly_pressure,
+                        s->sample_rate_hz);
+}
+
+void ma_synth_set_mod_wheel(ma_synth *s, float amount) {
+    s->mod_wheel = clamp_control(amount, 0.0f, 1.0f, 0.0f);
+    resolve_effective_identity(s);
+    update_control_targets(s);
 }
