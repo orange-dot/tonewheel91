@@ -137,10 +137,11 @@ triangle_state = clamp(triangle_state + pulse(p,.5,d) * 4d,
 [DONOR: triangle mechanism from `mamut-dsp/src/bandlimited.rs`; accepted
 edge kernel from the MA1-2 evidence loop].
 
-For each VCO, waveform weights are nonnegative and the rendered mix is
-divided by `max(saw_level + pulse_level + triangle_level, 1)` [DECISION].
-This normalizes simultaneous shapes without boosting a single sub-unity
-shape.
+For each VCO, waveform weights are nonnegative. VCO1 adds
+`sine_level * tw_sin_turns(p)` and divides by
+`max(saw_level + pulse_level + triangle_level + sine_level, 1)`. VCO2 keeps
+the three-shape divisor without sine [DECISION]. This normalizes simultaneous
+shapes without boosting a single sub-unity shape.
 
 ### 3.2 Hard sync and fixed modulation routes
 
@@ -395,8 +396,10 @@ eight pinned cases by only `7.38..17.74 dB` against naive edges. Starting
 the boundary at 2x improved that to `12.57..20.20 dB`, with only one of
 eight cases passing. The narrower 4x/8x edge candidates also failed and are
 kept only in the journal. The accepted eight-substep C2 slew yields
-`21.86..29.16 dB` across all eight ordinary, hard-sync and cross-mod cases
-under both GCC and Clang.
+`21.86..30.00 dB` across all eight ordinary, hard-sync and cross-mod cases
+under both GCC and Clang. Four pure VCO1 sine cases at 44.1, 48, 96 and
+192 kHz measure non-fundamental energy at `-95.89..-101.21 dBc`, below the
+fixed `-80 dBc` gate.
 
 ### 6.3 Ladder equations and operating point
 
@@ -796,7 +799,7 @@ zero and therefore add no delta:
 
 | Group | Value |
 | --- | --- |
-| VCO1 | saw `.70`, pulse `.25`, triangle `.15`, PW `.50` |
+| VCO1 | saw `.70`, pulse `.25`, triangle `.15`, sine `.20`, PW `.50` |
 | VCO2 | saw `.35`, pulse `.20`, triangle `.55`, level `.62`, interval `0`, fine `+7 cents`, PW `.50` |
 | Oscillator modulation | sync `0`, sync softness `0`, cross-mod `0` |
 | Noise | `.02` |

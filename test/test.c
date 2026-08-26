@@ -3959,9 +3959,11 @@ static void test_ma_foundation(void) {
     ma_synth_init(&synth, 48000.0f);
     CHECK(synth.sample_rate_hz == 48000.0f,
           "MA sample rate must reach the public state");
-    CHECK(synth.vco1.saw_level == 0.70f
+    CHECK(synth.patch == MA_PATCH_TEPIH
+          && synth.vco1.saw_level == 0.70f
           && synth.vco1.pulse_level == 0.25f
           && synth.vco1.triangle_level == 0.15f
+          && synth.vco1_sine_level == 0.20f
           && synth.vco1.pulse_width == 0.50f,
           "MA VCO1 factory controls");
     CHECK(synth.vco2.saw_level == 0.35f
@@ -4011,6 +4013,66 @@ static void test_ma_foundation(void) {
     for (int macro = 0; macro < MA_MACRO_COUNT; macro++)
         CHECK(synth.macro[macro] == 0.0f,
               "MA macro %d must initialize to exact bypass", macro);
+
+    ma_synth lead;
+    ma_synth_init_patch(&lead, 48000.0f, MA_PATCH_LEAD);
+    CHECK(lead.patch == MA_PATCH_LEAD
+          && lead.vco1.saw_level == 0.75f
+          && lead.vco1.pulse_level == 0.30f
+          && lead.vco1.triangle_level == 0.05f
+          && lead.vco1_sine_level == 0.10f
+          && lead.vco1.pulse_width == 0.43f,
+          "MA Lead VCO1 controls");
+    CHECK(lead.vco2.saw_level == 0.55f
+          && lead.vco2.pulse_level == 0.25f
+          && lead.vco2.triangle_level == 0.10f
+          && lead.vco2.pulse_width == 0.57f
+          && lead.vco2_level == 0.55f
+          && lead.vco2_interval == 0
+          && lead.vco2_fine_cents == 7.0f,
+          "MA Lead VCO2 controls");
+    CHECK(lead.sync_amount == 0.22f
+          && lead.sync_softness == 0.18f
+          && lead.crossmod_amount == 0.12f
+          && lead.noise_level == 0.01f
+          && lead.mozaik_mix == 0.08f
+          && lead.mozaik_contrast_control == 0.60f
+          && lead.mozaik_contrast == 1.72f
+          && lead.mozaik_drift == 0.03f,
+          "MA Lead source controls");
+    CHECK(lead.mixer_pressure == 0.32f
+          && lead.filter_cutoff_hz == 1900.0f
+          && lead.filter_resonance == 0.30f
+          && lead.filter_drive == 0.35f
+          && lead.filter_env_amount == 0.62f
+          && lead.filter_keytrack == 0.62f,
+          "MA Lead filter controls");
+    CHECK(lead.amp_adsr.attack_ms == 12.0f
+          && lead.amp_adsr.decay_ms == 160.0f
+          && lead.amp_adsr.sustain == 0.68f
+          && lead.amp_adsr.release_ms == 240.0f
+          && lead.filter_adsr.attack_ms == 6.0f
+          && lead.filter_adsr.decay_ms == 260.0f
+          && lead.filter_adsr.sustain == 0.18f
+          && lead.filter_adsr.release_ms == 220.0f,
+          "MA Lead envelope controls");
+    CHECK(lead.macro[MA_MACRO_GRAVITACIJA] == 0.12f
+          && lead.macro[MA_MACRO_BLOOM] == 0.04f
+          && lead.macro[MA_MACRO_HEAT] == 0.25f
+          && lead.macro[MA_MACRO_RUIN] == 0.22f
+          && lead.macro[MA_MACRO_SWARM] == 0.03f
+          && lead.body_drive == 0.15f
+          && lead.width == 0.45f
+          && lead.crossfeed == 0.08f
+          && lead.master_level == 0.18f,
+          "MA Lead identity and output controls");
+
+    ma_synth invalid_patch;
+    ma_synth_init_patch(&invalid_patch, 48000.0f,
+                        (ma_patch_id)MA_PATCH_COUNT);
+    CHECK(invalid_patch.patch == MA_PATCH_TEPIH
+          && invalid_patch.vco1_sine_level == 0.20f,
+          "MA invalid patch identifiers must select Tepih");
 
     ma_synth hostile;
     ma_synth_init(&hostile, NAN);
@@ -4087,6 +4149,7 @@ static void test_ma_oscillators(void) {
         .sustain = 0.0f, .release_ms = 1.0f,
     });
     ma_synth_set_vco1(&synth, saw_only);
+    ma_synth_set_vco1_sine(&synth, 0.0f);
     ma_synth_set_vco2(&synth, silent, 0.0f, 0, 0.0f);
     ma_synth_set_oscillator_modulation(&synth, 0.0f, 0.0f, 0.0f, 0.0f);
     ma_synth_note_on(&synth, 0, 69, 127);
@@ -4109,6 +4172,25 @@ static void test_ma_oscillators(void) {
     CHECK(peak > 0.90f && peak <= 1.25f,
           "MA PolyBLEP saw peak %.6f outside its contract", (double)peak);
 
+    ma_synth_set_vco1(&synth, silent);
+    ma_synth_set_vco1_sine(&synth, 1.0f);
+    for (int i = 0; i < 1024; i++) (void)ma_synth_tick(&synth);
+    rising = 0;
+    peak = 0.0f;
+    (void)ma_synth_tick(&synth);
+    previous = synth.ladder.pressure_input;
+    for (int i = 1; i < 48000; i++) {
+        (void)ma_synth_tick(&synth);
+        float source = synth.ladder.pressure_input;
+        if (previous <= 0.0f && source > 0.0f) rising++;
+        if (fabsf(source) > peak) peak = fabsf(source);
+        previous = source;
+    }
+    CHECK(rising >= 438 && rising <= 442,
+          "MA VCO1 sine A4 produced %d rising crossings", rising);
+    CHECK(peak > 0.99f && peak <= 1.01f,
+          "MA VCO1 sine peak %.6f outside its contract", (double)peak);
+
     ma_synth_set_vco1(&synth, (ma_vco_controls){
         .saw_level = NAN,
         .pulse_level = -2.0f,
@@ -4120,6 +4202,12 @@ static void test_ma_oscillators(void) {
           && synth.vco1.triangle_level == 1.0f
           && synth.vco1.pulse_width == 0.50f,
           "MA VCO1 setter must default non-finite and clamp finite input");
+    ma_synth_set_vco1_sine(&synth, INFINITY);
+    CHECK(synth.vco1_sine_level == 0.20f,
+          "MA VCO1 sine must restore its factory level for non-finite input");
+    ma_synth_set_vco1_sine(&synth, -1.0f);
+    CHECK(synth.vco1_sine_level == 0.0f,
+          "MA VCO1 sine must clamp finite input");
     ma_synth_set_vco2(&synth, (ma_vco_controls){
         .saw_level = -1.0f,
         .pulse_level = 2.0f,
@@ -4174,6 +4262,8 @@ static void test_ma_oscillators(void) {
     ma_synth_init(&hard_sync, 48000.0f);
     ma_synth_set_vco1(&free_run, silent);
     ma_synth_set_vco1(&hard_sync, silent);
+    ma_synth_set_vco1_sine(&free_run, 0.0f);
+    ma_synth_set_vco1_sine(&hard_sync, 0.0f);
     ma_synth_set_vco2(&free_run, saw_only, 1.0f, 7, 0.0f);
     ma_synth_set_vco2(&hard_sync, saw_only, 1.0f, 7, 0.0f);
     ma_synth_set_oscillator_modulation(&free_run, 0.0f, 0.0f, 0.0f, 0.0f);
@@ -4197,6 +4287,8 @@ static void test_ma_oscillators(void) {
     ma_synth_init(&crossed, 48000.0f);
     ma_synth_set_vco1(&plain, saw_only);
     ma_synth_set_vco1(&crossed, saw_only);
+    ma_synth_set_vco1_sine(&plain, 0.0f);
+    ma_synth_set_vco1_sine(&crossed, 0.0f);
     ma_synth_set_vco2(&plain, saw_only, 0.0f, 12, 0.0f);
     ma_synth_set_vco2(&crossed, saw_only, 0.0f, 12, 0.0f);
     ma_synth_set_oscillator_modulation(&plain, 0.0f, 0.0f, 0.0f, 0.0f);
@@ -4219,6 +4311,8 @@ static void test_ma_oscillators(void) {
     ma_synth_init(&noise_on, 48000.0f);
     ma_synth_set_vco1(&noise_off, silent);
     ma_synth_set_vco1(&noise_on, silent);
+    ma_synth_set_vco1_sine(&noise_off, 0.0f);
+    ma_synth_set_vco1_sine(&noise_on, 0.0f);
     ma_synth_set_vco2(&noise_off, silent, 0.0f, 0, 0.0f);
     ma_synth_set_vco2(&noise_on, silent, 0.0f, 0, 0.0f);
     ma_synth_set_oscillator_modulation(&noise_off, 0.0f, 0.0f, 0.0f, 0.0f);
@@ -4251,6 +4345,7 @@ static void test_ma_oscillators(void) {
     ma_synth guarded;
     ma_synth_init(&guarded, 44100.0f);
     ma_synth_set_vco1(&guarded, silent);
+    ma_synth_set_vco1_sine(&guarded, 0.0f);
     ma_synth_set_vco2(&guarded, saw_only, 1.0f, 24, 0.0f);
     ma_synth_set_oscillator_modulation(&guarded, 0.0f, 0.0f, 0.0f, 0.0f);
     ma_synth_note_on(&guarded, 0, 127, 127);
@@ -4416,12 +4511,28 @@ static void test_ma_mozaik(void) {
               "MA Mozaik mix zero changed frame %d", frame);
         dry_hash = tw_fnv1a64(&a, sizeof a, dry_hash);
     }
-    CHECK(dry_hash == UINT64_C(0x48685bb104788f11),
+    CHECK(dry_hash == UINT64_C(0xfe62b6cc9aa30895),
           "MA1-5 zero-Mozaik envelope/VCA baseline is %016llx",
           (unsigned long long)dry_hash);
 
+    ma_synth legacy;
+    ma_synth_init(&legacy, 48000.0f);
+    legacy.vco1_sine_level = 0.0f;
+    legacy.smoothers.vco1_sine_level = (ma_smoother){ 0 };
+    ma_synth_set_mozaik(&legacy, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    ma_synth_note_on(&legacy, 0, 57, 111);
+    uint64_t legacy_hash = 0;
+    for (int frame = 0; frame < 12000; frame++) {
+        ma_frame sample = ma_synth_tick(&legacy);
+        legacy_hash = tw_fnv1a64(&sample, sizeof sample, legacy_hash);
+    }
+    CHECK(legacy_hash == UINT64_C(0x48685bb104788f11),
+          "MA VCO1 sine zero must retain the pre-sine PCM anchor: %016llx",
+          (unsigned long long)legacy_hash);
+
     ma_synth_init(&synth, 48000.0f);
     ma_synth_set_vco1(&synth, (ma_vco_controls){ .pulse_width = 0.5f });
+    ma_synth_set_vco1_sine(&synth, 0.0f);
     ma_synth_set_vco2(&synth, (ma_vco_controls){ .pulse_width = 0.5f },
                       0.0f, 0, 0.0f);
     ma_synth_set_oscillator_modulation(&synth, 0.0f, 0.0f, 0.0f, 0.0f);
@@ -4439,6 +4550,7 @@ static void ma_filter_silence(ma_synth *synth, float cutoff_hz,
     static const ma_vco_controls silent = { .pulse_width = 0.5f };
     ma_synth_init(synth, 48000.0f);
     ma_synth_set_vco1(synth, silent);
+    ma_synth_set_vco1_sine(synth, 0.0f);
     ma_synth_set_vco2(synth, silent, 0.0f, 0, 0.0f);
     ma_synth_set_oscillator_modulation(synth, 0.0f, 0.0f, 0.0f, 0.0f);
     ma_synth_set_mozaik(synth, 0.0f, 0.5601133f, 0.5150284f, 0.0f, 0.0f);
@@ -4557,6 +4669,7 @@ static void test_ma_filter(void) {
           "MA filter setter must default non-finite and clamp finite controls");
     ma_vco_controls silent = { .pulse_width = 0.5f };
     ma_synth_set_vco1(&hostile, silent);
+    ma_synth_set_vco1_sine(&hostile, 0.0f);
     ma_synth_set_vco2(&hostile, silent, 0.0f, 0, 0.0f);
     ma_synth_set_oscillator_modulation(&hostile, 0.0f, 0.0f, 0.0f, 0.0f);
     ma_synth_set_mozaik(&hostile, 0.0f, 0.5601133f, 0.5150284f,
@@ -4679,6 +4792,7 @@ static void test_ma_envelopes(void) {
     ma_synth low_velocity;
     ma_synth_init(&low_velocity, 48000.0f);
     ma_synth_set_vco1(&low_velocity, saw_only);
+    ma_synth_set_vco1_sine(&low_velocity, 0.0f);
     ma_synth_set_vco2(&low_velocity, silent, 0.0f, 0, 0.0f);
     ma_synth_set_oscillator_modulation(&low_velocity, 0.0f, 0.0f,
                                        0.0f, 0.0f);
@@ -4716,6 +4830,7 @@ static void test_ma_envelopes(void) {
     ma_synth pitched;
     ma_synth_init(&pitched, 48000.0f);
     ma_synth_set_vco1(&pitched, saw_only);
+    ma_synth_set_vco1_sine(&pitched, 0.0f);
     ma_synth_set_vco2(&pitched, silent, 0.0f, 0, 0.0f);
     ma_synth_set_oscillator_modulation(&pitched, 0.0f, 0.0f, 0.0f, 0.0f);
     ma_synth_set_mozaik(&pitched, 0.0f, 0.5601133f, 0.5150284f,
@@ -4927,6 +5042,11 @@ static void test_ma_identity_and_performance(void) {
 
     ma_synth smooth;
     ma_synth_init(&smooth, 48000.0f);
+    ma_synth_set_vco1_sine(&smooth, 0.80f);
+    CHECK(smooth.smoothers.vco1_sine_level.current == 0.20f
+          && smooth.smoothers.vco1_sine_level.target == 0.80f
+          && smooth.smoothers.vco1_sine_level.remaining == 288,
+          "MA VCO1 sine must use the common smoother");
     ma_synth_set_pitch_bend(&smooth, 2.0f);
     CHECK(smooth.smoothers.pitch_bend_semitones.remaining == 288
           && smooth.smoothers.pitch_bend_semitones.current == 0.0f
@@ -5010,6 +5130,7 @@ static void test_ma_identity_and_performance(void) {
     ma_synth bent;
     ma_synth_init(&bent, 48000.0f);
     ma_synth_set_vco1(&bent, saw_only);
+    ma_synth_set_vco1_sine(&bent, 0.0f);
     ma_synth_set_vco2(&bent, silent, 0.0f, 0, 0.0f);
     ma_synth_set_oscillator_modulation(&bent, 0.0f, 0.0f, 0.0f, 0.0f);
     ma_synth_set_mozaik(&bent, 0.0f, 0.5601133f, 0.5150284f, 0.0f, 0.0f);

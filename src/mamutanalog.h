@@ -40,6 +40,12 @@ typedef enum {
     MA_MACRO_COUNT,
 } ma_macro_id;
 
+typedef enum {
+    MA_PATCH_TEPIH,
+    MA_PATCH_LEAD,
+    MA_PATCH_COUNT,
+} ma_patch_id;
+
 typedef struct {
     float saw_level;
     float pulse_level;
@@ -64,6 +70,7 @@ typedef struct {
 typedef struct {
     ma_vco_smoothers vco1;
     ma_vco_smoothers vco2;
+    ma_smoother vco1_sine_level;
     ma_smoother vco2_level;
     ma_smoother vco2_fine_cents;
     ma_smoother sync_amount;
@@ -151,8 +158,10 @@ typedef struct {
 
 typedef struct {
     float sample_rate_hz;
+    ma_patch_id patch;
     ma_vco_controls vco1;
     ma_vco_controls vco2;
+    float vco1_sine_level;
     float vco2_level;
     int vco2_interval;
     float vco2_fine_cents;
@@ -218,6 +227,8 @@ typedef struct {
 [[nodiscard]] float ma_velocity_filter(uint8_t velocity);
 
 void ma_synth_init(ma_synth *s, float sample_rate_hz);
+void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
+                         ma_patch_id patch);
 void ma_synth_note_on(ma_synth *s, uint8_t channel, uint8_t note,
                       uint8_t velocity);
 void ma_synth_note_off(ma_synth *s, uint8_t channel, uint8_t note,
@@ -231,6 +242,7 @@ void ma_synth_set_poly_pressure(ma_synth *s, uint8_t channel, uint8_t note,
 void ma_synth_set_mod_wheel(ma_synth *s, float amount);
 
 void ma_synth_set_vco1(ma_synth *s, ma_vco_controls controls);
+void ma_synth_set_vco1_sine(ma_synth *s, float level);
 void ma_synth_set_vco2(ma_synth *s, ma_vco_controls controls, float level,
                        int interval, float fine_cents);
 void ma_synth_set_oscillator_modulation(ma_synth *s, float sync_amount,

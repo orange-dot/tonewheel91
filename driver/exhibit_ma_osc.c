@@ -11,8 +11,6 @@
 enum { FFT_N = 65536, WARMUP = 4096, MASK_RADIUS = 10 };
 
 static constexpr double PI = 3.14159265358979323846264338327950288;
-static constexpr double RATE = 48000.0;
-
 typedef struct {
     double real;
     double imag;
@@ -32,6 +30,7 @@ typedef enum {
 typedef enum {
     SHAPE_SAW,
     SHAPE_PULSE,
+    SHAPE_SINE,
 } shape_kind;
 
 typedef struct {
@@ -42,6 +41,7 @@ typedef struct {
     int interval;
     float pulse_width;
     float amount;
+    float sample_rate_hz;
 } alias_case;
 
 static float bounded(float value, float low, float high) {
@@ -55,6 +55,7 @@ static float wrap(float phase) {
 }
 
 static float raw_wave(shape_kind shape, float phase, float width) {
+    if (shape == SHAPE_SINE) return (float)sin(2.0 * PI * phase);
     if (shape == SHAPE_PULSE) return phase < width ? 1.0f : -1.0f;
     return 2.0f * phase - 1.0f;
 }
@@ -93,9 +94,10 @@ static ma_vco_controls controls(shape_kind shape, float pulse_width) {
 }
 
 static void configure_core(ma_synth *synth, const alias_case *test) {
-    ma_synth_init(synth, (float)RATE);
+    ma_synth_init(synth, test->sample_rate_hz);
     ma_synth_set_mozaik(synth, 0.0f, 0.5601133f, 0.5150284f, 0.0f, 0.0f);
     ma_vco_controls silent = { .pulse_width = 0.5f };
+    ma_synth_set_vco1_sine(synth, 0.0f);
     if (test->kind == CASE_SYNC) {
         ma_synth_set_vco1(synth, silent);
         ma_synth_set_vco2(synth, controls(test->shape, test->pulse_width),
@@ -104,6 +106,8 @@ static void configure_core(ma_synth *synth, const alias_case *test) {
                                            0.0f, 0.0f);
     } else {
         ma_synth_set_vco1(synth, controls(test->shape, test->pulse_width));
+        ma_synth_set_vco1_sine(synth,
+                               test->shape == SHAPE_SINE ? 1.0f : 0.0f);
         ma_synth_set_vco2(synth, controls(SHAPE_SAW, 0.5f), 0.0f,
                           test->interval, 0.0f);
         ma_synth_set_oscillator_modulation(
@@ -122,9 +126,9 @@ static void render_core(float output[FFT_N], const alias_case *test) {
 
 static void render_naive(float output[FFT_N], const alias_case *test) {
     float base_hz = ma_note_frequency_hz(test->note);
-    float master_step = bounded(base_hz / (float)RATE, 0.0f, 0.45f);
+    float master_step = bounded(base_hz / test->sample_rate_hz, 0.0f, 0.45f);
     float slave_step = bounded(base_hz * interval_ratio(test->interval)
-                               / (float)RATE, 0.0f, 0.45f);
+                               / test->sample_rate_hz, 0.0f, 0.45f);
     float master_phase = 0.0f, slave_phase = 0.0f;
     for (int frame = -WARMUP; frame < FFT_N; frame++) {
         float sample;
@@ -133,7 +137,8 @@ static void render_naive(float output[FFT_N], const alias_case *test) {
             float modulator = raw_wave(SHAPE_SAW, slave_phase, 0.5f);
             float ratio = bounded(1.0f + modulator * test->amount * 0.25f,
                                   0.25f, 4.0f);
-            effective_master_step = bounded(base_hz * ratio / (float)RATE,
+            effective_master_step = bounded(base_hz * ratio
+                                            / test->sample_rate_hz,
                                             0.0f, 0.45f);
         }
 
@@ -203,7 +208,9 @@ static void fft(complex_sample value[FFT_N]) {
 }
 
 static spectral_energy measure_energy(const float input[FFT_N],
-                                      double fundamental_hz) {
+                                      double fundamental_hz,
+                                      double sample_rate_hz,
+                                      bool fundamental_only) {
     static complex_sample spectrum[FFT_N];
     static bool legal[FFT_N / 2 + 1];
     memset(legal, 0, sizeof legal);
@@ -218,9 +225,11 @@ static spectral_energy measure_energy(const float input[FFT_N],
 
     for (int bin = 0; bin <= MASK_RADIUS; bin++) legal[bin] = true;
     for (int harmonic = 1;
-         harmonic * fundamental_hz < 0.5 * RATE;
+         harmonic * fundamental_hz < 0.5 * sample_rate_hz
+         && (!fundamental_only || harmonic == 1);
          harmonic++) {
-        int center = (int)llround(harmonic * fundamental_hz * FFT_N / RATE);
+        int center = (int)llround(harmonic * fundamental_hz * FFT_N
+                                 / sample_rate_hz);
         int low = center - MASK_RADIUS;
         int high = center + MASK_RADIUS;
         if (low < 0) low = 0;
@@ -240,14 +249,30 @@ static spectral_energy measure_energy(const float input[FFT_N],
 
 int main(void) {
     static const alias_case cases[] = {
-        { "ordinary-saw-n96", CASE_ORDINARY, SHAPE_SAW, 96, 0, .50f, 0.0f },
-        { "ordinary-saw-n120", CASE_ORDINARY, SHAPE_SAW, 120, 0, .50f, 0.0f },
-        { "ordinary-pulse-n96", CASE_ORDINARY, SHAPE_PULSE, 96, 0, .37f, 0.0f },
-        { "ordinary-pulse-n120", CASE_ORDINARY, SHAPE_PULSE, 120, 0, .37f, 0.0f },
-        { "hard-sync-saw-n96", CASE_SYNC, SHAPE_SAW, 96, 7, .50f, 1.0f },
-        { "hard-sync-pulse-n96", CASE_SYNC, SHAPE_PULSE, 96, 7, .37f, 1.0f },
-        { "crossmod-low-n96", CASE_CROSSMOD, SHAPE_SAW, 96, 12, .50f, .35f },
-        { "crossmod-high-n96", CASE_CROSSMOD, SHAPE_SAW, 96, 12, .50f, 1.0f },
+        { "ordinary-saw-n96", CASE_ORDINARY, SHAPE_SAW,
+          96, 0, .50f, 0.0f, 48000.0f },
+        { "ordinary-saw-n120", CASE_ORDINARY, SHAPE_SAW,
+          120, 0, .50f, 0.0f, 48000.0f },
+        { "ordinary-pulse-n96", CASE_ORDINARY, SHAPE_PULSE,
+          96, 0, .37f, 0.0f, 48000.0f },
+        { "ordinary-pulse-n120", CASE_ORDINARY, SHAPE_PULSE,
+          120, 0, .37f, 0.0f, 48000.0f },
+        { "hard-sync-saw-n96", CASE_SYNC, SHAPE_SAW,
+          96, 7, .50f, 1.0f, 48000.0f },
+        { "hard-sync-pulse-n96", CASE_SYNC, SHAPE_PULSE,
+          96, 7, .37f, 1.0f, 48000.0f },
+        { "crossmod-low-n96", CASE_CROSSMOD, SHAPE_SAW,
+          96, 12, .50f, .35f, 48000.0f },
+        { "crossmod-high-n96", CASE_CROSSMOD, SHAPE_SAW,
+          96, 12, .50f, 1.0f, 48000.0f },
+        { "vco1-sine-44k1", CASE_ORDINARY, SHAPE_SINE,
+          96, 0, .50f, 0.0f, 44100.0f },
+        { "vco1-sine-48k", CASE_ORDINARY, SHAPE_SINE,
+          96, 0, .50f, 0.0f, 48000.0f },
+        { "vco1-sine-96k", CASE_ORDINARY, SHAPE_SINE,
+          96, 0, .50f, 0.0f, 96000.0f },
+        { "vco1-sine-192k", CASE_ORDINARY, SHAPE_SINE,
+          96, 0, .50f, 0.0f, 192000.0f },
     };
     static float clean[FFT_N], naive[FFT_N];
     int failures = 0;
@@ -258,16 +283,19 @@ int main(void) {
         render_core(clean, &cases[i]);
         render_naive(naive, &cases[i]);
         spectral_energy clean_energy = measure_energy(
-            clean, ma_note_frequency_hz(cases[i].note));
+            clean, ma_note_frequency_hz(cases[i].note),
+            cases[i].sample_rate_hz, cases[i].shape == SHAPE_SINE);
         spectral_energy naive_energy = measure_energy(
-            naive, ma_note_frequency_hz(cases[i].note));
+            naive, ma_note_frequency_hz(cases[i].note),
+            cases[i].sample_rate_hz, cases[i].shape == SHAPE_SINE);
         double clean_dbc = 10.0 * log10(clean_energy.alias
                                         / clean_energy.total);
         double naive_dbc = 10.0 * log10(naive_energy.alias
                                         / naive_energy.total);
         double reduction_db = 10.0 * log10(clean_energy.alias
                                            / naive_energy.alias);
-        bool pass = reduction_db <= -20.0;
+        bool pass = cases[i].shape == SHAPE_SINE
+                  ? clean_dbc <= -80.0 : reduction_db <= -20.0;
         printf("%-28s %8.2f %9.2f %9.2f dB  %s\n", cases[i].name,
                clean_dbc, naive_dbc, reduction_db, pass ? "PASS" : "FAIL");
         failures += !pass;
