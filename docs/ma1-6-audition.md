@@ -34,16 +34,16 @@ a `1.10` VCA multiplier.
 
 | Take | File | Stereo FNV-64 |
 | --- | --- | --- |
-| reference | `build/ma1-6_reference.wav` | `8b8a770135d33555` |
-| Gravitacija | `build/ma1-6_macro_gravitacija.wav` | `3d307efa27cd71c9` |
-| Bloom | `build/ma1-6_macro_bloom.wav` | `64d3471f988c54b1` |
-| Heat | `build/ma1-6_macro_heat.wav` | `aff64033c46b70b5` |
-| Ruin | `build/ma1-6_macro_ruin.wav` | `9bb6c6380754993d` |
-| Swarm | `build/ma1-6_macro_swarm.wav` | `dc442ff4e0720711` |
-| channel aftertouch | `build/ma1-6_aftertouch.wav` | `472edf2889809e5d` |
-| mod wheel | `build/ma1-6_mod_wheel.wav` | `8d0cf8c9ac731e41` |
-| pitch bend | `build/ma1-6_pitch_bend.wav` | `cd53edf53b6fac21` |
-| poly pressure | `build/ma1-6_poly_pressure.wav` | `90264f1cfc2fd6c5` |
+| reference | `build/ma1-6_reference.wav` | `f0ac7e9a891645c9` |
+| Gravitacija | `build/ma1-6_macro_gravitacija.wav` | `050ed1936e6fdcb1` |
+| Bloom | `build/ma1-6_macro_bloom.wav` | `e7553e487deaa799` |
+| Heat | `build/ma1-6_macro_heat.wav` | `58a15aa584ea2629` |
+| Ruin | `build/ma1-6_macro_ruin.wav` | `83e92e3baa55627d` |
+| Swarm | `build/ma1-6_macro_swarm.wav` | `5bbed2f1d5b0297d` |
+| channel aftertouch | `build/ma1-6_aftertouch.wav` | `8382112666e6338d` |
+| mod wheel | `build/ma1-6_mod_wheel.wav` | `446f79b40e7db2d5` |
+| pitch bend | `build/ma1-6_pitch_bend.wav` | `3d0b1c3f26a33805` |
+| poly pressure | `build/ma1-6_poly_pressure.wav` | `f75377e4fabb3e6d` |
 
 Each take renders twice and must repeat byte for byte. The renderer also
 requires finite dual-mono output, nonzero energy, monitoring headroom and at

@@ -1365,9 +1365,10 @@ The four-event input script is compiled into `exhibit_ma_voice`; each take is
 gain.
 
     make audition-ma1-5
-    # build/ma1-5_factory.wav       FNV64 ff6f374aa5f6d149, raw peak .245351
-    # build/ma1-5_analog_only.wav   FNV64 af9bcbea779b3359, raw peak .235781
-    # build/ma1-5_mozaik_focus.wav  FNV64 018d9ab2064a3fe1, raw peak .326470
+    # current post-MA1-6P factory includes VCO1 sine .20
+    # build/ma1-5_factory.wav       FNV64 b76c9c420a960925, raw peak .214303
+    # build/ma1-5_analog_only.wav   FNV64 a570bc3ede71e1e1, raw peak .202838
+    # build/ma1-5_mozaik_focus.wav  FNV64 b08b6d05a184ec21, raw peak .310480
 
 GCC, Clang and the sanitized build agree on the PCM signatures. Every take
 is finite, nonzero, byte-identical on its second render and below full scale

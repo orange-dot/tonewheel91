@@ -273,3 +273,26 @@ one.
 - GCC, Clang and ASan/UBSan/float-cast-overflow builds agree on all ten PCM
   signatures. This task added hosted evidence only; `src/ma_voice.c` and
   `src/mamutanalog.h` did not change, and MA1-7 remains unstarted.
+
+### 2026-08-26 — MA1-6P VCO1 sine and compiled patches closed
+
+- Added one VCO1-only sine weight using the shared freestanding
+  `tw_sin_turns` kernel. The existing VCO control aggregate remains the
+  saw/pulse/triangle contract shared with VCO2; sine has its own clamped
+  public setter and 6 ms smoother, so VCO2 did not acquire a hidden shape.
+- Changed the intentional factory sound to Tepih by adding sine `.20` to the
+  existing dark pad. Added the fixed Lead initialization patch with moderate
+  sync/cross-mod, short envelopes and a nonzero Mamut identity. Patch choice
+  exists only at initialization; there is no loader, registry, schema or
+  persistence layer.
+- The eight established alias cases remain green at `21.86..30.00 dB`
+  reduction. Pure sine evidence at 44.1, 48, 96 and 192 kHz measures
+  `-96.36`, `-96.56`, `-101.21` and `-95.89 dBc` outside the fundamental
+  mask. Core tests now total `111299` checks with zero failures, including the
+  bit-exact pre-sine PCM anchor when the VCO1 sine level is zero.
+- Added `make audition-ma1-6p`. Tepih and Lead signatures are
+  `b76c9c420a960925` and `fb26440d488b857d`; the matched sine-off/on pair is
+  `c9df75040b17c751` / `6c1409f71d818069` and differs in `472767` frames.
+  The previous MA1-5/MA1-6 factory signatures are historical anchors and are
+  superseded by the documented sine-bearing factory renders.
+- MA1-7 remains unstarted.

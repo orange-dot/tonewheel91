@@ -80,10 +80,9 @@ body and live MIDI remain owned by later public milestones.
 ## Post-MA1-6 compatibility note
 
 The table above remains the historical MA1-5 result at its stated provenance.
-After MA1-6 added the required continuous-control smoothers, GCC and Clang
-still produce the exact factory and analog-only signatures. The explicitly
-reconfigured Mozaik-focus take now produces `10c5d8f963d0a2ed`: its controls
-move through the new 6 ms state while the pre-note DSP timeline advances.
-Peak, RMS and DC figures are unchanged at the displayed precision, and the
-take remains finite, dual-mono, below the monitoring headroom limit and
-byte-identical on repeat.
+After MA1-6P added the intentional `.20` VCO1 sine factory component, the
+current factory, analog-only and Mozaik-focus signatures are respectively
+`b76c9c420a960925`, `a570bc3ede71e1e1` and `b08b6d05a184ec21`. Raw
+peak/RMS/DC are `.214303/.048740/+.0065185`,
+`.202838/.048874/+.0006744` and `.310480/.082653/+.0226891`. All remain
+finite, dual-mono, below monitoring headroom and byte-identical on repeat.
