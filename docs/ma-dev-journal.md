@@ -14,13 +14,15 @@ its internal sub-gates already has working code.
 - Active milestone: **MA1 — complete one-voice hybrid**.
 - Active task: none. **MA1-6 — identity, overlays and smoothers** is the next
   queued task.
-- Last green aggregate run: GCC and Clang `make test`, 2026-08-25, at
-  tonewheel91 commit `8ba8bfd` plus the MA1-5 working tree: core `111261`, hosted
-  `77`, MIDI map `22`; zero failures. Both core undefined-symbol audits pass.
+- Last green aggregate run: GCC and Clang `make test`, 2026-08-26, at
+  tonewheel91 commit `96cb1b9` plus the MA1-AUD working tree: core `111261`,
+  hosted `77`, MIDI map `22`; zero failures. Both core undefined-symbol audits
+  pass.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
-- Core implementation status: MA0 and MA1-1 through MA1-5 are closed; work is
-  stopped at the boundary before MA1-6.
+- Core implementation status: MA0 and MA1-1 through MA1-5 are closed;
+  interstitial hosted task MA1-AUD is closed; work is stopped at the boundary
+  before MA1-6.
 
 ## MA0 task ledger
 
@@ -46,6 +48,7 @@ one.
 | MA1-3 | done | MA1-2 | Per-voice Mozaik AUX with tile-boundary phason latch; integer traces equal MA0 donor vectors and mix zero is bit-identical. |
 | MA1-4 | done | MA1-3 | Normalized mixer, exact-bypass pressure and 2x nonlinear four-pole ladder; cutoff/self-oscillation/stability gates green. |
 | MA1-5 | done | MA1-4 | Filter and amp RC ADSRs plus VCA; retrigger/release/epsilon behavior and hostile sweeps green. |
+| MA1-AUD | done | MA1-5 | Hosted deterministic one-voice listening reel; three checked WAVs expose the landed MA1-5 path without changing the core or closing a later MA1 gate. |
 | MA1-6 | queued | MA1-5 | Linear five-macro identity resolver, zero-frame deltas, performance overlays and 6 ms smoothers; zero macros are bit-identical. |
 | MA1-7 | queued | MA1-6 | Centered dual-mono output, body bypass, DC block, safety diagnostics and deterministic signatures. |
 | MA1-8 | queued | MA1-7 | `make exhibit-ma1`, evidence document, cost table and operator listening verdict; public MA1 gate closes only here. |
@@ -64,6 +67,7 @@ one.
 | 2026-08-25 | Render Mozaik once per public audio frame after the sharp-edge VCO decimation, then complete the pinned normalized source sum there. | Hann tiles need no VCO oversampling; keeping their Q32/tile clock at the public sample rate preserves the donor duration contract and leaves the MA1-2 edge referee isolated. |
 | 2026-08-25 | At MA1-4, advance Mozaik in both 2x source phases, with its render rate doubled, and feed that native 2x bus directly into pressure and the ladder. Compile the historical MA1-2 alias referee with `MA_SOURCE_EVIDENCE`. | Doubling both Mozaik steps and its clock preserves tile duration and drift in wall time. The dedicated source-only build keeps later filter attenuation from being counted as oscillator anti-alias evidence. |
 | 2026-08-25 | Anchor zero filter-envelope level at the direct cutoff, then apply the donor's `.78` positive envelope span and `.42` keytrack slope; add the pinned velocity-filter contribution before clamping the effective amount. | The frozen MA0 text pinned the RC and VCO routes but omitted the cutoff equation. This preserves direct-cutoff meaning, uses the donor's bounded musical slope and makes the velocity law executable without introducing a new depth constant. |
+| 2026-08-26 | Insert MA1-AUD as a non-gating hosted exhibit between MA1-5 and MA1-6. | The landed source-to-VCA path is already audible; a deterministic WAV handoff obtains the first operator evidence without pulling live MIDI, final output conditioning or later product ownership forward. |
 
 ## Entries
 
@@ -191,3 +195,26 @@ one.
   alias cases remain green on both compilers; `git diff --check` passes.
 - Next: MA1-6 identity resolver, performance overlays and 6 ms smoothers.
   No MA1-6 code has started.
+
+### 2026-08-26 — MA1-AUD interstitial exhibit closed
+
+- Added `make audition-ma1-5`, a hosted 14-second listening script that
+  renders the compiled factory voice, its exact Mozaik-off A/B and one
+  explicitly stronger Mozaik/drive take. It uses only the public MA1-5 API
+  and the existing WAV writer; the core and later MA1 ownership are unchanged.
+- Each take is rendered twice and must be byte-identical, finite, nonzero,
+  dual-mono and below full scale after the fixed `.5` monitoring gain. GCC and
+  Clang agree on all three emitted PCM signatures: factory
+  `ff6f374aa5f6d149`, analog-only `af9bcbea779b3359`, and Mozaik-focus
+  `018d9ab2064a3fe1`.
+- Raw peak/RMS/DC are `.245351/.053287/+.0070261`,
+  `.235781/.054212/+.0013814`, and `.326470/.085680/+.0230711` respectively.
+  The residual DC is reported rather than hidden because MA1-7 owns the core
+  DC blocker.
+- GCC and Clang each pass core `111261`, hosted `77`, MIDI map `22`, with zero
+  failures and clean freestanding symbol audits. The audition path also passes
+  ASan/UBSan/float-cast-overflow; `git diff --check` passes.
+- Operator verdict: accepted as an audible MA1-5 handoff, described as an
+  "odličan jeziv zvuk". The finer factory/Mozaik A/B questions remain open;
+  no provisional control value was retuned from this first reaction.
+- Next implementation gate remains MA1-6; no MA1-6 code has started.

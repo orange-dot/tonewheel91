@@ -56,6 +56,7 @@ hashes included — reproduce bit-for-bit.
     make test      # core, hosted-boundary and MIDI-dispatch checks
     make exhibit   # renders the evidence WAVs into build/
     make viz       # renders the evidence PNGs into docs/viz/
+    make audition-ma1-5  # renders the provisional Mamut Analog listening WAVs
     make           # also builds the live driver
 
     ./build/tw91 -d hw:CARD=AG06AG03 -e 4      # demo chord on the rig

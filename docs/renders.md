@@ -1354,3 +1354,26 @@ sweep signature, and a measurement table.
 Gate: `make test` 9393/0, ten of ten exhibits PASS, both organ whole-song
 baselines unmoved at `6e56f252d97c240c` and `e983aea2ca6ecaf2`, no organ
 translation unit edited.
+
+## 2026-08-26 — Mamut Analog MA1-5 one-voice audition
+
+Interstitial listening exhibit, not a public milestone baseline. It exposes
+the landed source -> pressure -> ladder -> ADSR/VCA path without pulling
+MA1-6 identity, MA1-7 output conditioning or MA3 live ownership forward.
+The four-event input script is compiled into `exhibit_ma_voice`; each take is
+14 seconds, 48 kHz, dual mono, with the same fixed `.5` hosted monitoring
+gain.
+
+    make audition-ma1-5
+    # build/ma1-5_factory.wav       FNV64 ff6f374aa5f6d149, raw peak .245351
+    # build/ma1-5_analog_only.wav   FNV64 af9bcbea779b3359, raw peak .235781
+    # build/ma1-5_mozaik_focus.wav  FNV64 018d9ab2064a3fe1, raw peak .326470
+
+GCC, Clang and the sanitized build agree on the PCM signatures. Every take
+is finite, nonzero, byte-identical on its second render and below full scale
+after monitoring gain. WAVs remain ignored under `build/`; the configuration,
+metrics and operator ballot are in `docs/ma1-5-audition.md`.
+
+Operator verdict: accepted as an audible MA1-5 handoff — "odličan jeziv
+zvuk". This first reaction records the overall identity finding; it does not
+claim a completed factory/Mozaik A/B ballot or authorize retuning.

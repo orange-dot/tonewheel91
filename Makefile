@@ -120,6 +120,9 @@ $(BUILD)/derive_ma_constants: driver/derive_ma_constants.c | $(BUILD)
 $(BUILD)/exhibit_ma_osc: driver/exhibit_ma_osc.c $(BUILD)/ma_voice_source.o src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DMA_SOURCE_EVIDENCE driver/exhibit_ma_osc.c $(BUILD)/ma_voice_source.o $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
+$(BUILD)/exhibit_ma_voice: driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
 check-core-symbols: $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
 	sh test/check_core_symbols.sh "$(CC)" "$(BUILD)/core-combined.o" $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
 
@@ -148,6 +151,9 @@ derive-ma-constants: $(BUILD)/derive_ma_constants
 
 exhibit-ma1-osc: $(BUILD)/exhibit_ma_osc
 	./$(BUILD)/exhibit_ma_osc
+
+audition-ma1-5: $(BUILD)/exhibit_ma_voice
+	./$(BUILD)/exhibit_ma_voice
 
 exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_ep_voice
 	./$(BUILD)/exhibit_phase
@@ -200,4 +206,4 @@ viz: $(BUILD)/exhibit_viz
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-clang sanitize analyze fuzz-smf derive-ma-constants exhibit-ma1-osc check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean
+.PHONY: all test test-clang sanitize analyze fuzz-smf derive-ma-constants exhibit-ma1-osc audition-ma1-5 check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean
