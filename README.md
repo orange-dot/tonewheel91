@@ -57,6 +57,8 @@ hashes included — reproduce bit-for-bit.
     make exhibit   # renders the evidence WAVs into build/
     make viz       # renders the evidence PNGs into docs/viz/
     make audition-ma1-5  # renders the provisional Mamut Analog listening WAVs
+    make audition-ma1-6r # Mamut sine / Tepih / Lead / Dubina WAV evidence
+    make audition-ma-blues # hosted F#-minor Blade Runner Blues performance study
     make           # also builds the live driver
 
     ./build/tw91 -d hw:CARD=AG06AG03 -e 4      # demo chord on the rig
@@ -82,6 +84,16 @@ hashes included — reproduce bit-for-bit.
                    # CC85 drive, CC91 tremolo, CC92 cabinet, CC93 condition
     ./build/render_midi -I ep73 ...             # its offline twin
 
+    ./build/patchlab --list                     # Mamut Analog patch bank
+    ./build/patchlab --dump Dubina              # canonical .mapatch text
+    ./build/patchlab --render Dubina build/dubina.wav
+    ./build/exhibit_ma_blues # writes build/ma_blade_runner_blues.wav
+    ./build/patchlab -d hw:CARD=AG06AG03 -m hw:X,Y,Z --patch Tepih
+                   # ANSI/termios editor; arrows edit, p/P changes patch,
+                   # zsxdcvgbhnjm, plays C3..C4, space panics, q quits
+                   # MIDI: notes, bend, channel/poly pressure, mod wheel;
+                   # CC16..20 edit the five Mamut macros
+
 ## Layout
 
     src/     freestanding core (no OS, no libm, no allocation): generator,
@@ -89,7 +101,8 @@ hashes included — reproduce bit-for-bit.
              rotary speaker, MIDI byte parser; and the ep73 struck-voice
              bank, which includes the organ's header for the shared kernels
              and is included by nothing in the organ
-    driver/  hosted layer: WAV and PNG writers, offline exhibits, and
+    driver/  hosted layer: WAV and PNG writers, offline exhibits, Patchlab,
+             strict .mapatch file I/O, and
              render_midi (SMF in -> stereo WAV out, the live driver's
              deterministic twin for whole songs; renders logged in
              docs/renders.md); the Linux ALSA live driver (the one

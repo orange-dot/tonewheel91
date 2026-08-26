@@ -8,6 +8,7 @@
 
 #include "../driver/host_parse.h"
 #include "../driver/live_io.h"
+#include "../driver/ma_patch_file.h"
 #include "../driver/smf.h"
 #include "../driver/wav.h"
 
@@ -197,12 +198,152 @@ static void test_live_layout(void) {
           "invalid negotiated live period was accepted");
 }
 
+static bool read_patch_text(const char *text, ma_patch_document *document,
+                            ma_patch_error *error) {
+    FILE *file = tmpfile();
+    if (!file) return false;
+    bool result = fputs(text, file) >= 0 && fflush(file) == 0
+               && fseek(file, 0, SEEK_SET) == 0
+               && ma_patch_read(file, document, error);
+    fclose(file);
+    return result;
+}
+
+static void test_ma_patch_files(void) {
+    ma_patch_document source = {
+        .name = "Lead",
+        .value = ma_patch_lead,
+    };
+    FILE *file = tmpfile();
+    CHECK(file && ma_patch_write(file, &source),
+          "could not write a valid MA patch");
+    ma_patch_document roundtrip = { 0 };
+    ma_patch_error error = { 0 };
+    CHECK(file && fflush(file) == 0 && fseek(file, 0, SEEK_SET) == 0
+          && ma_patch_read(file, &roundtrip, &error),
+          "could not read a written MA patch: line %u %s",
+          error.line, error.message);
+    CHECK(!strcmp(roundtrip.name, source.name)
+          && !memcmp(&roundtrip.value, &source.value, sizeof source.value),
+          "MA patch text round-trip changed its value object");
+    if (file) fclose(file);
+
+    ma_patch_document invalid = { 0 };
+    CHECK(!read_patch_text("mamutanalog_patch=1\nname=x\n",
+                           &invalid, &error)
+          && strstr(error.message, "missing"),
+          "incomplete MA patch was accepted");
+    CHECK(!read_patch_text("mamutanalog_patch=1\nname=x\nwat=1\n",
+                           &invalid, &error)
+          && strstr(error.message, "unknown"),
+          "unknown MA patch key was accepted");
+    CHECK(!read_patch_text("mamutanalog_patch=1\nname=x\n"
+                           "vco1.saw=.2\nvco1.saw=.3\n",
+                           &invalid, &error)
+          && strstr(error.message, "duplicate"),
+          "duplicate MA patch key was accepted");
+    CHECK(!read_patch_text("mamutanalog_patch=1\nname=x\n"
+                           "vco1.sine=nan\n",
+                           &invalid, &error)
+          && strstr(error.message, "domain"),
+          "non-finite MA patch value was accepted");
+    CHECK(!read_patch_text("mamutanalog_patch=1\nname=x\n"
+                           "vco2.interval=1.5\n",
+                           &invalid, &error)
+          && strstr(error.message, "domain"),
+          "fractional MA patch integer was accepted");
+    CHECK(!read_patch_text("mamutanalog_patch=2\nname=x\n",
+                           &invalid, &error)
+          && strstr(error.message, "version"),
+          "unsupported MA patch version was accepted");
+    CHECK(!read_patch_text("mamutanalog_patch=1\nname=bad=name\n",
+                           &invalid, &error)
+          && strstr(error.message, "name"),
+          "invalid MA patch name was accepted");
+
+    char path[] = "/tmp/tonewheel91-patch-XXXXXX";
+    int descriptor = mkstemp(path);
+    CHECK(descriptor >= 0, "could not create a temporary MA patch path");
+    if (descriptor >= 0) {
+        close(descriptor);
+        remove(path);
+        CHECK(ma_patch_save(path, &source, &error),
+              "atomic MA patch save failed: %s", error.message);
+        ma_patch_document loaded = { 0 };
+        CHECK(ma_patch_load(path, &loaded, &error)
+              && !memcmp(&loaded.value, &source.value, sizeof source.value),
+              "saved MA patch did not load exactly: %s", error.message);
+        remove(path);
+    }
+
+    static const struct {
+        const char *path;
+        const char *name;
+        const ma_patch *value;
+    } builtins[] = {
+        { "patches/mamutanalog/tepih.mapatch", "Tepih", &ma_patch_tepih },
+        { "patches/mamutanalog/lead.mapatch", "Lead", &ma_patch_lead },
+        { "patches/mamutanalog/dubina.mapatch", "Dubina", &ma_patch_dubina },
+    };
+    for (size_t i = 0; i < sizeof builtins / sizeof *builtins; i++) {
+        ma_patch_document document = { 0 };
+        CHECK(ma_patch_load(builtins[i].path, &document, &error)
+              && !strcmp(document.name, builtins[i].name)
+              && !memcmp(&document.value, builtins[i].value,
+                         sizeof document.value),
+              "built-in patch mirror %s drifted: line %u %s",
+              builtins[i].name, error.line, error.message);
+    }
+
+    CHECK(ma_patch_field_count() == 45,
+          "MA patch field catalog count changed unexpectedly");
+    ma_patch_field_info field = { 0 };
+    double value = 0.0;
+    ma_patch edited = ma_patch_dubina;
+    CHECK(ma_patch_field_info_at(8, &field)
+          && !strcmp(field.name, "vco2.sine")
+          && field.minimum == 0.0 && field.maximum == 1.0
+          && field.fine_step == .01 && field.coarse_step == .10
+          && !field.integer,
+          "MA patch VCO2 sine field metadata drifted");
+    CHECK(ma_patch_field_get(&edited, 8, &value) && value == .85f,
+          "MA patch field getter did not expose VCO2 sine");
+    CHECK(ma_patch_field_set(&edited, 8, .63)
+          && ma_patch_field_get(&edited, 8, &value)
+          && value == (double)(float).63,
+          "MA patch field editor did not retain a legal float value");
+    CHECK(!ma_patch_field_set(&edited, 8, 1.01)
+          && !ma_patch_field_set(&edited, 8, 0.0 / 0.0),
+          "MA patch field editor accepted an invalid float value");
+    CHECK(ma_patch_field_info_at(11, &field) && field.integer
+          && ma_patch_field_set(&edited, 11, -7.0)
+          && !ma_patch_field_set(&edited, 11, -7.5),
+          "MA patch integer field contract failed");
+    CHECK(!ma_patch_field_info_at(ma_patch_field_count(), &field)
+          && !ma_patch_field_get(&edited, ma_patch_field_count(), &value)
+          && !ma_patch_field_set(&edited, ma_patch_field_count(), 0.0),
+          "MA patch field catalog accepted an invalid index");
+    ma_patch_document unwritable = source;
+    unwritable.value.filter_cutoff_hz = 0.0f / 0.0f;
+    file = tmpfile();
+    CHECK(file && !ma_patch_write(file, &unwritable),
+          "MA patch writer accepted a non-finite field");
+    if (file) fclose(file);
+    unwritable = source;
+    memset(unwritable.name, 'x', sizeof unwritable.name);
+    file = tmpfile();
+    CHECK(file && !ma_patch_write(file, &unwritable),
+          "MA patch writer read past a non-terminated name");
+    if (file) fclose(file);
+}
+
 int main(void) {
     test_smf_valid();
     test_smf_malformed();
     test_wav();
     test_host_parse();
     test_live_layout();
+    test_ma_patch_files();
     printf("hosted: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
 }

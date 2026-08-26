@@ -2,6 +2,10 @@
 
 Date: 2026-08-26. Status: implementation and listening evidence complete.
 
+Historical note: MA1-6R subsequently generalized the enriched Mamut sine to
+both VCOs and added the concrete patch-file/Patchlab layer. The values and
+hashes below remain the closing record for the earlier VCO1-only slice.
+
 MA1-6P adds sine only to VCO1 and two fixed initialization patches. The core
 still has no patch files, live loader, registry, allocation or hosted I/O.
 `ma_synth_init` selects Tepih; `ma_synth_init_patch` can select Tepih or Lead.

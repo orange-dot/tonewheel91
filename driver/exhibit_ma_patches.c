@@ -1,5 +1,5 @@
-/* Hosted MA1-6P listening evidence for the two compiled patches and the
- * VCO1 sine contribution. */
+/* Hosted MA1-6R listening evidence for the compiled bank and the VCO1
+ * Mamut-sine contribution. */
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -20,6 +20,7 @@ static constexpr float MONITOR_GAIN = 0.5f;
 typedef enum {
     TAKE_TEPIH,
     TAKE_LEAD,
+    TAKE_DUBINA,
     TAKE_SINE_OFF,
     TAKE_SINE_ON,
 } take_kind;
@@ -40,10 +41,11 @@ typedef struct {
 } audition_metrics;
 
 static audition_take const TAKES[] = {
-    { TAKE_TEPIH, "tepih", "build/ma1-6p_tepih.wav" },
-    { TAKE_LEAD, "lead", "build/ma1-6p_lead.wav" },
-    { TAKE_SINE_OFF, "sine-off", "build/ma1-6p_tepih_sine_off.wav" },
-    { TAKE_SINE_ON, "sine-on", "build/ma1-6p_tepih_sine_on.wav" },
+    { TAKE_TEPIH, "tepih", "build/ma1-6r_tepih.wav" },
+    { TAKE_LEAD, "lead", "build/ma1-6r_lead.wav" },
+    { TAKE_DUBINA, "dubina", "build/ma1-6r_dubina.wav" },
+    { TAKE_SINE_OFF, "sine-off", "build/ma1-6r_tepih_sine_off.wav" },
+    { TAKE_SINE_ON, "sine-on", "build/ma1-6r_tepih_sine_on.wav" },
 };
 
 static float output[2 * FRAME_COUNT];
@@ -52,9 +54,19 @@ static float sine_off[2 * FRAME_COUNT];
 static float repeat_output[2 * FRAME_COUNT];
 
 static void configure(ma_synth *synth, take_kind kind) {
-    ma_synth_init_patch(synth, RATE,
-                        kind == TAKE_LEAD ? MA_PATCH_LEAD : MA_PATCH_TEPIH);
-    if (kind == TAKE_SINE_OFF) ma_synth_set_vco1_sine(synth, 0.0f);
+    ma_patch patch = kind == TAKE_LEAD ? ma_patch_lead
+                   : kind == TAKE_DUBINA ? ma_patch_dubina
+                   : ma_patch_tepih;
+    if (kind == TAKE_SINE_OFF) patch.vco1.sine_level = 0.0f;
+    ma_synth_init_patch(synth, RATE, &patch);
+}
+
+static void dubina_script(ma_synth *synth, int frame) {
+    if (frame == RATE / 2) ma_synth_note_on(synth, 0, 36, 100);
+    if (frame == 5 * RATE) ma_synth_set_channel_pressure(synth, .45f);
+    if (frame == 6 * RATE) ma_synth_set_mod_wheel(synth, .60f);
+    if (frame == 8 * RATE) ma_synth_set_poly_pressure(synth, 0, 36, .70f);
+    if (frame == 10 * RATE) ma_synth_note_off(synth, 0, 36, 0);
 }
 
 static void tepih_script(ma_synth *synth, int frame) {
@@ -117,6 +129,8 @@ static bool render(audition_take take, float *dst,
     for (int frame = 0; frame < FRAME_COUNT; frame++) {
         if (take.kind == TAKE_LEAD)
             lead_script(&synth, frame);
+        else if (take.kind == TAKE_DUBINA)
+            dubina_script(&synth, frame);
         else if (take.kind == TAKE_TEPIH)
             tepih_script(&synth, frame);
         else
@@ -155,7 +169,7 @@ static unsigned difference_frames(float const *first, float const *second) {
 
 int main(void) {
     int result = 0;
-    puts("MA1-6P compiled patch and VCO1 sine audition\n");
+    puts("MA1-6R compiled patch bank and Mamut sine audition\n");
     for (size_t i = 0; i < sizeof TAKES / sizeof *TAKES; i++) {
         audition_take take = TAKES[i];
         audition_metrics metrics = { 0 };

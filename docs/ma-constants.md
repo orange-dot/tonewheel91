@@ -137,11 +137,22 @@ triangle_state = clamp(triangle_state + pulse(p,.5,d) * 4d,
 [DONOR: triangle mechanism from `mamut-dsp/src/bandlimited.rs`; accepted
 edge kernel from the MA1-2 evidence loop].
 
-For each VCO, waveform weights are nonnegative. VCO1 adds
-`sine_level * tw_sin_turns(p)` and divides by
-`max(saw_level + pulse_level + triangle_level + sine_level, 1)`. VCO2 keeps
-the three-shape divisor without sine [DECISION]. This normalizes simultaneous
-shapes without boosting a single sub-unity shape.
+For each VCO, waveform weights are nonnegative. Both add the Mamut sine
+[DECISION]:
+
+```text
+s = tw_sin_turns(p)
+mamut_sine(p) = .95591217 *
+    (tw_sat(1.45*s) / tw_sat(1.45)
+     + .07*tw_sin_turns(wrap(2*p + .07)))
+```
+
+The `1.45` soft drive gives the source a controlled odd body, while the
+phase-offset second harmonic prevents it from collapsing into a generic pure
+sine. The normalization is the reciprocal of the measured f32 kernel peak
+and keeps `|mamut_sine| <= 1`. Each VCO divides its weighted sum by
+`max(saw_level + pulse_level + triangle_level + sine_level, 1)`. This
+normalizes simultaneous shapes without boosting a single sub-unity shape.
 
 ### 3.2 Hard sync and fixed modulation routes
 
@@ -397,9 +408,11 @@ the boundary at 2x improved that to `12.57..20.20 dB`, with only one of
 eight cases passing. The narrower 4x/8x edge candidates also failed and are
 kept only in the journal. The accepted eight-substep C2 slew yields
 `21.86..30.00 dB` across all eight ordinary, hard-sync and cross-mod cases
-under both GCC and Clang. Four pure VCO1 sine cases at 44.1, 48, 96 and
-192 kHz measure non-fundamental energy at `-95.89..-101.21 dBc`, below the
-fixed `-80 dBc` gate.
+under both GCC and Clang. Pure Mamut-sine cases for both VCOs at 44.1, 48, 96
+and 192 kHz measure out-of-contract energy at `-94.26..-101.08 dBc`, below
+the fixed `-80 dBc` gate. Their intended fingerprint is H2 `-24.00 dBc`, H3
+`-19.08 dBc` and H5 `-36.67 dBc`; all three bands are permanent exhibit
+gates, so later "sine improvements" cannot silently retune the source.
 
 ### 6.3 Ladder equations and operating point
 
@@ -800,7 +813,7 @@ zero and therefore add no delta:
 | Group | Value |
 | --- | --- |
 | VCO1 | saw `.70`, pulse `.25`, triangle `.15`, sine `.20`, PW `.50` |
-| VCO2 | saw `.35`, pulse `.20`, triangle `.55`, level `.62`, interval `0`, fine `+7 cents`, PW `.50` |
+| VCO2 | saw `.35`, pulse `.20`, triangle `.55`, sine `0`, level `.62`, interval `0`, fine `+7 cents`, PW `.50` |
 | Oscillator modulation | sync `0`, sync softness `0`, cross-mod `0` |
 | Noise | `.02` |
 | Mozaik | seed `0x4d6f7a31`, mix `.20`, golden slope, contrast `1.618034`, phason `0`, drift `.05` |

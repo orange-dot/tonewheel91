@@ -8,7 +8,6 @@ static constexpr float LN1000 = 6.907755278982137f;
 #endif
 static constexpr uint32_t MOZAIK_SLOPE_MIN_Q32 = UINT32_C(0x73333333);
 static constexpr uint32_t MOZAIK_SLOPE_MAX_Q32 = UINT32_C(0xc0000000);
-static constexpr uint32_t MOZAIK_GOLDEN_Q32 = UINT32_C(0x9e3779b9);
 static constexpr float MOZAIK_GOLDEN_CONTRAST = 1.618034f;
 static constexpr float Q32_ONE_F = 0x1p32f;
 
@@ -20,7 +19,6 @@ typedef struct {
 typedef struct {
     ma_vco_controls vco1;
     ma_vco_controls vco2;
-    float vco1_sine_level;
     float vco2_level;
     float vco2_fine_cents;
     float sync_amount;
@@ -106,6 +104,70 @@ static constexpr ma_adsr FILTER_ADSR_DEFAULT = {
     .decay_ms = 1800.0f,
     .sustain = 0.50f,
     .release_ms = 2600.0f,
+};
+
+const ma_patch ma_patch_tepih = {
+    .vco1 = { .saw_level = 0.70f, .pulse_level = 0.25f,
+              .triangle_level = 0.15f, .sine_level = 0.20f,
+              .pulse_width = 0.50f },
+    .vco2 = { .saw_level = 0.35f, .pulse_level = 0.20f,
+              .triangle_level = 0.55f, .sine_level = 0.0f,
+              .pulse_width = 0.50f },
+    .vco2_level = 0.62f, .vco2_interval = 0, .vco2_fine_cents = 7.0f,
+    .noise_level = 0.02f,
+    .mozaik_mix = 0.20f, .mozaik_slope = 0x1.1ec72ep-1f,
+    .mozaik_contrast = 0x1.07b1cap-1f, .mozaik_drift = 0.05f,
+    .mixer_pressure = 0.15f,
+    .filter_cutoff_hz = 900.0f, .filter_resonance = 0.18f,
+    .filter_drive = 0.12f, .filter_env_amount = 0.30f,
+    .filter_keytrack = 0.45f,
+    .amp_adsr = { 600.0f, 1600.0f, 0.82f, 3000.0f },
+    .filter_adsr = { 350.0f, 1800.0f, 0.50f, 2600.0f },
+    .body_drive = 0.10f, .width = 0.70f, .master_level = 0.18f,
+};
+
+const ma_patch ma_patch_lead = {
+    .vco1 = { .saw_level = 0.75f, .pulse_level = 0.30f,
+              .triangle_level = 0.05f, .sine_level = 0.10f,
+              .pulse_width = 0.43f },
+    .vco2 = { .saw_level = 0.55f, .pulse_level = 0.25f,
+              .triangle_level = 0.10f, .sine_level = 0.0f,
+              .pulse_width = 0.57f },
+    .vco2_level = 0.55f, .vco2_interval = 0, .vco2_fine_cents = 7.0f,
+    .sync_amount = 0.22f, .sync_softness = 0.18f,
+    .crossmod_amount = 0.12f, .noise_level = 0.01f,
+    .mozaik_mix = 0.08f, .mozaik_slope = 0x1.1ec72ep-1f,
+    .mozaik_contrast = 0.60f, .mozaik_drift = 0.03f,
+    .mixer_pressure = 0.32f,
+    .filter_cutoff_hz = 1900.0f, .filter_resonance = 0.30f,
+    .filter_drive = 0.35f, .filter_env_amount = 0.62f,
+    .filter_keytrack = 0.62f,
+    .amp_adsr = { 12.0f, 160.0f, 0.68f, 240.0f },
+    .filter_adsr = { 6.0f, 260.0f, 0.18f, 220.0f },
+    .macro = { 0.12f, 0.04f, 0.25f, 0.22f, 0.03f },
+    .body_drive = 0.15f, .width = 0.45f, .crossfeed = 0.08f,
+    .master_level = 0.18f,
+};
+
+const ma_patch ma_patch_dubina = {
+    .vco1 = { .saw_level = 0.10f, .triangle_level = 0.10f,
+              .sine_level = 0.15f, .pulse_width = 0.50f },
+    .vco2 = { .saw_level = 0.05f, .triangle_level = 0.10f,
+              .sine_level = 0.85f, .pulse_width = 0.50f },
+    .vco2_level = 0.90f, .vco2_interval = -12,
+    .vco2_fine_cents = 0.0f,
+    .crossmod_amount = 0.04f, .noise_level = 0.01f,
+    .mozaik_mix = 0.05f, .mozaik_slope = 0x1.1ec72ep-1f,
+    .mozaik_contrast = 0x1.07b1cap-1f, .mozaik_drift = 0.02f,
+    .mixer_pressure = 0.18f,
+    .filter_cutoff_hz = 750.0f, .filter_resonance = 0.20f,
+    .filter_drive = 0.20f, .filter_env_amount = 0.38f,
+    .filter_keytrack = 0.35f,
+    .amp_adsr = { 30.0f, 300.0f, 0.80f, 700.0f },
+    .filter_adsr = { 20.0f, 450.0f, 0.45f, 600.0f },
+    .macro = { 0.20f, 0.0f, 0.18f, 0.04f, 0.0f },
+    .body_drive = 0.18f, .width = 0.35f, .crossfeed = 0.12f,
+    .master_level = 0.18f,
 };
 
 static constexpr float NOTE_HZ[128] = {
@@ -223,9 +285,19 @@ static float pulse_sample(float phase, float width, float step) {
     return clamp_signal(sample, -1.25f, 1.25f);
 }
 
-static float waveform_divisor(ma_vco_controls controls, float sine_level) {
+static float mamut_sine(float phase) {
+    static constexpr float DRIVE = 1.45f;
+    static constexpr float SECOND_LEVEL = 0.07f;
+    static constexpr float PEAK_NORMALIZATION = 0.95591217f;
+    float fundamental = tw_sin_turns(phase);
+    float warm = tw_sat(DRIVE * fundamental) / tw_sat(DRIVE);
+    float second = tw_sin_turns(wrap_phase(2.0f * phase + 0.07f));
+    return PEAK_NORMALIZATION * (warm + SECOND_LEVEL * second);
+}
+
+static float waveform_divisor(ma_vco_controls controls) {
     float sum = controls.saw_level + controls.pulse_level
-              + controls.triangle_level + sine_level;
+              + controls.triangle_level + controls.sine_level;
     return sum > 1.0f ? sum : 1.0f;
 }
 
@@ -233,14 +305,15 @@ static float raw_wave_mix(float phase, ma_vco_controls controls) {
     float saw = 2.0f * phase - 1.0f;
     float pulse = phase < controls.pulse_width ? 1.0f : -1.0f;
     float triangle = raw_triangle(phase);
-    return (controls.saw_level * saw + controls.pulse_level * pulse
-            + controls.triangle_level * triangle)
-         / waveform_divisor(controls, 0.0f);
+    float sample = controls.saw_level * saw + controls.pulse_level * pulse
+                 + controls.triangle_level * triangle;
+    if (controls.sine_level > 0.0f)
+        sample += controls.sine_level * mamut_sine(phase);
+    return sample / waveform_divisor(controls);
 }
 
 static float preview_oscillator(const ma_oscillator *oscillator,
-                                ma_vco_controls controls, float sine_level,
-                                float step) {
+                                ma_vco_controls controls, float step) {
     float phase = phase_turns(oscillator->phase_q48);
     float triangle = oscillator->triangle_initialized
                    ? clamp_signal(oscillator->triangle, -1.0f, 1.0f)
@@ -249,19 +322,20 @@ static float preview_oscillator(const ma_oscillator *oscillator,
                  + controls.pulse_level * pulse_sample(
                      phase, controls.pulse_width, step)
                  + controls.triangle_level * triangle;
-    if (sine_level > 0.0f) sample += sine_level * tw_sin_turns(phase);
-    return sample / waveform_divisor(controls, sine_level);
+    if (controls.sine_level > 0.0f)
+        sample += controls.sine_level * mamut_sine(phase);
+    return sample / waveform_divisor(controls);
 }
 
 static float render_oscillator(ma_oscillator *oscillator,
-                               ma_vco_controls controls, float sine_level,
-                               float step, float sync_correction) {
+                               ma_vco_controls controls, float step,
+                               float sync_correction) {
     if (!oscillator->triangle_initialized) {
         oscillator->triangle = raw_triangle(
             phase_turns(oscillator->phase_q48));
         oscillator->triangle_initialized = true;
     }
-    float sample = preview_oscillator(oscillator, controls, sine_level, step)
+    float sample = preview_oscillator(oscillator, controls, step)
                  + oscillator->sync_residual + sync_correction;
     oscillator->sync_residual = 0.0f;
     oscillator->triangle = clamp_signal(
@@ -361,6 +435,7 @@ static ma_vco_smoothers initialized_vco_smoothers(ma_vco_controls value) {
         .saw_level = initialized_smoother(value.saw_level),
         .pulse_level = initialized_smoother(value.pulse_level),
         .triangle_level = initialized_smoother(value.triangle_level),
+        .sine_level = initialized_smoother(value.sine_level),
         .pulse_width = initialized_smoother(value.pulse_width),
     };
 }
@@ -373,6 +448,8 @@ static void set_vco_targets(ma_vco_smoothers *smoothers,
                         sample_rate_hz);
     set_smoother_target(&smoothers->triangle_level, value.triangle_level,
                         sample_rate_hz);
+    set_smoother_target(&smoothers->sine_level, value.sine_level,
+                        sample_rate_hz);
     set_smoother_target(&smoothers->pulse_width, value.pulse_width,
                         sample_rate_hz);
 }
@@ -382,6 +459,7 @@ static ma_vco_controls next_vco_controls(ma_vco_smoothers *smoothers) {
         .saw_level = next_smoother(&smoothers->saw_level),
         .pulse_level = next_smoother(&smoothers->pulse_level),
         .triangle_level = next_smoother(&smoothers->triangle_level),
+        .sine_level = next_smoother(&smoothers->sine_level),
         .pulse_width = next_smoother(&smoothers->pulse_width),
     };
 }
@@ -569,7 +647,6 @@ static ma_render_controls target_render_controls(const ma_synth *s) {
     return (ma_render_controls){
         .vco1 = s->vco1,
         .vco2 = s->vco2,
-        .vco1_sine_level = s->vco1_sine_level,
         .vco2_level = s->vco2_level,
         .vco2_fine_cents = s->vco2_fine_cents,
         .sync_amount = clamp_signal(s->sync_amount + sync_delta,
@@ -614,7 +691,6 @@ static void initialize_control_smoothers(ma_synth *s) {
     s->smoothers = (ma_control_smoothers){
         .vco1 = initialized_vco_smoothers(target.vco1),
         .vco2 = initialized_vco_smoothers(target.vco2),
-        .vco1_sine_level = initialized_smoother(target.vco1_sine_level),
         .vco2_level = initialized_smoother(target.vco2_level),
         .vco2_fine_cents = initialized_smoother(target.vco2_fine_cents),
         .sync_amount = initialized_smoother(target.sync_amount),
@@ -645,8 +721,6 @@ static void update_control_targets(ma_synth *s) {
     ma_render_controls target = target_render_controls(s);
     set_vco_targets(&s->smoothers.vco1, target.vco1, s->sample_rate_hz);
     set_vco_targets(&s->smoothers.vco2, target.vco2, s->sample_rate_hz);
-    set_smoother_target(&s->smoothers.vco1_sine_level,
-                        target.vco1_sine_level, s->sample_rate_hz);
     set_smoother_target(&s->smoothers.vco2_level, target.vco2_level,
                         s->sample_rate_hz);
     set_smoother_target(&s->smoothers.vco2_fine_cents,
@@ -698,7 +772,6 @@ static ma_render_controls next_render_controls(ma_synth *s) {
     return (ma_render_controls){
         .vco1 = next_vco_controls(&s->smoothers.vco1),
         .vco2 = next_vco_controls(&s->smoothers.vco2),
-        .vco1_sine_level = next_smoother(&s->smoothers.vco1_sine_level),
         .vco2_level = next_smoother(&s->smoothers.vco2_level),
         .vco2_fine_cents = next_smoother(&s->smoothers.vco2_fine_cents),
         .sync_amount = next_smoother(&s->smoothers.sync_amount),
@@ -816,6 +889,8 @@ static ma_vco_controls sanitize_vco(ma_vco_controls controls,
                                      fallback.pulse_level),
         .triangle_level = clamp_control(controls.triangle_level, 0.0f, 1.0f,
                                         fallback.triangle_level),
+        .sine_level = clamp_control(controls.sine_level, 0.0f, 1.0f,
+                                    fallback.sine_level),
         .pulse_width = clamp_control(controls.pulse_width, 0.05f, 0.95f,
                                      fallback.pulse_width),
     };
@@ -832,6 +907,62 @@ static ma_adsr sanitize_adsr(ma_adsr value, ma_adsr fallback) {
         .release_ms = clamp_control(value.release_ms, 1.0f, 20000.0f,
                                     fallback.release_ms),
     };
+}
+
+static ma_patch sanitize_patch(const ma_patch *value, float sample_rate_hz) {
+    const ma_patch *source = value ? value : &ma_patch_tepih;
+    float cutoff_max = 0.42f * sample_rate_hz;
+    if (cutoff_max > 20000.0f) cutoff_max = 20000.0f;
+    ma_patch result = {
+        .vco1 = sanitize_vco(source->vco1, ma_patch_tepih.vco1),
+        .vco2 = sanitize_vco(source->vco2, ma_patch_tepih.vco2),
+        .vco2_level = clamp_control(source->vco2_level, 0.0f, 1.0f,
+                                    ma_patch_tepih.vco2_level),
+        .vco2_interval = source->vco2_interval < -24 ? -24
+                       : source->vco2_interval > 24 ? 24
+                       : source->vco2_interval,
+        .vco2_fine_cents = clamp_control(
+            source->vco2_fine_cents, -50.0f, 50.0f,
+            ma_patch_tepih.vco2_fine_cents),
+        .sync_amount = clamp_control(source->sync_amount, 0.0f, 1.0f, 0.0f),
+        .sync_softness = clamp_control(source->sync_softness,
+                                       0.0f, 1.0f, 0.0f),
+        .crossmod_amount = clamp_control(source->crossmod_amount,
+                                         0.0f, 1.0f, 0.0f),
+        .noise_level = clamp_control(source->noise_level, 0.0f, 1.0f, 0.02f),
+        .mozaik_mix = clamp_control(source->mozaik_mix, 0.0f, 1.0f, 0.20f),
+        .mozaik_slope = clamp_control(source->mozaik_slope,
+                                      0.0f, 1.0f, 0.5601133f),
+        .mozaik_contrast = clamp_control(source->mozaik_contrast,
+                                         0.0f, 1.0f, 0.5150284f),
+        .mozaik_phason = finite_or(source->mozaik_phason, 0.0f),
+        .mozaik_drift = clamp_control(source->mozaik_drift,
+                                      0.0f, 1.0f, 0.05f),
+        .mixer_pressure = clamp_control(source->mixer_pressure,
+                                        0.0f, 1.0f, 0.15f),
+        .filter_cutoff_hz = clamp_control(source->filter_cutoff_hz,
+                                          20.0f, cutoff_max, 900.0f),
+        .filter_resonance = clamp_control(source->filter_resonance,
+                                           0.0f, 1.0f, 0.18f),
+        .filter_drive = clamp_control(source->filter_drive,
+                                      0.0f, 1.0f, 0.12f),
+        .filter_env_amount = clamp_control(source->filter_env_amount,
+                                            0.0f, 1.0f, 0.30f),
+        .filter_keytrack = clamp_control(source->filter_keytrack,
+                                          0.0f, 1.0f, 0.45f),
+        .amp_adsr = sanitize_adsr(source->amp_adsr, AMP_ADSR_DEFAULT),
+        .filter_adsr = sanitize_adsr(source->filter_adsr,
+                                     FILTER_ADSR_DEFAULT),
+        .body_drive = clamp_control(source->body_drive, 0.0f, 1.0f, 0.10f),
+        .width = clamp_control(source->width, 0.0f, 1.0f, 0.70f),
+        .crossfeed = clamp_control(source->crossfeed, 0.0f, 1.0f, 0.0f),
+        .master_level = clamp_control(source->master_level,
+                                      0.0f, 1.0f, 0.18f),
+    };
+    for (int macro = 0; macro < MA_MACRO_COUNT; macro++)
+        result.macro[macro] = clamp_control(source->macro[macro],
+                                            0.0f, 1.0f, 0.0f);
+    return result;
 }
 
 static void start_envelope_stage(ma_envelope *envelope,
@@ -933,49 +1064,45 @@ float ma_velocity_filter(uint8_t velocity) {
 }
 
 void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
-                         ma_patch_id patch) {
-    if ((unsigned)patch >= MA_PATCH_COUNT) patch = MA_PATCH_TEPIH;
+                         const ma_patch *patch) {
+    sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
+    ma_patch value = sanitize_patch(patch, sample_rate_hz);
     *s = (ma_synth){
-        .sample_rate_hz = tw_sample_rate_hz(sample_rate_hz),
-        .patch = patch,
-        .vco1 = { .saw_level = 0.70f, .pulse_level = 0.25f,
-                  .triangle_level = 0.15f, .pulse_width = 0.50f },
-        .vco2 = { .saw_level = 0.35f, .pulse_level = 0.20f,
-                  .triangle_level = 0.55f, .pulse_width = 0.50f },
-        .vco1_sine_level = 0.20f,
-        .vco2_level = 0.62f,
-        .vco2_interval = 0,
-        .vco2_fine_cents = 7.0f,
-        .sync_amount = 0.0f,
-        .sync_softness = 0.0f,
-        .crossmod_amount = 0.0f,
-        .noise_level = 0.02f,
-        .mozaik_mix = 0.20f,
-        .mozaik_slope = (MOZAIK_DETENT[0].sigma - 0.45f) / 0.30f,
-        .mozaik_contrast_control = (MOZAIK_GOLDEN_CONTRAST - 1.0f) / 1.2f,
-        .mozaik_contrast = MOZAIK_GOLDEN_CONTRAST,
-        .mozaik_slope_q32 = MOZAIK_GOLDEN_Q32,
-        .mozaik_phason_q32 = 0,
-        .mozaik_drift = 0.05f,
-        .mixer_pressure = 0.15f,
-        .filter_cutoff_hz = 900.0f,
-        .filter_cutoff_effective_hz = 900.0f,
-        .filter_resonance = 0.18f,
-        .filter_drive = 0.12f,
-        .filter_env_amount = 0.30f,
-        .filter_keytrack = 0.45f,
-        .amp_adsr = AMP_ADSR_DEFAULT,
-        .filter_adsr = FILTER_ADSR_DEFAULT,
-        .macro = { 0 },
+        .sample_rate_hz = sample_rate_hz,
+        .vco1 = value.vco1,
+        .vco2 = value.vco2,
+        .vco2_level = value.vco2_level,
+        .vco2_interval = value.vco2_interval,
+        .vco2_fine_cents = value.vco2_fine_cents,
+        .sync_amount = value.sync_amount,
+        .sync_softness = value.sync_softness,
+        .crossmod_amount = value.crossmod_amount,
+        .noise_level = value.noise_level,
+        .mozaik_mix = value.mozaik_mix,
+        .mozaik_slope = value.mozaik_slope,
+        .mozaik_contrast_control = value.mozaik_contrast,
+        .mozaik_contrast = 1.0f + 1.2f * value.mozaik_contrast,
+        .mozaik_slope_q32 = mozaik_slope_q32(value.mozaik_slope),
+        .mozaik_phason_q32 = mozaik_phason_q32(value.mozaik_phason),
+        .mozaik_drift = value.mozaik_drift,
+        .mixer_pressure = value.mixer_pressure,
+        .filter_cutoff_hz = value.filter_cutoff_hz,
+        .filter_cutoff_effective_hz = value.filter_cutoff_hz,
+        .filter_resonance = value.filter_resonance,
+        .filter_drive = value.filter_drive,
+        .filter_env_amount = value.filter_env_amount,
+        .filter_keytrack = value.filter_keytrack,
+        .amp_adsr = value.amp_adsr,
+        .filter_adsr = value.filter_adsr,
         .pitch_bend_semitones = 0.0f,
         .channel_pressure = 0.0f,
         .poly_pressure = 0.0f,
         .mod_wheel = 0.0f,
-        .body_drive = 0.10f,
+        .body_drive = value.body_drive,
         .body_load_ratio = 1.0f,
-        .width = 0.70f,
-        .crossfeed = 0.0f,
-        .master_level = 0.18f,
+        .width = value.width,
+        .crossfeed = value.crossfeed,
+        .master_level = value.master_level,
         .noise_state = NOISE_SEED,
         .oscillator1 = {
             .phase_q48 = 0,
@@ -996,59 +1123,8 @@ void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
         .channel = 0,
         .note_active = false,
     };
-    if (patch == MA_PATCH_LEAD) {
-        s->vco1 = (ma_vco_controls){
-            .saw_level = 0.75f,
-            .pulse_level = 0.30f,
-            .triangle_level = 0.05f,
-            .pulse_width = 0.43f,
-        };
-        s->vco2 = (ma_vco_controls){
-            .saw_level = 0.55f,
-            .pulse_level = 0.25f,
-            .triangle_level = 0.10f,
-            .pulse_width = 0.57f,
-        };
-        s->vco1_sine_level = 0.10f;
-        s->vco2_level = 0.55f;
-        s->vco2_interval = 0;
-        s->vco2_fine_cents = 7.0f;
-        s->sync_amount = 0.22f;
-        s->sync_softness = 0.18f;
-        s->crossmod_amount = 0.12f;
-        s->noise_level = 0.01f;
-        s->mozaik_mix = 0.08f;
-        s->mozaik_contrast_control = 0.60f;
-        s->mozaik_contrast = 1.72f;
-        s->mozaik_drift = 0.03f;
-        s->mixer_pressure = 0.32f;
-        s->filter_cutoff_hz = 1900.0f;
-        s->filter_cutoff_effective_hz = 1900.0f;
-        s->filter_resonance = 0.30f;
-        s->filter_drive = 0.35f;
-        s->filter_env_amount = 0.62f;
-        s->filter_keytrack = 0.62f;
-        s->amp_adsr = (ma_adsr){
-            .attack_ms = 12.0f,
-            .decay_ms = 160.0f,
-            .sustain = 0.68f,
-            .release_ms = 240.0f,
-        };
-        s->filter_adsr = (ma_adsr){
-            .attack_ms = 6.0f,
-            .decay_ms = 260.0f,
-            .sustain = 0.18f,
-            .release_ms = 220.0f,
-        };
-        s->macro[MA_MACRO_GRAVITACIJA] = 0.12f;
-        s->macro[MA_MACRO_BLOOM] = 0.04f;
-        s->macro[MA_MACRO_HEAT] = 0.25f;
-        s->macro[MA_MACRO_RUIN] = 0.22f;
-        s->macro[MA_MACRO_SWARM] = 0.03f;
-        s->body_drive = 0.15f;
-        s->width = 0.45f;
-        s->crossfeed = 0.08f;
-    }
+    for (int macro = 0; macro < MA_MACRO_COUNT; macro++)
+        s->macro[macro] = value.macro[macro];
     s->identity_zero = resolve_identity(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     resolve_effective_identity(s);
     initialize_control_smoothers(s);
@@ -1057,7 +1133,11 @@ void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
 }
 
 void ma_synth_init(ma_synth *s, float sample_rate_hz) {
-    ma_synth_init_patch(s, sample_rate_hz, MA_PATCH_TEPIH);
+    ma_synth_init_patch(s, sample_rate_hz, &ma_patch_tepih);
+}
+
+void ma_synth_apply_patch(ma_synth *s, const ma_patch *patch) {
+    ma_synth_init_patch(s, s->sample_rate_hz, patch);
 }
 
 void ma_synth_note_on(ma_synth *s, uint8_t channel, uint8_t note,
@@ -1118,7 +1198,7 @@ static float render_source_substep(ma_synth *s,
     uint64_t vco2_step_q48 = phase_step_q48(vco2_step);
     vco2_step = phase_turns(vco2_step_q48);
     float vco2_preview = preview_oscillator(&s->oscillator2, vco2_controls,
-                                            0.0f, vco2_step);
+                                            vco2_step);
     float cross_ratio = clamp_signal(
         1.0f + vco2_preview * controls->crossmod_amount * 0.25f,
         0.25f, 4.0f);
@@ -1165,9 +1245,8 @@ static float render_source_substep(ma_synth *s,
     }
 
     float vco1 = render_oscillator(&s->oscillator1, vco1_controls,
-                                   controls->vco1_sine_level, vco1_step,
-                                   0.0f);
-    float vco2 = render_oscillator(&s->oscillator2, vco2_controls, 0.0f,
+                                   vco1_step, 0.0f);
+    float vco2 = render_oscillator(&s->oscillator2, vco2_controls,
                                    vco2_step, sync_now);
     s->oscillator2.sync_residual += sync_next;
     advance_phase(&s->oscillator1, vco1_step_q48);
@@ -1400,14 +1479,10 @@ ma_frame ma_synth_tick(ma_synth *s) {
 void ma_synth_set_vco1(ma_synth *s, ma_vco_controls controls) {
     static constexpr ma_vco_controls fallback = {
         .saw_level = 0.70f, .pulse_level = 0.25f,
-        .triangle_level = 0.15f, .pulse_width = 0.50f,
+        .triangle_level = 0.15f, .sine_level = 0.20f,
+        .pulse_width = 0.50f,
     };
     s->vco1 = sanitize_vco(controls, fallback);
-    update_control_targets(s);
-}
-
-void ma_synth_set_vco1_sine(ma_synth *s, float level) {
-    s->vco1_sine_level = clamp_control(level, 0.0f, 1.0f, 0.20f);
     update_control_targets(s);
 }
 
@@ -1415,7 +1490,8 @@ void ma_synth_set_vco2(ma_synth *s, ma_vco_controls controls, float level,
                        int interval, float fine_cents) {
     static constexpr ma_vco_controls fallback = {
         .saw_level = 0.35f, .pulse_level = 0.20f,
-        .triangle_level = 0.55f, .pulse_width = 0.50f,
+        .triangle_level = 0.55f, .sine_level = 0.0f,
+        .pulse_width = 0.50f,
     };
     s->vco2 = sanitize_vco(controls, fallback);
     s->vco2_level = clamp_control(level, 0.0f, 1.0f, 0.62f);
@@ -1486,6 +1562,15 @@ void ma_synth_set_macro(ma_synth *s, ma_macro_id macro, float value) {
     resolve_effective_identity(s);
     update_control_targets(s);
     queue_effective_phason(s);
+}
+
+void ma_synth_set_output(ma_synth *s, float body_drive, float width,
+                         float crossfeed, float master_level) {
+    s->body_drive = clamp_control(body_drive, 0.0f, 1.0f, 0.10f);
+    s->width = clamp_control(width, 0.0f, 1.0f, 0.70f);
+    s->crossfeed = clamp_control(crossfeed, 0.0f, 1.0f, 0.0f);
+    s->master_level = clamp_control(master_level, 0.0f, 1.0f, 0.18f);
+    update_control_targets(s);
 }
 
 void ma_synth_set_pitch_bend(ma_synth *s, float semitones) {

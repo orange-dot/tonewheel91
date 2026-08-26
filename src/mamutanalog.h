@@ -40,18 +40,48 @@ typedef enum {
     MA_MACRO_COUNT,
 } ma_macro_id;
 
-typedef enum {
-    MA_PATCH_TEPIH,
-    MA_PATCH_LEAD,
-    MA_PATCH_COUNT,
-} ma_patch_id;
-
 typedef struct {
     float saw_level;
     float pulse_level;
     float triangle_level;
+    float sine_level;
     float pulse_width;
 } ma_vco_controls;
+
+typedef struct {
+    ma_vco_controls vco1;
+    ma_vco_controls vco2;
+    float vco2_level;
+    int vco2_interval;
+    float vco2_fine_cents;
+    float sync_amount;
+    float sync_softness;
+    float crossmod_amount;
+    float noise_level;
+    float mozaik_mix;
+    float mozaik_slope;
+    float mozaik_contrast;
+    float mozaik_phason;
+    float mozaik_drift;
+    float mixer_pressure;
+    float filter_cutoff_hz;
+    float filter_resonance;
+    float filter_drive;
+    float filter_env_amount;
+    float filter_keytrack;
+    ma_adsr amp_adsr;
+    ma_adsr filter_adsr;
+    float macro[MA_MACRO_COUNT];
+    float body_drive;
+    float width;
+    float crossfeed;
+    float master_level;
+} ma_patch;
+
+/* Compiled factory bank; hosted mirrors are not core dependencies. */
+extern const ma_patch ma_patch_tepih;
+extern const ma_patch ma_patch_lead;
+extern const ma_patch ma_patch_dubina;
 
 typedef struct {
     float current;
@@ -64,13 +94,13 @@ typedef struct {
     ma_smoother saw_level;
     ma_smoother pulse_level;
     ma_smoother triangle_level;
+    ma_smoother sine_level;
     ma_smoother pulse_width;
 } ma_vco_smoothers;
 
 typedef struct {
     ma_vco_smoothers vco1;
     ma_vco_smoothers vco2;
-    ma_smoother vco1_sine_level;
     ma_smoother vco2_level;
     ma_smoother vco2_fine_cents;
     ma_smoother sync_amount;
@@ -158,10 +188,8 @@ typedef struct {
 
 typedef struct {
     float sample_rate_hz;
-    ma_patch_id patch;
     ma_vco_controls vco1;
     ma_vco_controls vco2;
-    float vco1_sine_level;
     float vco2_level;
     int vco2_interval;
     float vco2_fine_cents;
@@ -228,7 +256,9 @@ typedef struct {
 
 void ma_synth_init(ma_synth *s, float sample_rate_hz);
 void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
-                         ma_patch_id patch);
+                         const ma_patch *patch);
+/* Retains the initialized sample rate and resets the complete voice/DSP. */
+void ma_synth_apply_patch(ma_synth *s, const ma_patch *patch);
 void ma_synth_note_on(ma_synth *s, uint8_t channel, uint8_t note,
                       uint8_t velocity);
 void ma_synth_note_off(ma_synth *s, uint8_t channel, uint8_t note,
@@ -242,7 +272,6 @@ void ma_synth_set_poly_pressure(ma_synth *s, uint8_t channel, uint8_t note,
 void ma_synth_set_mod_wheel(ma_synth *s, float amount);
 
 void ma_synth_set_vco1(ma_synth *s, ma_vco_controls controls);
-void ma_synth_set_vco1_sine(ma_synth *s, float level);
 void ma_synth_set_vco2(ma_synth *s, ma_vco_controls controls, float level,
                        int interval, float fine_cents);
 void ma_synth_set_oscillator_modulation(ma_synth *s, float sync_amount,
@@ -258,5 +287,7 @@ void ma_synth_set_filter_modulation(ma_synth *s, float envelope_amount,
 void ma_synth_set_amp_adsr(ma_synth *s, ma_adsr adsr);
 void ma_synth_set_filter_adsr(ma_synth *s, ma_adsr adsr);
 void ma_synth_set_macro(ma_synth *s, ma_macro_id macro, float value);
+void ma_synth_set_output(ma_synth *s, float body_drive, float width,
+                         float crossfeed, float master_level);
 
 #endif

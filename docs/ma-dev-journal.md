@@ -12,17 +12,17 @@ its internal sub-gates already has working code.
 ## Current position
 
 - Active milestone: **MA1 — complete one-voice hybrid**.
-- Active task: none. **MA1-7 — output and safety** is the next
-  queued task.
-- Last green aggregate run: GCC and Clang `make test`, 2026-08-26, at
-  tonewheel91 commit `4da5ae3` plus the MA1-6 working tree: core `111286`,
-  hosted `77`, MIDI map `22`; zero failures. Both core undefined-symbol audits
-  pass.
+- Active task: none. **MA1-7 — output and safety** is the next queued task.
+- Last green aggregate run: GCC, Clang and ASan/UBSan/
+  float-cast-overflow, 2026-08-26, on the MA1-6R working tree: core `111301`,
+  hosted `102`, MIDI map `22`; zero failures. Both compiler core-symbol audits
+  pass, and GCC `-fanalyzer` builds the full hosted/core graph without a
+  diagnostic.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
 - Core implementation status: MA0 and MA1-1 through MA1-6 are closed;
-  interstitial hosted tasks MA1-AUD and MA1-6-AUD are closed; work is stopped
-  at the boundary before MA1-7.
+  interstitial MA1-AUD, MA1-6-AUD, MA1-6P and MA1-6R are closed; work is
+  stopped at the boundary before MA1-7.
 
 ## MA0 task ledger
 
@@ -51,6 +51,8 @@ one.
 | MA1-AUD | done | MA1-5 | Hosted deterministic one-voice listening reel; three checked WAVs expose the landed MA1-5 path without changing the core or closing a later MA1 gate. |
 | MA1-6 | done | MA1-5 | Linear five-macro identity resolver, zero-frame deltas, performance overlays and 6 ms smoothers; zero macros are bit-identical. |
 | MA1-6-AUD | done | MA1-6 | Ten deterministic reference/macro/performance WAVs expose every MA1-6 identity and expression route without changing the core. |
+| MA1-6P | done | MA1-6 | VCO1 sine, compiled Tepih/Lead patch selection and deterministic listening evidence. |
+| MA1-6R | done | MA1-6P | Shared enriched Mamut sine, Dubina, concrete patch files and all-C Patchlab; spectral, round-trip, headless and live-null gates green. |
 | MA1-7 | queued | MA1-6 | Centered dual-mono output, body bypass, DC block, safety diagnostics and deterministic signatures. |
 | MA1-8 | queued | MA1-7 | `make exhibit-ma1`, evidence document, cost table and operator listening verdict; public MA1 gate closes only here. |
 
@@ -71,6 +73,9 @@ one.
 | 2026-08-26 | Insert MA1-AUD as a non-gating hosted exhibit between MA1-5 and MA1-6. | The landed source-to-VCA path is already audible; a deterministic WAV handoff obtains the first operator evidence without pulling live MIDI, final output conditioning or later product ownership forward. |
 | 2026-08-26 | Snapshot every smoothed destination once per public frame and hold it across the 8x source and 2x filter work. | Identity and performance changes then have one unambiguous sample boundary without creating substep-rate control motion. |
 | 2026-08-26 | Add channel ownership and ignored release-velocity accounting to the MA1 one-voice boundary, but leave sustain and panic semantics to MA2. | Matching poly pressure needs the pinned channel/note identity now; allocator, held/sustained ownership and panic transitions still belong to the five-card task. |
+| 2026-08-26 | Promote the enriched Mamut sine to the shared VCO control aggregate and pin H2/H3/H5 rather than adding a waveform menu. | VCO2 can dominate Dubina while both oscillators retain one concrete, auditable waveform mixer and the existing anti-alias path. |
+| 2026-08-26 | Supersede MAD8 with one concrete `ma_patch` value and a strict hosted `.mapatch` file; keep I/O and discovery out of the core. | Sound design now needs recall, but a generic registry/plugin framework would broaden the product boundary without helping this one instrument. |
+| 2026-08-26 | Build Patchlab as one ANSI/termios and synchronous ALSA C loop, with headless modes that never open ALSA. | The current one-card voice needs an audible vertical tool; ncurses, a GUI framework, threads and callbacks are unnecessary ownership. |
 
 ## Entries
 
@@ -296,3 +301,63 @@ one.
   The previous MA1-5/MA1-6 factory signatures are historical anchors and are
   superseded by the documented sine-bearing factory renders.
 - MA1-7 remains unstarted.
+
+### 2026-08-26 — MA1-6R Mamut sine, patch bank and Patchlab closed
+
+- Replaced the generic pure-sine contribution with the pinned Mamut source:
+  a softly driven fundamental plus a `.07` phase-offset second harmonic and
+  measured `.95591217` peak normalization. The same grouped control now
+  belongs to both VCOs, including VCO2 preview, hard-sync residual and
+  cross-mod routes.
+- Extended the alias referee to both VCOs at 44.1, 48, 96 and 192 kHz. Every
+  case pins H2/H3/H5 at `-24.00/-19.08/-36.67 dBc`; all out-of-contract
+  energy is `-94.26..-101.08 dBc`. The eight pre-existing saw, pulse, sync
+  and cross-mod cases remain green at `21.86..30.00 dB` reduction.
+- Added one concrete, sanitized `ma_patch`, the Tepih/Lead/Dubina compiled
+  bank and exact shipped file mirrors. The strict 45-field v1 parser rejects
+  unknown, duplicate, missing, malformed, non-finite and out-of-domain input;
+  its writer round-trips f32 exactly and commits through `fsync` plus rename.
+- Added the all-C Patchlab: list/dump/render headless modes, deterministic WAV
+  script, directory bank, ANSI/termios field editor, atomic save/reload,
+  QWERTY notes, synchronous ALSA PCM, optional raw MIDI, expression and
+  CC16..20 macro editing. Patch selection performs a full voice/DSP reset at
+  a period boundary; individual edits use grouped setters and smoothers.
+- The common reel signatures are Tepih `86bd2977cfdfda45`, Lead
+  `c62c23f3766f6955`, Dubina `57b228c4e2a8de39`, sine-off
+  `eb7d0c1253507751` and sine-on `ed3516126ed8d7e9`. Patchlab renders are
+  `28787fba70a2e465`, `7fbb7fa6dc495b39` and `8629294ca611fe05`.
+- GCC and Clang produce identical evidence and pass core `111301`, hosted
+  `102` and MIDI map `22` checks. ASan/UBSan/float-cast-overflow passes the
+  same suites plus both exhibits and Patchlab list/dump/render. GCC
+  `-fanalyzer`, both core-symbol audits and `git diff --check` are clean.
+  A pseudo-terminal live smoke through ALSA `null` loaded Dubina, ran the
+  screen/audio clock, quit cleanly and reported zero xruns; physical hardware
+  is intentionally left as an operator check.
+- MA1-7 remains unstarted; no final body, stereo, DC-block or safety claim is
+  made by this interstitial slice.
+
+### 2026-08-26 — Blade Runner Blues hosted audition pass
+
+- Added `driver/exhibit_ma_blues.c` as a concrete, all-C listening companion
+  for the Mamut Analog line: a slow F-sharp-minor synth-blues study with
+  fixed Tepih/Dubina beds, long Lead phrases, expressive pitch/pressure
+  gestures and bounded stereo reverb.
+- Removed the bell layer after listening review. The new Lead overlay has no
+  pulse, noise, sync, crossmod or meaningful drive; sine and triangle carry
+  the continuous tone, with 220 ms attack and 7 s release. Factory patch
+  files remain unchanged except for repairing the stale invalid Lead mirror
+  so the hosted round-trip gate can pass.
+- The exact complete Blues MIDI was not freely available during the search;
+  the output is therefore labelled an interpretation, not a transcription.
+  The executable writes a 180-second float WAV and performs a two-run FNV
+  check. Final evidence: 79 notes, 13-voice peak, 0 steals, peak `.825503`,
+  FNV `c45ddcf0f8b0a571`, WAV SHA-256
+  `9b762468972c0fe925acc27c75cc668d34b9f7f76c2634d395877fbc8dbb91fb`.
+- MA1-7/MA3 remain unstarted; this is a hosted audition, not the product
+  allocator or a live-device claim.
+## 2026-08-26 — Blade Runner Blues dark-register lead pass
+
+- Lead arrangement was reduced to nine long notes in the low register (MIDI 54–64), leaving long spans for Tepih and Dubina alone.
+- Lead timbre now leans toward the bed voices: triangle/sine dominant, dark 880 Hz filter, slow 520 ms attack and 9 s release.
+- A restrained amount of oscillator sync (`.055`), crossmod (`.035`) and filter drive (`.085`) adds movement without restoring the former bright or dirty character.
+- Pitch entry and vibrato were softened and delayed to keep the lead continuous and recessed.

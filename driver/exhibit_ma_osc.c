@@ -19,10 +19,12 @@ typedef struct {
 typedef struct {
     double alias;
     double total;
+    double harmonic[6];
 } spectral_energy;
 
 typedef enum {
     CASE_ORDINARY,
+    CASE_VCO2,
     CASE_SYNC,
     CASE_CROSSMOD,
 } case_kind;
@@ -89,6 +91,7 @@ static ma_vco_controls controls(shape_kind shape, float pulse_width) {
     return (ma_vco_controls){
         .saw_level = shape == SHAPE_SAW ? 1.0f : 0.0f,
         .pulse_level = shape == SHAPE_PULSE ? 1.0f : 0.0f,
+        .sine_level = shape == SHAPE_SINE ? 1.0f : 0.0f,
         .pulse_width = pulse_width,
     };
 }
@@ -97,8 +100,12 @@ static void configure_core(ma_synth *synth, const alias_case *test) {
     ma_synth_init(synth, test->sample_rate_hz);
     ma_synth_set_mozaik(synth, 0.0f, 0.5601133f, 0.5150284f, 0.0f, 0.0f);
     ma_vco_controls silent = { .pulse_width = 0.5f };
-    ma_synth_set_vco1_sine(synth, 0.0f);
-    if (test->kind == CASE_SYNC) {
+    if (test->kind == CASE_VCO2) {
+        ma_synth_set_vco1(synth, silent);
+        ma_synth_set_vco2(synth, controls(test->shape, test->pulse_width),
+                          1.0f, test->interval, 0.0f);
+        ma_synth_set_oscillator_modulation(synth, 0.0f, 0.0f, 0.0f, 0.0f);
+    } else if (test->kind == CASE_SYNC) {
         ma_synth_set_vco1(synth, silent);
         ma_synth_set_vco2(synth, controls(test->shape, test->pulse_width),
                           1.0f, test->interval, 0.0f);
@@ -106,8 +113,6 @@ static void configure_core(ma_synth *synth, const alias_case *test) {
                                            0.0f, 0.0f);
     } else {
         ma_synth_set_vco1(synth, controls(test->shape, test->pulse_width));
-        ma_synth_set_vco1_sine(synth,
-                               test->shape == SHAPE_SINE ? 1.0f : 0.0f);
         ma_synth_set_vco2(synth, controls(SHAPE_SAW, 0.5f), 0.0f,
                           test->interval, 0.0f);
         ma_synth_set_oscillator_modulation(
@@ -142,7 +147,7 @@ static void render_naive(float output[FFT_N], const alias_case *test) {
                                             0.0f, 0.45f);
         }
 
-        if (test->kind == CASE_SYNC)
+        if (test->kind == CASE_SYNC || test->kind == CASE_VCO2)
             sample = 0.5f * raw_wave(test->shape, slave_phase,
                                      test->pulse_width);
         else
@@ -209,8 +214,7 @@ static void fft(complex_sample value[FFT_N]) {
 
 static spectral_energy measure_energy(const float input[FFT_N],
                                       double fundamental_hz,
-                                      double sample_rate_hz,
-                                      bool fundamental_only) {
+                                      double sample_rate_hz) {
     static complex_sample spectrum[FFT_N];
     static bool legal[FFT_N / 2 + 1];
     memset(legal, 0, sizeof legal);
@@ -225,8 +229,7 @@ static spectral_energy measure_energy(const float input[FFT_N],
 
     for (int bin = 0; bin <= MASK_RADIUS; bin++) legal[bin] = true;
     for (int harmonic = 1;
-         harmonic * fundamental_hz < 0.5 * sample_rate_hz
-         && (!fundamental_only || harmonic == 1);
+         harmonic * fundamental_hz < 0.5 * sample_rate_hz;
          harmonic++) {
         int center = (int)llround(harmonic * fundamental_hz * FFT_N
                                  / sample_rate_hz);
@@ -243,6 +246,12 @@ static spectral_energy measure_energy(const float input[FFT_N],
                      + spectrum[bin].imag * spectrum[bin].imag;
         energy.total += power;
         if (!legal[bin]) energy.alias += power;
+        for (int harmonic = 1; harmonic <= 5; harmonic++) {
+            int center = (int)llround(harmonic * fundamental_hz * FFT_N
+                                     / sample_rate_hz);
+            if (bin >= center - MASK_RADIUS && bin <= center + MASK_RADIUS)
+                energy.harmonic[harmonic] += power;
+        }
     }
     return energy;
 }
@@ -273,6 +282,14 @@ int main(void) {
           96, 0, .50f, 0.0f, 96000.0f },
         { "vco1-sine-192k", CASE_ORDINARY, SHAPE_SINE,
           96, 0, .50f, 0.0f, 192000.0f },
+        { "vco2-sine-44k1", CASE_VCO2, SHAPE_SINE,
+          96, 0, .50f, 0.0f, 44100.0f },
+        { "vco2-sine-48k", CASE_VCO2, SHAPE_SINE,
+          96, 0, .50f, 0.0f, 48000.0f },
+        { "vco2-sine-96k", CASE_VCO2, SHAPE_SINE,
+          96, 0, .50f, 0.0f, 96000.0f },
+        { "vco2-sine-192k", CASE_VCO2, SHAPE_SINE,
+          96, 0, .50f, 0.0f, 192000.0f },
     };
     static float clean[FFT_N], naive[FFT_N];
     int failures = 0;
@@ -284,20 +301,33 @@ int main(void) {
         render_naive(naive, &cases[i]);
         spectral_energy clean_energy = measure_energy(
             clean, ma_note_frequency_hz(cases[i].note),
-            cases[i].sample_rate_hz, cases[i].shape == SHAPE_SINE);
+            cases[i].sample_rate_hz);
         spectral_energy naive_energy = measure_energy(
             naive, ma_note_frequency_hz(cases[i].note),
-            cases[i].sample_rate_hz, cases[i].shape == SHAPE_SINE);
+            cases[i].sample_rate_hz);
         double clean_dbc = 10.0 * log10(clean_energy.alias
                                         / clean_energy.total);
         double naive_dbc = 10.0 * log10(naive_energy.alias
                                         / naive_energy.total);
         double reduction_db = 10.0 * log10(clean_energy.alias
                                            / naive_energy.alias);
+        double h2_dbc = 10.0 * log10(clean_energy.harmonic[2]
+                                     / clean_energy.harmonic[1]);
+        double h3_dbc = 10.0 * log10(clean_energy.harmonic[3]
+                                     / clean_energy.harmonic[1]);
+        double h5_dbc = 10.0 * log10(clean_energy.harmonic[5]
+                                     / clean_energy.harmonic[1]);
         bool pass = cases[i].shape == SHAPE_SINE
-                  ? clean_dbc <= -80.0 : reduction_db <= -20.0;
+                  ? clean_dbc <= -80.0
+                    && h2_dbc >= -25.0 && h2_dbc <= -23.0
+                    && h3_dbc >= -20.0 && h3_dbc <= -18.0
+                    && h5_dbc >= -38.0 && h5_dbc <= -35.0
+                  : reduction_db <= -20.0;
         printf("%-28s %8.2f %9.2f %9.2f dB  %s\n", cases[i].name,
                clean_dbc, naive_dbc, reduction_db, pass ? "PASS" : "FAIL");
+        if (cases[i].shape == SHAPE_SINE)
+            printf("  harmonic contract H2 %6.2f  H3 %6.2f  H5 %6.2f dBc\n",
+                   h2_dbc, h3_dbc, h5_dbc);
         failures += !pass;
     }
     return failures ? 1 : 0;

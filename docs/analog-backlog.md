@@ -1,7 +1,7 @@
 # tonewheel91 — Mamut Analog implementation backlog
 
-Date: 2026-08-20. Status: active; MA0 through MA1-6P are complete, and MA1-7
-is the next queued task.
+Date: 2026-08-20. Status: active; MA0 through the interstitial MA1-6R are
+complete, and MA1-7 is the next queued task.
 This document is decision-complete for `MA0` and the first implementation
 slice; task state and validation results live in `docs/ma-dev-journal.md`.
 
@@ -97,14 +97,14 @@ These decisions are inputs to implementation, not milestone questions.
 | --- | --- |
 | MAD1 | Five fixed voice cards; free-card search is round-robin and exhaustion steals the oldest assigned card. |
 | MAD2 | Notes cover the full MIDI range 0..127 with no folding or out-of-compass rejection. |
-| MAD3 | VCO1 continuously mixes saw, pulse, triangle and sine; VCO2 mixes saw, pulse and triangle; Mozaik is a separate third/AUX source. |
+| MAD3 | Both VCOs continuously mix saw, pulse, triangle and Mamut sine; Mozaik is a separate third/AUX source. |
 | MAD4 | One nonlinear four-pole lowpass is the filter identity; no filter-model menu in MA0–MA5. |
 | MAD5 | Direct analog controls and five public Mamut macros coexist. All five macros at zero are an exact direct-path bypass and are the init default. |
 | MAD6 | GFM first lands as a hidden modulation field, not an audible parallel layer. Its post-MA4 factory amount is subtle and nonzero. |
 | MAD7 | The first playable version is stereo and includes fixed card spread followed by Mamut-derived chorus and reverb. |
-| MAD8 | No patch or preset file format. Two fixed initialization patches, grouped C setters, MIDI controls and logged render arguments are the v1 recall surface. |
+| MAD8 | The core exposes one concrete `ma_patch` value type and grouped C setters. Hosted tools own a strict versioned one-file-per-patch format; there is no generic registry, plug-in API or core I/O. |
 | MAD9 | MIDI control is a generic, stable map owned by this repo; a PC4 or other controller maps to it externally. |
-| MAD10 | The compiled factory Tepih is a dark pad with VCO1 sine, mild Mozaik, card character and effects; Lead is the second fixed initialization patch. |
+| MAD10 | Tepih is the compiled factory dark pad, Lead is the direct voice, and Dubina is the VCO2-sine-dominant low voice. |
 | MAD11 | Mozaik and GFM are committed. BCS, Orbita and Kosava require later evidence and promotion decisions; wild concepts stay research-only. |
 
 There are no open product decisions before MA1. Numeric derivations still
@@ -283,14 +283,17 @@ out-of-domain input; render functions assume initialized, finite state.
 
 ## Fixed initialization patches
 
-`ma_synth_init` selects the factory Tepih; `ma_synth_init_patch` may instead
-select Lead. There is no live loader, registry, schema or persistence. These
-values are public behavior and are not retuned silently:
+`ma_synth_init` selects the factory Tepih; `ma_synth_init_patch` accepts a
+concrete `ma_patch` value. Tepih, Lead and Dubina are compiled constants and
+have exact hosted mirrors in `patches/mamutanalog/`. The core has no I/O,
+allocation or registry; `driver/ma_patch_file.c` owns the strict version-1
+text format and atomic save. These values are public behavior and are not
+retuned silently:
 
 | Group | Default |
 | --- | --- |
 | VCO1 | saw `.70`, pulse `.25`, triangle `.15`, sine `.20`, pulse width `.50` |
-| VCO2 | saw `.35`, pulse `.20`, triangle `.55`, level `.62`, interval `0`, fine `+7 cents`, pulse width `.50` |
+| VCO2 | saw `.35`, pulse `.20`, triangle `.55`, sine `0`, level `.62`, interval `0`, fine `+7 cents`, pulse width `.50` |
 | Oscillator modulation | sync `0`, sync softness `0`, cross-mod `0` |
 | Noise | `.02` |
 | Mozaik | seed `0x4D6F7A31`, mix `.20`, golden slope, contrast `tau`, phason `0`, drift `.05` |
@@ -308,6 +311,10 @@ Lead uses VCO1 saw/pulse/triangle/sine `.75/.30/.05/.10`, VCO2
 `.55/.25/.10` at level `.55`, moderate sync/cross-mod `.22/.12`, cutoff
 `1900 Hz`, short amp/filter envelopes and nonzero Mamut identity. Its complete
 literal state is pinned in `docs/ma1-6p-audition.md`.
+
+Dubina uses a dominant VCO2 Mamut sine `.85` one octave below the played
+note, with VCO2 level `.90`; its complete literal state and the patch-file /
+Patchlab boundary are pinned in `docs/ma1-6r-patchlab.md`.
 
 MA3 contains one named listening ballot for small calibration of this
 default. A changed value must be logged against the table, rendered in an
