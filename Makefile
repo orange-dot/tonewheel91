@@ -20,7 +20,7 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 MA_OBJS := $(BUILD)/ma_voice.o
 MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
 
-all: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/exhibit_viz $(BUILD)/exhibit_ep_voice $(BUILD)/render_midi $(BUILD)/tw91 $(BUILD)/ep73 $(BUILD)/patchlab $(BUILD)/exhibit_ma_blues
+all: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/test_ma_architecture $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/exhibit_viz $(BUILD)/exhibit_ep_voice $(BUILD)/render_midi $(BUILD)/render_ma_architecture $(BUILD)/tw91 $(BUILD)/ep73 $(BUILD)/patchlab $(BUILD)/exhibit_ma_blues
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -38,6 +38,18 @@ $(BUILD)/ma_voice_source.o: src/ma_voice.c src/mamutanalog.h src/tonewheel.h | $
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -DMA_SOURCE_EVIDENCE -c $< -o $@
 
 $(BUILD)/wav.o: driver/wav.c driver/wav.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ma_dark_lead.o: driver/ma_dark_lead.c driver/ma_dark_lead.h src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ma_architecture_score.o: driver/ma_architecture_score.c driver/ma_architecture_score.h src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ma_architecture_render.o: driver/ma_architecture_render.c driver/ma_architecture_render.h driver/ma_architecture_score.h driver/ma_dark_lead.h driver/wav.h src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ma_architecture_cli.o: driver/ma_architecture_cli.c driver/ma_architecture_cli.h driver/ma_architecture_render.h driver/host_parse.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/host_parse.o: driver/host_parse.c driver/host_parse.h | $(BUILD)
@@ -69,6 +81,9 @@ $(BUILD)/test_hosted: test/hosted.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_
 
 $(BUILD)/test_midi_map: test/midi_map.c $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(CORE_OBJS) $(EP_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) test/midi_map.c $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(CORE_OBJS) $(EP_OBJS) $(LDFLAGS) -o $@ $(LDLIBS)
+
+$(BUILD)/test_ma_architecture: test/ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) test/ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 $(BUILD)/exhibit_phase: driver/exhibit_phase.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_phase.c $(BUILD)/wav.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
@@ -109,6 +124,9 @@ $(BUILD)/exhibit_ep_voice: driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $
 $(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) src/tonewheel.h src/epiano.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/render_midi.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) $(LDFLAGS) -o $@ $(LDLIBS)
 
+$(BUILD)/render_ma_architecture: driver/render_ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) driver/render_ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
 $(BUILD)/tw91: driver/main.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/main.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lasound $(LDLIBS)
 
@@ -136,8 +154,8 @@ $(BUILD)/exhibit_ma_identity: driver/exhibit_ma_identity.c $(BUILD)/wav.o $(MA_R
 $(BUILD)/exhibit_ma_patches: driver/exhibit_ma_patches.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_patches.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_blues: driver/exhibit_ma_blues.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_blues.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/exhibit_ma_blues: driver/exhibit_ma_blues.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_blues.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 $(BUILD)/exhibit_ma_output: driver/exhibit_ma_output.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_output.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
@@ -145,10 +163,11 @@ $(BUILD)/exhibit_ma_output: driver/exhibit_ma_output.c $(BUILD)/wav.o $(MA_RUNTI
 check-core-symbols: $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
 	sh test/check_core_symbols.sh "$(CC)" "$(BUILD)/core-combined.o" $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
 
-test: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(TEST_EXTRA)
+test: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/test_ma_architecture $(TEST_EXTRA)
 	$(BUILD)/test
 	$(BUILD)/test_hosted
 	$(BUILD)/test_midi_map
+	$(BUILD)/test_ma_architecture
 
 test-clang:
 	$(MAKE) BUILD=build/clang CC=clang test
@@ -188,6 +207,12 @@ audition-ma1-6r: $(BUILD)/patchlab $(BUILD)/exhibit_ma_patches
 
 audition-ma-blues: $(BUILD)/exhibit_ma_blues
 	./$(BUILD)/exhibit_ma_blues
+
+audition-ma-architecture-preview: $(BUILD)/render_ma_architecture
+	./$(BUILD)/render_ma_architecture -d 180 -o $(BUILD)/mamut_architecture_180s.wav
+
+audition-ma-architecture: $(BUILD)/render_ma_architecture
+	./$(BUILD)/render_ma_architecture -o $(BUILD)/mamut_architecture_v1.wav
 
 audition-ma1-7: $(BUILD)/exhibit_ma_output
 	./$(BUILD)/exhibit_ma_output
@@ -243,4 +268,4 @@ viz: $(BUILD)/exhibit_viz
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-clang sanitize analyze fuzz-smf derive-ma-constants exhibit-ma1-osc audition-ma1-5 audition-ma1-6 audition-ma1-6p audition-ma1-6r audition-ma1-7 audition-ma-blues check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean
+.PHONY: all test test-clang sanitize analyze fuzz-smf derive-ma-constants exhibit-ma1-osc audition-ma1-5 audition-ma1-6 audition-ma1-6p audition-ma1-6r audition-ma1-7 audition-ma-blues audition-ma-architecture-preview audition-ma-architecture check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean

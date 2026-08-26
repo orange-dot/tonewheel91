@@ -10,17 +10,21 @@
 #include <string.h>
 
 #include "../src/mamutanalog.h"
+#include "ma_dark_lead.h"
 #include "wav.h"
 
 enum {
     RATE = 48000,
-    PERFORMANCE_SECONDS = 168,
-    TAIL_SECONDS = 12,
+    PERFORMANCE_SECONDS = 234,
+    TAIL_SECONDS = 14,
     FRAME_COUNT = RATE * (PERFORMANCE_SECONDS + TAIL_SECONDS),
-    PAD_VOICES = 8,
-    BASS_VOICES = 2,
+    PAD_DARK_VOICES = 8,
+    PAD_HAZE_VOICES = 6,
+    BASS_ROOT_VOICES = 2,
+    BASS_MOTION_VOICES = 3,
     LEAD_VOICES = 4,
-    VOICE_COUNT = PAD_VOICES + BASS_VOICES + LEAD_VOICES,
+    VOICE_COUNT = PAD_DARK_VOICES + PAD_HAZE_VOICES
+                + BASS_ROOT_VOICES + BASS_MOTION_VOICES + LEAD_VOICES,
     CONTROL_PERIOD = 64,
     COMB_COUNT = 4,
     COMB_CAPACITY = 1536,
@@ -28,12 +32,15 @@ enum {
     ALLPASS_CAPACITY = 640,
 };
 
-static constexpr char OUTPUT_PATH[] = "build/ma_blade_runner_blues.wav";
+static constexpr char OUTPUT_PATH[] =
+    "build/ma_blade_runner_blues_expanded.wav";
 static constexpr float TWO_PI = 6.2831853071795864769f;
 
 typedef enum {
-    ROLE_PAD,
-    ROLE_BASS,
+    ROLE_PAD_DARK,
+    ROLE_PAD_HAZE,
+    ROLE_BASS_ROOT,
+    ROLE_BASS_MOTION,
     ROLE_LEAD,
 } voice_role;
 
@@ -82,7 +89,7 @@ typedef struct {
     unsigned peak_voices;
 } performance_metrics;
 
-static const note_event PAD_EVENTS[] = {
+static const note_event PAD_DARK_EVENTS[] = {
     {   0, 21, -.72f, .18f, 42, 76 },
     {   0, 21, -.24f, .20f, 49, 70 },
     {   0, 21,  .24f, .22f, 52, 72 },
@@ -115,13 +122,45 @@ static const note_event PAD_EVENTS[] = {
     { 126, 21, -.22f, .20f, 47, 68 },
     { 126, 21,  .22f, .18f, 54, 70 },
     { 126, 21,  .68f, .24f, 56, 72 },
-    { 144, 20, -.72f, .24f, 42, 78 },
-    { 144, 20, -.24f, .22f, 49, 72 },
-    { 144, 20,  .24f, .20f, 52, 74 },
-    { 144, 20,  .72f, .26f, 57, 72 },
+    { 144, 21, -.72f, .24f, 42, 78 },
+    { 144, 21, -.24f, .22f, 49, 72 },
+    { 144, 21,  .24f, .20f, 52, 74 },
+    { 144, 21,  .72f, .26f, 57, 72 },
+    { 162, 21, -.68f, .22f, 37, 76 },
+    { 162, 21, -.22f, .20f, 44, 70 },
+    { 162, 21,  .22f, .24f, 49, 74 },
+    { 162, 21,  .68f, .20f, 52, 70 },
+    { 180, 21, -.72f, .24f, 38, 78 },
+    { 180, 21, -.24f, .20f, 45, 70 },
+    { 180, 21,  .24f, .22f, 50, 72 },
+    { 180, 21,  .72f, .24f, 54, 70 },
+    { 198, 21, -.70f, .20f, 40, 76 },
+    { 198, 21, -.23f, .22f, 47, 70 },
+    { 198, 21,  .23f, .24f, 52, 74 },
+    { 198, 21,  .70f, .20f, 56, 70 },
+    { 216, 18, -.72f, .24f, 42, 80 },
+    { 216, 18, -.24f, .22f, 49, 74 },
+    { 216, 18,  .24f, .20f, 52, 76 },
+    { 216, 18,  .72f, .26f, 57, 74 },
 };
 
-static const note_event BASS_EVENTS[] = {
+static const note_event PAD_HAZE_EVENTS[] = {
+    {   6, 12, -.48f, .14f, 49, 60 }, {   6, 12,  .48f, .18f, 57, 58 },
+    {  24, 12, -.44f, .18f, 45, 62 }, {  24, 12,  .44f, .14f, 54, 58 },
+    {  42, 12, -.50f, .16f, 47, 60 }, {  42, 12,  .50f, .20f, 56, 62 },
+    {  60, 12, -.46f, .20f, 42, 64 }, {  60, 12,  .46f, .16f, 50, 60 },
+    {  78, 12, -.52f, .14f, 45, 60 }, {  78, 12,  .52f, .18f, 54, 62 },
+    {  96, 12, -.48f, .18f, 44, 62 }, {  96, 12,  .48f, .14f, 52, 58 },
+    { 114, 12, -.44f, .16f, 49, 64 }, { 114, 12,  .44f, .20f, 57, 60 },
+    { 132, 12, -.50f, .20f, 47, 62 }, { 132, 12,  .50f, .16f, 56, 60 },
+    { 150, 12, -.46f, .14f, 49, 64 }, { 150, 12,  .46f, .18f, 57, 62 },
+    { 168, 12, -.52f, .18f, 44, 62 }, { 168, 12,  .52f, .14f, 52, 60 },
+    { 186, 12, -.48f, .16f, 45, 64 }, { 186, 12,  .48f, .20f, 54, 62 },
+    { 204, 12, -.44f, .20f, 47, 64 }, { 204, 12,  .44f, .16f, 56, 62 },
+    { 222, 10, -.50f, .18f, 49, 66 }, { 222, 10,  .50f, .22f, 57, 64 },
+};
+
+static const note_event BASS_ROOT_EVENTS[] = {
     {   0, 19.5f, 0, .18f, 42, 92 },
     {  18, 19.5f, 0, .20f, 38, 88 },
     {  36, 19.5f, 0, .22f, 40, 90 },
@@ -130,7 +169,36 @@ static const note_event BASS_EVENTS[] = {
     {  90, 19.5f, 0, .26f, 37, 96 },
     { 108, 19.5f, 0, .24f, 42, 98 },
     { 126, 19.5f, 0, .22f, 40, 92 },
-    { 144, 20.0f, 0, .28f, 42, 100 },
+    { 144, 19.5f, 0, .28f, 42, 100 },
+    { 162, 19.5f, 0, .24f, 37, 96 },
+    { 180, 19.5f, 0, .26f, 38, 98 },
+    { 198, 19.5f, 0, .24f, 40, 96 },
+    { 216, 18.0f, 0, .30f, 42, 102 },
+};
+
+static const note_event BASS_MOTION_EVENTS[] = {
+    {  10, 5.0f, -.18f, .30f, 42, 78 },
+    {  16, 3.0f,  .16f, .34f, 45, 82 },
+    {  27, 6.0f, -.14f, .28f, 40, 76 },
+    {  34, 4.0f,  .18f, .36f, 47, 84 },
+    {  47, 7.0f, -.16f, .32f, 38, 80 },
+    {  58, 4.0f,  .14f, .34f, 42, 82 },
+    {  64, 3.0f, -.18f, .38f, 49, 86 },
+    {  76, 6.0f,  .16f, .30f, 45, 80 },
+    {  84, 4.0f, -.14f, .40f, 52, 88 },
+    { 100, 5.0f,  .18f, .32f, 44, 82 },
+    { 106, 3.0f, -.16f, .36f, 47, 84 },
+    { 119, 7.0f,  .14f, .30f, 42, 80 },
+    { 130, 5.0f, -.18f, .34f, 40, 82 },
+    { 137, 4.0f,  .16f, .38f, 47, 86 },
+    { 154, 6.0f, -.14f, .32f, 42, 82 },
+    { 166, 4.0f,  .18f, .36f, 44, 84 },
+    { 173, 3.0f, -.16f, .40f, 49, 88 },
+    { 188, 7.0f,  .14f, .34f, 38, 82 },
+    { 200, 5.0f, -.18f, .36f, 40, 84 },
+    { 207, 4.0f,  .16f, .42f, 47, 90 },
+    { 220, 7.0f, -.14f, .36f, 42, 86 },
+    { 228, 4.0f,  .18f, .44f, 49, 92 },
 };
 
 static const note_event LEAD_EVENTS[] = {
@@ -143,67 +211,90 @@ static const note_event LEAD_EVENTS[] = {
     { 128.0f, 8.0f, -.04f, .48f, 61, 108 },
     { 148.0f, 8.5f,  .05f, .52f, 64, 110 },
     { 160.0f, 6.5f, -.03f, .56f, 61, 108 },
+    { 181.0f, 7.5f,  .04f, .48f, 57, 104 },
+    { 204.0f, 8.0f, -.05f, .54f, 62, 110 },
+    { 224.0f, 7.5f,  .03f, .58f, 64, 112 },
 };
 
 static float output[2 * FRAME_COUNT];
 
 static ma_patch performance_patch(voice_role role) {
-    ma_patch patch = role == ROLE_PAD ? ma_patch_tepih
-                   : role == ROLE_BASS ? ma_patch_dubina
-                   : ma_patch_lead;
-    if (role == ROLE_PAD) {
+    ma_patch patch = role <= ROLE_PAD_HAZE ? ma_patch_tepih
+                   : role <= ROLE_BASS_MOTION ? ma_patch_dubina
+                   : ma_dark_lead_patch();
+    if (role == ROLE_PAD_DARK) {
         patch.filter_cutoff_hz = 720.0f;
         patch.amp_adsr.release_ms = 6200.0f;
         patch.filter_adsr.release_ms = 5200.0f;
         patch.width = .86f;
         patch.master_level = .15f;
-    } else if (role == ROLE_BASS) {
-        patch.filter_cutoff_hz = 520.0f;
-        patch.amp_adsr.release_ms = 2200.0f;
-        patch.master_level = .16f;
-    } else if (role == ROLE_LEAD) {
-        patch.vco1.saw_level = .04f;
-        patch.vco1.pulse_level = 0.0f;
-        patch.vco1.triangle_level = .34f;
-        patch.vco1.sine_level = .52f;
-        patch.vco2.saw_level = .03f;
+    } else if (role == ROLE_PAD_HAZE) {
+        patch.vco1.saw_level = .24f;
+        patch.vco1.pulse_level = .05f;
+        patch.vco1.triangle_level = .36f;
+        patch.vco1.sine_level = .55f;
+        patch.vco2.saw_level = .08f;
         patch.vco2.pulse_level = 0.0f;
-        patch.vco2.triangle_level = .31f;
-        patch.vco2.sine_level = .49f;
-        patch.vco2_level = .68f;
-        patch.sync_amount = .055f;
-        patch.crossmod_amount = .035f;
-        patch.noise_level = 0.0f;
-        patch.mozaik_mix = 0.0f;
-        patch.mixer_pressure = .05f;
-        patch.filter_cutoff_hz = 880.0f;
-        patch.filter_resonance = .18f;
-        patch.filter_drive = .085f;
-        patch.filter_env_amount = .18f;
-        patch.amp_adsr = (ma_adsr){ 520.0f, 1800.0f, .78f, 9000.0f };
-        patch.filter_adsr = (ma_adsr){ 800.0f, 2200.0f, .38f, 7800.0f };
-        patch.macro[MA_MACRO_GRAVITACIJA] = .06f;
-        patch.macro[MA_MACRO_BLOOM] = .10f;
-        patch.macro[MA_MACRO_HEAT] = 0.0f;
-        patch.macro[MA_MACRO_RUIN] = 0.0f;
-        patch.macro[MA_MACRO_SWARM] = 0.0f;
-        patch.body_drive = .045f;
-        patch.width = .58f;
-        patch.crossfeed = .20f;
-        patch.master_level = .20f;
+        patch.vco2.triangle_level = .48f;
+        patch.vco2.sine_level = .42f;
+        patch.vco2_level = .56f;
+        patch.vco2_fine_cents = -4.0f;
+        patch.noise_level = .015f;
+        patch.mozaik_mix = .12f;
+        patch.filter_cutoff_hz = 980.0f;
+        patch.filter_resonance = .12f;
+        patch.filter_drive = .07f;
+        patch.filter_env_amount = .20f;
+        patch.amp_adsr = (ma_adsr){ 1400.0f, 2400.0f, .74f, 7800.0f };
+        patch.filter_adsr = (ma_adsr){ 1200.0f, 2600.0f, .42f, 6800.0f };
+        patch.macro[MA_MACRO_BLOOM] = .18f;
+        patch.macro[MA_MACRO_SWARM] = .08f;
+        patch.body_drive = .06f;
+        patch.width = .92f;
+        patch.master_level = .13f;
+    } else if (role == ROLE_BASS_ROOT) {
+        patch.filter_cutoff_hz = 420.0f;
+        patch.amp_adsr.release_ms = 2800.0f;
+        patch.master_level = .14f;
+    } else if (role == ROLE_BASS_MOTION) {
+        patch.vco1.saw_level = .06f;
+        patch.vco1.triangle_level = .24f;
+        patch.vco1.sine_level = .30f;
+        patch.vco2.saw_level = .03f;
+        patch.vco2.triangle_level = .30f;
+        patch.vco2.sine_level = .72f;
+        patch.vco2_level = .72f;
+        patch.crossmod_amount = .025f;
+        patch.filter_cutoff_hz = 680.0f;
+        patch.filter_resonance = .16f;
+        patch.filter_drive = .12f;
+        patch.filter_env_amount = .28f;
+        patch.amp_adsr = (ma_adsr){ 80.0f, 520.0f, .72f, 3200.0f };
+        patch.filter_adsr = (ma_adsr){ 120.0f, 720.0f, .36f, 2600.0f };
+        patch.macro[MA_MACRO_BLOOM] = .05f;
+        patch.macro[MA_MACRO_HEAT] = .08f;
+        patch.body_drive = .10f;
+        patch.master_level = .13f;
     }
     return patch;
 }
 
 static void voice_range(voice_role role, unsigned *first, unsigned *count) {
-    if (role == ROLE_PAD) {
+    if (role == ROLE_PAD_DARK) {
         *first = 0;
-        *count = PAD_VOICES;
-    } else if (role == ROLE_BASS) {
-        *first = PAD_VOICES;
-        *count = BASS_VOICES;
+        *count = PAD_DARK_VOICES;
+    } else if (role == ROLE_PAD_HAZE) {
+        *first = PAD_DARK_VOICES;
+        *count = PAD_HAZE_VOICES;
+    } else if (role == ROLE_BASS_ROOT) {
+        *first = PAD_DARK_VOICES + PAD_HAZE_VOICES;
+        *count = BASS_ROOT_VOICES;
+    } else if (role == ROLE_BASS_MOTION) {
+        *first = PAD_DARK_VOICES + PAD_HAZE_VOICES + BASS_ROOT_VOICES;
+        *count = BASS_MOTION_VOICES;
     } else {
-        *first = PAD_VOICES + BASS_VOICES;
+        *first = PAD_DARK_VOICES + PAD_HAZE_VOICES
+               + BASS_ROOT_VOICES + BASS_MOTION_VOICES;
         *count = LEAD_VOICES;
     }
 }
@@ -247,7 +338,7 @@ static performance_voice *start_note(performance_voice voices[VOICE_COUNT],
     ma_synth_set_channel_pressure(&choice->synth, event.pressure);
     ma_synth_set_mod_wheel(&choice->synth,
                            role == ROLE_LEAD ? .22f + .35f * event.pressure
-                           : role == ROLE_PAD ? .18f : .06f);
+                           : role <= ROLE_PAD_HAZE ? .18f : .06f);
     ma_synth_note_on(&choice->synth, (uint8_t)role, event.note, event.velocity);
     ma_synth_set_poly_pressure(&choice->synth, (uint8_t)role, event.note,
                                event.pressure);
@@ -266,9 +357,11 @@ static void start_due_events(const note_event *events, size_t count,
 }
 
 static float role_gain(voice_role role) {
-    if (role == ROLE_PAD) return .31f;
-    if (role == ROLE_BASS) return .64f;
-    return .78f;
+    if (role == ROLE_PAD_DARK) return .28f;
+    if (role == ROLE_PAD_HAZE) return .20f;
+    if (role == ROLE_BASS_ROOT) return .52f;
+    if (role == ROLE_BASS_MOTION) return .38f;
+    return .68f;
 }
 
 static void update_lead_expression(performance_voice *voice, size_t frame) {
@@ -367,20 +460,34 @@ static ma_frame reverb_tick(performance_reverb *reverb, ma_frame dry) {
 static bool render(float dst[2 * FRAME_COUNT], performance_metrics *metrics) {
     performance_voice voices[VOICE_COUNT] = { 0 };
     performance_reverb reverb = { 0 };
-    size_t next_pad = 0, next_bass = 0, next_lead = 0;
+    size_t next_pad_dark = 0, next_pad_haze = 0;
+    size_t next_bass_root = 0, next_bass_motion = 0, next_lead = 0;
     *metrics = (performance_metrics){ 0 };
 
     for (size_t frame = 0; frame < FRAME_COUNT; frame++) {
-        start_due_events(PAD_EVENTS, sizeof PAD_EVENTS / sizeof *PAD_EVENTS,
-                         &next_pad, ROLE_PAD, frame, voices, metrics);
-        start_due_events(BASS_EVENTS, sizeof BASS_EVENTS / sizeof *BASS_EVENTS,
-                         &next_bass, ROLE_BASS, frame, voices, metrics);
+        start_due_events(PAD_DARK_EVENTS,
+                         sizeof PAD_DARK_EVENTS / sizeof *PAD_DARK_EVENTS,
+                         &next_pad_dark, ROLE_PAD_DARK,
+                         frame, voices, metrics);
+        start_due_events(PAD_HAZE_EVENTS,
+                         sizeof PAD_HAZE_EVENTS / sizeof *PAD_HAZE_EVENTS,
+                         &next_pad_haze, ROLE_PAD_HAZE,
+                         frame, voices, metrics);
+        start_due_events(BASS_ROOT_EVENTS,
+                         sizeof BASS_ROOT_EVENTS / sizeof *BASS_ROOT_EVENTS,
+                         &next_bass_root, ROLE_BASS_ROOT,
+                         frame, voices, metrics);
+        start_due_events(BASS_MOTION_EVENTS,
+                         sizeof BASS_MOTION_EVENTS
+                         / sizeof *BASS_MOTION_EVENTS,
+                         &next_bass_motion, ROLE_BASS_MOTION,
+                         frame, voices, metrics);
         start_due_events(LEAD_EVENTS, sizeof LEAD_EVENTS / sizeof *LEAD_EVENTS,
                          &next_lead, ROLE_LEAD, frame, voices, metrics);
         ma_frame sample = reverb_tick(&reverb,
                                       render_voices(voices, frame, metrics));
-        sample.left *= 1.12f;
-        sample.right *= 1.12f;
+        sample.left *= 2.35f;
+        sample.right *= 2.35f;
         if (!isfinite(sample.left) || !isfinite(sample.right)) {
             metrics->nonfinite++;
             sample = (ma_frame){ 0 };
@@ -399,8 +506,9 @@ static bool render(float dst[2 * FRAME_COUNT], performance_metrics *metrics) {
 }
 
 int main(void) {
-    puts("Mamut Analog — F# minor Blade Runner blues performance study");
+    puts("Mamut Analog — expanded F# minor Blade Runner blues study");
     puts("  hosted MA1 overdub; not the future MA2 allocator");
+    puts("  dark/haze Tepih, root/motion Dubina, sparse dark Lead");
 
     performance_metrics first = { 0 }, second = { 0 };
     bool first_ok = render(output, &first);

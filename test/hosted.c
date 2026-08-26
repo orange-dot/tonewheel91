@@ -130,6 +130,10 @@ static uint32_t get_u32(const unsigned char *p) {
          | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
+static uint16_t get_u16(const unsigned char *p) {
+    return (uint16_t)((uint16_t)p[0] | (uint16_t)p[1] << 8);
+}
+
 static void test_wav(void) {
     char path[] = "/tmp/tonewheel91-wav-XXXXXX";
     int descriptor = mkstemp(path);
@@ -144,11 +148,19 @@ static void test_wav(void) {
     size_t size = file ? fread(bytes, 1, sizeof bytes, file) : 0;
     if (file) fclose(file);
     CHECK(size == 72, "WAV size is %zu, expected 72", size);
-    CHECK(!memcmp(bytes, "RIFF", 4) && !memcmp(bytes + 48, "data", 4),
+    CHECK(!memcmp(bytes, "RIFF", 4) && !memcmp(bytes + 8, "WAVE", 4)
+          && !memcmp(bytes + 12, "fmt ", 4)
+          && !memcmp(bytes + 36, "fact", 4)
+          && !memcmp(bytes + 48, "data", 4),
           "WAV chunk IDs are invalid");
     CHECK(get_u32(bytes + 4) == 64 && get_u32(bytes + 44) == 2
           && get_u32(bytes + 52) == 16,
           "WAV sizes or fact frame count are invalid");
+    CHECK(get_u32(bytes + 16) == 16 && get_u16(bytes + 20) == 3
+          && get_u16(bytes + 22) == 2 && get_u32(bytes + 24) == 48000
+          && get_u32(bytes + 28) == 384000 && get_u16(bytes + 32) == 8
+          && get_u16(bytes + 34) == 32 && get_u32(bytes + 40) == 4,
+          "WAV float format fields are invalid");
     CHECK(wav_write_f32(path, samples, UINT32_MAX, 48000, 2) == -1,
           "oversized RIFF was accepted");
     CHECK(wav_write_f32(path, samples, 2, 0, 2) == -1,
@@ -159,6 +171,40 @@ static void test_wav(void) {
           "zero-frame WAV with no sample storage was rejected");
     CHECK(wav_write_f32(path, 0, 1, 48000, 2) == -1,
           "nonempty WAV accepted a null sample pointer");
+
+    wav_f32_writer writer = { 0 };
+    CHECK(wav_f32_open(&writer, path, 2, 48000, 2) == 0
+          && wav_f32_write(&writer, samples, 1) == 0
+          && wav_f32_write(&writer, samples + 2, 1) == 0
+          && wav_f32_close(&writer) == 0,
+          "valid block WAV write failed");
+    file = fopen(path, "rb");
+    memset(bytes, 0, sizeof bytes);
+    size = file ? fread(bytes, 1, sizeof bytes, file) : 0;
+    if (file) fclose(file);
+    CHECK(size == 72 && get_u32(bytes + 44) == 2
+          && get_u32(bytes + 52) == 16
+          && !memcmp(bytes + 56, samples, sizeof samples),
+          "block WAV header or samples are invalid");
+
+    writer = (wav_f32_writer){ 0 };
+    CHECK(wav_f32_open(&writer, path, 1, 48000, 2) == 0
+          && wav_f32_write(&writer, samples, 2) == -1
+          && wav_f32_close(&writer) == -1
+          && access(path, F_OK) < 0,
+          "block WAV overflow did not remove the incomplete file");
+    writer = (wav_f32_writer){ 0 };
+    CHECK(wav_f32_open(&writer, path, 2, 48000, 2) == 0
+          && wav_f32_write(&writer, samples, 1) == 0
+          && wav_f32_close(&writer) == -1
+          && access(path, F_OK) < 0,
+          "incomplete block WAV close was accepted");
+    writer = (wav_f32_writer){ 0 };
+    CHECK(wav_f32_open(&writer, path, 2, 48000, 2) == 0,
+          "block WAV open for abort failed");
+    wav_f32_abort(&writer);
+    CHECK(access(path, F_OK) < 0 && !writer.file && !writer.path,
+          "block WAV abort left a temporary file or live state");
     remove(path);
 }
 

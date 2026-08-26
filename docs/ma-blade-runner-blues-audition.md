@@ -38,17 +38,28 @@ polyphony or stealing semantics.
 
 ## Evidence
 
-The regenerated GCC render is 180 seconds (168 seconds of material plus a
-12-second tail), 48 kHz stereo float:
+The original MA1-6R GCC render at commit `6eb8563` is 180 seconds (168 seconds
+of material plus a 12-second tail), 48 kHz stereo float. Its WAV SHA-256 was
+`c2c9ce7dc966009798197ff8784b019785541a2b931eaa5a3b0542779811cbcf`;
+`ffmpeg ebur128` reported −16.1 LUFS integrated and −1.7 dBFS true peak.
+
+Commit `7fe5582` subsequently put the MA1-7 body, DC blocker, master level and
+safety transfer into every regular `ma_synth_tick`. That core change necessarily
+moved the hosted exhibit before the dark-lead helper was extracted. At current
+HEAD, a complete regeneration reports:
 
 ```text
-54 notes (including nine Lead entries), with the same bounded hosted desk and
-deterministic two-pass render check.
+54 notes; 11-voice peak; 0 steals
+sample peak 0.114823; RMS 0.022672; finite, with headroom
+FNV64 6dce29d5d0521e87 (both runs)
+SHA-256 e6743424dfdebf8c9a9dd6fb1d942a8a6fb1fb578640bc859254c4002a6d745b
 ```
 
-The WAV is 48 kHz, 32-bit float, stereo, 180 seconds, SHA-256
-`c2c9ce7dc966009798197ff8784b019785541a2b931eaa5a3b0542779811cbcf`.
-`ffmpeg ebur128` reports −16.1 LUFS integrated and −1.7 dBFS true peak.
+The MA architecture work moves the dark patch byte-for-byte from this source
+into `ma_dark_lead_patch()`. A focused regression compares the full patch and
+20,000 synthesized frames against a copy of the former local construction; it
+therefore distinguishes that source-only extraction from the earlier MA1-7
+core-output change.
 
-Build/test gates: GCC `make test` (111301 + 102 + 22 checks), Clang equivalent
-with `CCACHE_DISABLE=1`, Clang warning-clean exhibit build, and `git diff --check`.
+Build/test gates: GCC and Clang `make test`, sanitizer coverage, a warning-clean
+exhibit build, and `git diff --check`.
