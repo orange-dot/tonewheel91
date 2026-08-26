@@ -18,6 +18,7 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 # The Mamut Analog line is a sibling core. Keep it out of the organ and EP
 # products; the aggregate core test and symbol audit are its first hosts.
 MA_OBJS := $(BUILD)/ma_voice.o
+MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
 
 all: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/exhibit_viz $(BUILD)/exhibit_ep_voice $(BUILD)/render_midi $(BUILD)/tw91 $(BUILD)/ep73 $(BUILD)/patchlab $(BUILD)/exhibit_ma_blues
 
@@ -63,8 +64,8 @@ $(BUILD)/viz.o: driver/viz.c driver/viz.h | $(BUILD)
 $(BUILD)/test: test/test.c $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS) src/tonewheel.h src/epiano.h src/mamutanalog.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) test/test.c $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/test_hosted: test/hosted.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(MA_OBJS) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) test/hosted.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(MA_OBJS) $(LDFLAGS) -o $@ -lasound $(LDLIBS)
+$(BUILD)/test_hosted: test/hosted.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) test/hosted.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lasound $(LDLIBS)
 
 $(BUILD)/test_midi_map: test/midi_map.c $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(CORE_OBJS) $(EP_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) test/midi_map.c $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(CORE_OBJS) $(EP_OBJS) $(LDFLAGS) -o $@ $(LDLIBS)
@@ -114,8 +115,8 @@ $(BUILD)/tw91: driver/main.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/m
 $(BUILD)/ep73: driver/ep73.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) src/epiano.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/ep73.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) $(LDFLAGS) -o $@ -lasound $(LDLIBS)
 
-$(BUILD)/patchlab: driver/ma_patchlab.c driver/ma_patch_file.h $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(BUILD)/midi.o $(MA_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) driver/ma_patchlab.c $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(BUILD)/midi.o $(MA_OBJS) $(LDFLAGS) -o $@ -lasound -lm $(LDLIBS)
+$(BUILD)/patchlab: driver/ma_patchlab.c driver/ma_patch_file.h $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(BUILD)/midi.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) driver/ma_patchlab.c $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(BUILD)/midi.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lasound -lm $(LDLIBS)
 
 $(BUILD)/fuzz_smf: test/fuzz_smf.c driver/smf.c driver/smf.h | $(BUILD)
 	$(FUZZ_CC) -std=c23 -O1 -g -fsanitize=fuzzer,address,undefined test/fuzz_smf.c driver/smf.c -o $@
@@ -123,20 +124,23 @@ $(BUILD)/fuzz_smf: test/fuzz_smf.c driver/smf.c driver/smf.h | $(BUILD)
 $(BUILD)/derive_ma_constants: driver/derive_ma_constants.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/derive_ma_constants.c $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_osc: driver/exhibit_ma_osc.c $(BUILD)/ma_voice_source.o src/mamutanalog.h src/tonewheel.h | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -DMA_SOURCE_EVIDENCE driver/exhibit_ma_osc.c $(BUILD)/ma_voice_source.o $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/exhibit_ma_osc: driver/exhibit_ma_osc.c $(BUILD)/ma_voice_source.o $(BUILD)/drive.o src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DMA_SOURCE_EVIDENCE driver/exhibit_ma_osc.c $(BUILD)/ma_voice_source.o $(BUILD)/drive.o $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_voice: driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/exhibit_ma_voice: driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_identity: driver/exhibit_ma_identity.c $(BUILD)/wav.o $(MA_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_identity.c $(BUILD)/wav.o $(MA_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/exhibit_ma_identity: driver/exhibit_ma_identity.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_identity.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_patches: driver/exhibit_ma_patches.c $(BUILD)/wav.o $(MA_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_patches.c $(BUILD)/wav.o $(MA_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/exhibit_ma_patches: driver/exhibit_ma_patches.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_patches.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_blues: driver/exhibit_ma_blues.c $(BUILD)/wav.o $(MA_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_blues.c $(BUILD)/wav.o $(MA_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/exhibit_ma_blues: driver/exhibit_ma_blues.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_blues.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+$(BUILD)/exhibit_ma_output: driver/exhibit_ma_output.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_output.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 check-core-symbols: $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
 	sh test/check_core_symbols.sh "$(CC)" "$(BUILD)/core-combined.o" $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
@@ -184,6 +188,9 @@ audition-ma1-6r: $(BUILD)/patchlab $(BUILD)/exhibit_ma_patches
 
 audition-ma-blues: $(BUILD)/exhibit_ma_blues
 	./$(BUILD)/exhibit_ma_blues
+
+audition-ma1-7: $(BUILD)/exhibit_ma_output
+	./$(BUILD)/exhibit_ma_output
 
 exhibit: $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_ep_voice
 	./$(BUILD)/exhibit_phase
@@ -236,4 +243,4 @@ viz: $(BUILD)/exhibit_viz
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-clang sanitize analyze fuzz-smf derive-ma-constants exhibit-ma1-osc audition-ma1-5 audition-ma1-6 audition-ma1-6p audition-ma1-6r audition-ma-blues check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean
+.PHONY: all test test-clang sanitize analyze fuzz-smf derive-ma-constants exhibit-ma1-osc audition-ma1-5 audition-ma1-6 audition-ma1-6p audition-ma1-6r audition-ma1-7 audition-ma-blues check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean

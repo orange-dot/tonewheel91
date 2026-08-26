@@ -187,6 +187,25 @@ typedef struct {
 } ma_ladder;
 
 typedef struct {
+    uint64_t sanitization_count;
+    uint64_t knee_hit_count;
+    uint64_t tiny_flush_count;
+    float pre_peak;
+    float post_peak;
+    float maximum_reduction;
+} ma_output_diagnostics;
+
+typedef struct {
+    tw_drive body;
+    float dc_lp_left;
+    float dc_lp_right;
+    float dc_coefficient;
+    float pre_body;
+    float post_body;
+    ma_output_diagnostics diagnostics;
+} ma_output_state;
+
+typedef struct {
     float sample_rate_hz;
     ma_vco_controls vco1;
     ma_vco_controls vco2;
@@ -234,6 +253,7 @@ typedef struct {
     ma_oscillator oscillator2;
     ma_mozaik mozaik;
     ma_ladder ladder;
+    ma_output_state output;
 #if defined(MA_SOURCE_EVIDENCE)
     float oversample_history[3][31];
     uint8_t oversample_history_pos[3];
@@ -248,11 +268,15 @@ typedef struct {
     bool note_active;
 } ma_synth;
 
+static_assert(sizeof(ma_synth) < 1024u * 1024u);
+
 /* MIDI-domain table lookups. Values 128..255 are hostile input and return
  * zero instead of indexing outside the pinned tables. */
 [[nodiscard]] float ma_note_frequency_hz(uint8_t note);
 [[nodiscard]] float ma_velocity_level(uint8_t velocity);
 [[nodiscard]] float ma_velocity_filter(uint8_t velocity);
+/* Pure MA1 safety transfer, exposed for boundary and evidence referees. */
+[[nodiscard]] float ma_safety_curve(float sample);
 
 void ma_synth_init(ma_synth *s, float sample_rate_hz);
 void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,

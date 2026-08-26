@@ -58,6 +58,7 @@ hashes included — reproduce bit-for-bit.
     make viz       # renders the evidence PNGs into docs/viz/
     make audition-ma1-5  # renders the provisional Mamut Analog listening WAVs
     make audition-ma1-6r # Mamut sine / Tepih / Lead / Dubina WAV evidence
+    make audition-ma1-7  # output body / DC blocker / safety A/B WAVs
     make audition-ma-blues # hosted F#-minor Blade Runner Blues performance study
     make           # also builds the live driver
 

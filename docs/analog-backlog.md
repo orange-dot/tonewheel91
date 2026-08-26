@@ -1,7 +1,7 @@
 # tonewheel91 — Mamut Analog implementation backlog
 
-Date: 2026-08-20. Status: active; MA0 through the interstitial MA1-6R are
-complete, and MA1-7 is the next queued task.
+Date: 2026-08-20. Status: active; MA0 through MA1-7 and the interstitial
+MA1-6R are complete, and MA1-8 is the next queued task.
 This document is decision-complete for `MA0` and the first implementation
 slice; task state and validation results live in `docs/ma-dev-journal.md`.
 

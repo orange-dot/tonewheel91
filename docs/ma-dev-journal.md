@@ -12,17 +12,18 @@ its internal sub-gates already has working code.
 ## Current position
 
 - Active milestone: **MA1 — complete one-voice hybrid**.
-- Active task: none. **MA1-7 — output and safety** is the next queued task.
+- Active task: none. **MA1-8 — evidence and the public listening gate** is
+  the next queued task.
 - Last green aggregate run: GCC, Clang and ASan/UBSan/
-  float-cast-overflow, 2026-08-26, on the MA1-6R working tree: core `111301`,
+  float-cast-overflow, 2026-08-26, on the MA1-7 working tree: core `111320`,
   hosted `102`, MIDI map `22`; zero failures. Both compiler core-symbol audits
   pass, and GCC `-fanalyzer` builds the full hosted/core graph without a
   diagnostic.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
-- Core implementation status: MA0 and MA1-1 through MA1-6 are closed;
+- Core implementation status: MA0 and MA1-1 through MA1-7 are closed;
   interstitial MA1-AUD, MA1-6-AUD, MA1-6P and MA1-6R are closed; work is
-  stopped at the boundary before MA1-7.
+  stopped at the boundary before MA1-8.
 
 ## MA0 task ledger
 
@@ -53,7 +54,7 @@ one.
 | MA1-6-AUD | done | MA1-6 | Ten deterministic reference/macro/performance WAVs expose every MA1-6 identity and expression route without changing the core. |
 | MA1-6P | done | MA1-6 | VCO1 sine, compiled Tepih/Lead patch selection and deterministic listening evidence. |
 | MA1-6R | done | MA1-6P | Shared enriched Mamut sine, Dubina, concrete patch files and all-C Patchlab; spectral, round-trip, headless and live-null gates green. |
-| MA1-7 | queued | MA1-6 | Centered dual-mono output, body bypass, DC block, safety diagnostics and deterministic signatures. |
+| MA1-7 | done | MA1-6 | Centered dual-mono output, body bypass, DC block, safety diagnostics and deterministic signatures. |
 | MA1-8 | queued | MA1-7 | `make exhibit-ma1`, evidence document, cost table and operator listening verdict; public MA1 gate closes only here. |
 
 ## Decision log
@@ -361,3 +362,28 @@ one.
 - Lead timbre now leans toward the bed voices: triangle/sine dominant, dark 880 Hz filter, slow 520 ms attack and 9 s release.
 - A restrained amount of oscillator sync (`.055`), crossmod (`.035`) and filter drive (`.085`) adds movement without restoring the former bright or dirty character.
 - Pitch entry and vibrato were softened and delayed to keep the lead continuous and recessed.
+
+### 2026-08-26 — MA1-7 output body, DC block and safety closed
+
+- Added the centered one-card output path. Positive body drive reuses the
+  shared `tw_drive` state at the pinned `4x` input / `.25x` output operating
+  point; the smoothed identity body-load ratio multiplies its input. Literal
+  zero drive is an exact branch that ignores load and leaves body state
+  untouched.
+- Added independent 10 Hz stereo DC trackers with counted `1e-9` state
+  flushes, then master level and the pinned `.98..1.0` polynomial safety
+  curve. Non-finite channel samples become zero. Persistent diagnostics own
+  sanitizations, knee hits, tiny flushes, pre/post peaks and maximum positive
+  reduction.
+- Added explicit pre/post-body taps so previous MA1 stage signatures remain
+  testable after final output conditioning. The one-card production result is
+  still bit-identical dual mono.
+- Added `make audition-ma1-7`. Body-bypass, direct-body and identity-load
+  signatures are `9d74d51119c9a551`, `124cc7e5fd4e7181` and
+  `d32e24b085a54d15`; both fresh renders and diagnostics match byte for byte.
+- Permanent tests cover the safety polynomial and slopes, output ordering,
+  body/load/state bypass, diagnostics, sanitization and 44.1/48/96/192 kHz
+  hostile sweeps. GCC, Clang and ASan/UBSan/float-cast-overflow pass core
+  `111320`, hosted `102` and MIDI map `22`; both core-symbol audits,
+  GCC `-fanalyzer` and `git diff --check` are clean. MA1-8 remains queued and
+  still owns the public evidence and human listening gate.

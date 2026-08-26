@@ -4530,7 +4530,11 @@ static void test_ma_mozaik(void) {
         ma_frame b = ma_synth_tick(&moved);
         CHECK(memcmp(&a, &b, sizeof a) == 0,
               "MA Mozaik mix zero changed frame %d", frame);
-        dry_hash = tw_fnv1a64(&a, sizeof a, dry_hash);
+        ma_frame pre_output = {
+            .left = dry.output.pre_body,
+            .right = dry.output.pre_body,
+        };
+        dry_hash = tw_fnv1a64(&pre_output, sizeof pre_output, dry_hash);
     }
     CHECK(dry_hash == UINT64_C(0xb9ab7015dda6ead5),
           "MA1-5 zero-Mozaik envelope/VCA baseline is %016llx",
@@ -4544,8 +4548,12 @@ static void test_ma_mozaik(void) {
     ma_synth_note_on(&legacy, 0, 57, 111);
     uint64_t legacy_hash = 0;
     for (int frame = 0; frame < 12000; frame++) {
-        ma_frame sample = ma_synth_tick(&legacy);
-        legacy_hash = tw_fnv1a64(&sample, sizeof sample, legacy_hash);
+        (void)ma_synth_tick(&legacy);
+        ma_frame pre_output = {
+            .left = legacy.output.pre_body,
+            .right = legacy.output.pre_body,
+        };
+        legacy_hash = tw_fnv1a64(&pre_output, sizeof pre_output, legacy_hash);
     }
     CHECK(legacy_hash == UINT64_C(0x48685bb104788f11),
           "MA VCO1 sine zero must retain the pre-sine PCM anchor: %016llx",
@@ -4834,11 +4842,13 @@ static void test_ma_envelopes(void) {
     float vca_error = 0.0f;
     float vca_energy = 0.0f;
     for (int frame = 0; frame < 12000; frame++) {
-        ma_frame low = ma_synth_tick(&low_velocity);
-        ma_frame high = ma_synth_tick(&high_velocity);
-        float error = fabsf(low.left - high.left * low_gain);
+        (void)ma_synth_tick(&low_velocity);
+        (void)ma_synth_tick(&high_velocity);
+        float low = low_velocity.output.pre_body;
+        float high = high_velocity.output.pre_body;
+        float error = fabsf(low - high * low_gain);
         if (error > vca_error) vca_error = error;
-        vca_energy += fabsf(high.left);
+        vca_energy += fabsf(high);
     }
     CHECK(vca_error < 2.0e-6f && vca_energy > 100.0f,
           "MA velocity VCA error %.9f energy %.3f",
@@ -5188,13 +5198,240 @@ static void test_ma_identity_and_performance(void) {
     }
     float vca_error = 0.0f;
     for (int frame = 0; frame < 256; frame++) {
-        ma_frame a = ma_synth_tick(&dry_vca);
-        ma_frame b = ma_synth_tick(&pressure_vca);
-        float error = fabsf(b.left - 1.10f * a.left);
+        (void)ma_synth_tick(&dry_vca);
+        (void)ma_synth_tick(&pressure_vca);
+        float error = fabsf(pressure_vca.output.pre_body
+                            - 1.10f * dry_vca.output.pre_body);
         if (error > vca_error) vca_error = error;
     }
     CHECK(vca_error < 2.0e-6f,
           "MA full poly pressure VCA error %.9f", (double)vca_error);
+}
+
+static void test_ma_output(void) {
+    ma_synth synth;
+    ma_synth_init(&synth, 48000.0f);
+    double dc_reference = 1.0 - exp(-TAU_D * 10.0 / 48000.0);
+    CHECK(fabs((double)synth.output.dc_coefficient - dc_reference) < 2.0e-10,
+          "MA 10 Hz DC coefficient %.10f vs %.10f",
+          (double)synth.output.dc_coefficient, dc_reference);
+    CHECK(synth.output.diagnostics.sanitization_count == 0
+          && synth.output.diagnostics.knee_hit_count == 0
+          && synth.output.diagnostics.tiny_flush_count == 0
+          && synth.output.diagnostics.pre_peak == 0.0f
+          && synth.output.diagnostics.post_peak == 0.0f
+          && synth.output.diagnostics.maximum_reduction == 0.0f,
+          "MA output diagnostics must initialize to zero");
+
+    CHECK(ma_safety_curve(0.0f) == 0.0f
+          && ma_safety_curve(0.98f) == 0.98f
+          && ma_safety_curve(-0.98f) == -0.98f,
+          "MA safety must be literal identity through the knee");
+    CHECK(fabsf(ma_safety_curve(0.99f) - 0.9925f) < 2.0e-7f
+          && ma_safety_curve(1.0f) == 1.0f
+          && ma_safety_curve(-1.0f) == -1.0f
+          && ma_safety_curve(2.0f) == 1.0f
+          && ma_safety_curve(-2.0f) == -1.0f,
+          "MA safety polynomial anchors");
+    CHECK(ma_safety_curve(NAN) == 0.0f
+          && ma_safety_curve(INFINITY) == 0.0f
+          && ma_safety_curve(-INFINITY) == 0.0f,
+          "MA safety must sanitize non-finite samples");
+
+    float previous = ma_safety_curve(-2.0f);
+    bool monotone = true;
+    for (int index = 1; index <= 4000; index++) {
+        float input = -2.0f + 4.0f * (float)index / 4000.0f;
+        float sample = ma_safety_curve(input);
+        monotone = monotone && sample >= previous
+                && sample >= -1.0f && sample <= 1.0f;
+        previous = sample;
+    }
+    CHECK(monotone, "MA safety curve must be monotone and bounded");
+
+    float epsilon = 1.0e-4f;
+    float knee_left = (ma_safety_curve(0.98f)
+                       - ma_safety_curve(0.98f - epsilon)) / epsilon;
+    float knee_right = (ma_safety_curve(0.98f + epsilon)
+                        - ma_safety_curve(0.98f)) / epsilon;
+    float ceiling_left = (ma_safety_curve(1.0f)
+                          - ma_safety_curve(1.0f - epsilon)) / epsilon;
+    float ceiling_right = (ma_safety_curve(1.0f + epsilon)
+                           - ma_safety_curve(1.0f)) / epsilon;
+    CHECK(fabsf(knee_left - 1.0f) < 5.0e-4f
+          && fabsf(knee_right - 1.0f) < 0.02f,
+          "MA safety knee slopes %.6f / %.6f",
+          (double)knee_left, (double)knee_right);
+    CHECK(ceiling_left >= 0.0f && ceiling_left < 0.04f
+          && ceiling_right == 0.0f,
+          "MA safety ceiling slopes %.6f / %.6f",
+          (double)ceiling_left, (double)ceiling_right);
+
+    ma_patch bypass_patch = ma_patch_tepih;
+    bypass_patch.body_drive = 0.0f;
+    bypass_patch.master_level = 1.0f;
+    ma_synth bypass_a, bypass_b;
+    ma_synth_init_patch(&bypass_a, 48000.0f, &bypass_patch);
+    ma_synth_init_patch(&bypass_b, 48000.0f, &bypass_patch);
+    bypass_b.smoothers.body_load_ratio = (ma_smoother){
+        .current = 1.5f, .target = 1.5f,
+    };
+    bypass_b.output.body.env = 0.75f;
+    bypass_b.output.body.hp_lp = -0.25f;
+    tw_drive body_before = bypass_b.output.body;
+    ma_synth_note_on(&bypass_a, 0, 57, 111);
+    ma_synth_note_on(&bypass_b, 0, 57, 111);
+    bool exact_bypass = true;
+    for (int frame = 0; frame < 2048; frame++) {
+        ma_frame a = ma_synth_tick(&bypass_a);
+        ma_frame b = ma_synth_tick(&bypass_b);
+        exact_bypass = exact_bypass
+                    && memcmp(&a, &b, sizeof a) == 0
+                    && bypass_a.output.pre_body == bypass_a.output.post_body
+                    && bypass_b.output.pre_body == bypass_b.output.post_body;
+    }
+    CHECK(exact_bypass && memcmp(&bypass_b.output.body, &body_before,
+                                 sizeof body_before) == 0,
+          "MA body-drive zero must bypass load and leave body state untouched");
+
+    ma_patch driven_patch = bypass_patch;
+    driven_patch.body_drive = 0.5f;
+    ma_synth driven;
+    ma_synth_init_patch(&driven, 48000.0f, &driven_patch);
+    ma_synth loaded = driven;
+    loaded.smoothers.body_load_ratio = (ma_smoother){
+        .current = 1.5f, .target = 1.5f,
+    };
+    ma_synth_note_on(&driven, 0, 57, 111);
+    ma_synth_note_on(&loaded, 0, 57, 111);
+    bool body_changed = false;
+    bool load_changed = false;
+    for (int frame = 0; frame < 2048; frame++) {
+        (void)ma_synth_tick(&driven);
+        (void)ma_synth_tick(&loaded);
+        body_changed = body_changed
+                    || driven.output.pre_body != driven.output.post_body;
+        load_changed = load_changed
+                    || driven.output.post_body != loaded.output.post_body;
+    }
+    CHECK(body_changed && load_changed && driven.output.body.env > 0.0f,
+          "MA positive body drive/load must use the shared tw_drive state");
+
+    ma_synth master_full, master_half;
+    ma_synth_init_patch(&master_full, 48000.0f, &bypass_patch);
+    ma_synth_init_patch(&master_half, 48000.0f, &bypass_patch);
+    master_full.output.dc_coefficient = 0.0f;
+    master_half.output.dc_coefficient = 0.0f;
+    master_half.master_level = 0.5f;
+    ma_synth_note_on(&master_full, 0, 57, 111);
+    ma_synth_note_on(&master_half, 0, 57, 111);
+    bool master_order = true;
+    for (int frame = 0; frame < 1024; frame++) {
+        ma_frame full = ma_synth_tick(&master_full);
+        ma_frame half = ma_synth_tick(&master_half);
+        master_order = master_order
+                    && master_full.output.pre_body
+                       == master_half.output.pre_body
+                    && full.left
+                       == ma_safety_curve(master_full.output.pre_body)
+                    && half.left
+                       == ma_safety_curve(0.5f * master_half.output.pre_body);
+    }
+    CHECK(master_order,
+          "MA master level must operate immediately before safety");
+
+    ma_synth tiny;
+    ma_synth_init(&tiny, 48000.0f);
+    tiny.output.dc_lp_left = 0.5e-9f;
+    tiny.output.dc_lp_right = -0.5e-9f;
+    ma_frame tiny_sample = ma_synth_tick(&tiny);
+    CHECK(tiny.output.dc_lp_left == 0.0f
+          && tiny.output.dc_lp_right == 0.0f
+          && tiny.output.diagnostics.tiny_flush_count == 2
+          && tiny_sample.left == 0.0f && tiny_sample.right == 0.0f,
+          "MA DC blockers must count and flush tiny state");
+
+    ma_synth poisoned;
+    ma_synth_init(&poisoned, 48000.0f);
+    poisoned.master_level = NAN;
+    ma_frame sanitized = ma_synth_tick(&poisoned);
+    CHECK(sanitized.left == 0.0f && sanitized.right == 0.0f
+          && poisoned.output.diagnostics.sanitization_count == 2,
+          "MA safety must zero and count non-finite stereo samples");
+
+    ma_synth knee;
+    ma_synth_init_patch(&knee, 48000.0f, &bypass_patch);
+    knee.output.dc_coefficient = 0.0f;
+    ma_synth_note_on(&knee, 0, 57, 127);
+    knee.amp_adsr.sustain = 256.0f;
+    knee.amp_envelope = (ma_envelope){
+        .level = 256.0f,
+        .stage = MA_ENVELOPE_SUSTAIN,
+    };
+    for (int frame = 0; frame < 2048; frame++) (void)ma_synth_tick(&knee);
+    CHECK(knee.output.diagnostics.knee_hit_count > 0
+          && knee.output.diagnostics.pre_peak > 1.0f
+          && knee.output.diagnostics.post_peak == 1.0f
+          && knee.output.diagnostics.maximum_reduction > 0.0f,
+          "MA safety diagnostics must record knee work and reduction");
+
+    static const float rates[] = { 44100.0f, 48000.0f, 96000.0f, 192000.0f };
+    for (size_t rate = 0; rate < sizeof rates / sizeof *rates; rate++) {
+        ma_patch hostile_patch = ma_patch_tepih;
+        hostile_patch.body_drive = 1.0f;
+        hostile_patch.master_level = 1.0f;
+        hostile_patch.filter_cutoff_hz = 20000.0f;
+        hostile_patch.filter_resonance = 1.0f;
+        hostile_patch.filter_drive = 1.0f;
+        hostile_patch.mixer_pressure = 1.0f;
+        for (int macro = 0; macro < MA_MACRO_COUNT; macro++)
+            hostile_patch.macro[macro] = 1.0f;
+        ma_synth hostile;
+        ma_synth_init_patch(&hostile, rates[rate], &hostile_patch);
+        ma_synth_note_on(&hostile, 15, 127, 255);
+        bool finite = true;
+        uint64_t hash = 0;
+        for (int frame = 0; frame < 4096; frame++) {
+            if (frame == 1024) ma_synth_set_channel_pressure(&hostile, 1.0f);
+            if (frame == 2048) ma_synth_set_mod_wheel(&hostile, 1.0f);
+            if (frame == 3072) ma_synth_set_pitch_bend(&hostile, -2.0f);
+            ma_frame output = ma_synth_tick(&hostile);
+            finite = finite && isfinite(output.left) && isfinite(output.right)
+                   && output.left >= -1.0f && output.left <= 1.0f
+                   && memcmp(&output.left, &output.right,
+                             sizeof output.left) == 0;
+            hash = tw_fnv1a64(&output, sizeof output, hash);
+        }
+        CHECK(finite && hash != 0
+              && hostile.output.diagnostics.post_peak <= 1.0f,
+              "MA hostile output sweep failed at %.0f Hz",
+              (double)rates[rate]);
+    }
+
+    ma_synth first, second;
+    ma_synth_init(&first, 48000.0f);
+    ma_synth_init(&second, 48000.0f);
+    ma_synth_note_on(&first, 2, 45, 103);
+    ma_synth_note_on(&second, 2, 45, 103);
+    uint64_t first_hash = 0, second_hash = 0;
+    for (int frame = 0; frame < 12000; frame++) {
+        if (frame == 3000) {
+            ma_synth_set_macro(&first, MA_MACRO_HEAT, 0.75f);
+            ma_synth_set_macro(&second, MA_MACRO_HEAT, 0.75f);
+        }
+        if (frame == 7000) {
+            ma_synth_note_off(&first, 2, 45, 64);
+            ma_synth_note_off(&second, 2, 45, 64);
+        }
+        ma_frame a = ma_synth_tick(&first);
+        ma_frame b = ma_synth_tick(&second);
+        first_hash = tw_fnv1a64(&a, sizeof a, first_hash);
+        second_hash = tw_fnv1a64(&b, sizeof b, second_hash);
+    }
+    CHECK(first_hash == second_hash && first_hash != 0
+          && memcmp(&first.output.diagnostics, &second.output.diagnostics,
+                    sizeof first.output.diagnostics) == 0,
+          "MA output render/signature must be deterministic");
 }
 
 int main(void) {
@@ -5256,6 +5493,7 @@ int main(void) {
     test_ma_filter();
     test_ma_envelopes();
     test_ma_identity_and_performance();
+    test_ma_output();
     printf("%d checks, %d failures\n", checks, fails);
     return fails ? 1 : 0;
 }

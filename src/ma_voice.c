@@ -10,6 +10,12 @@ static constexpr uint32_t MOZAIK_SLOPE_MIN_Q32 = UINT32_C(0x73333333);
 static constexpr uint32_t MOZAIK_SLOPE_MAX_Q32 = UINT32_C(0xc0000000);
 static constexpr float MOZAIK_GOLDEN_CONTRAST = 1.618034f;
 static constexpr float Q32_ONE_F = 0x1p32f;
+static constexpr float DC_BLOCK_10_HZ = 62.83185307179586f;
+#if !defined(MA_SOURCE_EVIDENCE)
+static constexpr float OUTPUT_TINY = 1.0e-9f;
+#endif
+static constexpr float SAFETY_KNEE = 0.98f;
+static constexpr float SAFETY_RANGE = 0.02f;
 
 typedef struct {
     float sigma;
@@ -1063,6 +1069,17 @@ float ma_velocity_filter(uint8_t velocity) {
     return velocity < 128 ? VELOCITY_FILTER[velocity] : 0.0f;
 }
 
+float ma_safety_curve(float sample) {
+    if (!(sample >= -FLT_MAX && sample <= FLT_MAX)) return 0.0f;
+    float magnitude = tw_fabsf(sample);
+    if (magnitude <= SAFETY_KNEE) return sample;
+    float t = (magnitude - SAFETY_KNEE) / SAFETY_RANGE;
+    t = clamp_signal(t, 0.0f, 1.0f);
+    float limited = SAFETY_KNEE
+                  + SAFETY_RANGE * (t + t * t - t * t * t);
+    return sample < 0.0f ? -limited : limited;
+}
+
 void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
                          const ma_patch *patch) {
     sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
@@ -1130,6 +1147,9 @@ void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
     initialize_control_smoothers(s);
     reset_mozaik(&s->mozaik, effective_phason_q32(s));
     s->filter_g = filter_prewarp(s->filter_cutoff_hz, s->sample_rate_hz);
+    tw_drive_init(&s->output.body, s->sample_rate_hz);
+    s->output.dc_coefficient = tw_one_pole_coeff(
+        DC_BLOCK_10_HZ / s->sample_rate_hz);
 }
 
 void ma_synth_init(ma_synth *s, float sample_rate_hz) {
@@ -1389,6 +1409,67 @@ static float decimate_filter(const ma_ladder *ladder) {
     }
     return output;
 }
+
+static float output_dc_tick(ma_output_state *output, float input, float *lp) {
+    if (!(input >= -FLT_MAX && input <= FLT_MAX)) return input;
+    float next = *lp + output->dc_coefficient * (input - *lp);
+    if (next != 0.0f && tw_fabsf(next) < OUTPUT_TINY) {
+        next = 0.0f;
+        output->diagnostics.tiny_flush_count++;
+    }
+    *lp = next;
+    return input - next;
+}
+
+static float output_safety_tick(ma_output_state *output, float input) {
+    if (!(input >= -FLT_MAX && input <= FLT_MAX)) {
+        output->diagnostics.sanitization_count++;
+        return 0.0f;
+    }
+    float magnitude = tw_fabsf(input);
+    if (magnitude > output->diagnostics.pre_peak)
+        output->diagnostics.pre_peak = magnitude;
+    if (magnitude > SAFETY_KNEE) output->diagnostics.knee_hit_count++;
+    float sample = ma_safety_curve(input);
+    float limited = tw_fabsf(sample);
+    if (limited > output->diagnostics.post_peak)
+        output->diagnostics.post_peak = limited;
+    float reduction = magnitude > limited ? magnitude - limited : 0.0f;
+    if (reduction > output->diagnostics.maximum_reduction)
+        output->diagnostics.maximum_reduction = reduction;
+    return sample;
+}
+
+static ma_frame render_output(ma_synth *s,
+                              const ma_render_controls *controls,
+                              float mono) {
+    ma_output_state *output = &s->output;
+    output->pre_body = mono;
+    if (!(mono >= -FLT_MAX && mono <= FLT_MAX)) {
+        output->post_body = mono;
+        return (ma_frame){
+            .left = output_safety_tick(output, mono),
+            .right = output_safety_tick(output, mono),
+        };
+    }
+
+    float body = mono;
+    if (controls->body_drive > 0.0f) {
+        tw_drive_set(&output->body, controls->body_drive);
+        body = 0.25f * tw_drive_tick(
+            &output->body, 4.0f * controls->body_load_ratio * mono);
+    }
+    output->post_body = body;
+
+    float left = output_dc_tick(output, body, &output->dc_lp_left)
+               * s->master_level;
+    float right = output_dc_tick(output, body, &output->dc_lp_right)
+                * s->master_level;
+    return (ma_frame){
+        .left = output_safety_tick(output, left),
+        .right = output_safety_tick(output, right),
+    };
+}
 #endif
 
 ma_frame ma_synth_tick(ma_synth *s) {
@@ -1473,7 +1554,11 @@ ma_frame ma_synth_tick(ma_synth *s) {
 #endif
     if (controls.poly_pressure > 0.0f)
         output *= 1.0f + 0.10f * controls.poly_pressure;
+#if defined(MA_SOURCE_EVIDENCE)
     return (ma_frame){ .left = output, .right = output };
+#else
+    return render_output(s, &controls, output);
+#endif
 }
 
 void ma_synth_set_vco1(ma_synth *s, ma_vco_controls controls) {
