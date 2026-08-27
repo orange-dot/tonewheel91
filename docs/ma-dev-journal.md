@@ -11,19 +11,16 @@ its internal sub-gates already has working code.
 
 ## Current position
 
-- Active milestone: **MA1 — complete one-voice hybrid**.
-- Active task: none. **MA1-8 — evidence and the public listening gate** is
-  the next queued task.
+- Active milestone: **MA2 — five-card body**.
+- Active task: none. **MA2-2 — sustain, pedal-up release and panic** is the
+  next queued task.
 - Last green aggregate run: GCC, Clang and ASan/UBSan/
-  float-cast-overflow, 2026-08-26, on the MA1-7 working tree: core `111320`,
-  hosted `102`, MIDI map `22`; zero failures. Both compiler core-symbol audits
-  pass, and GCC `-fanalyzer` builds the full hosted/core graph without a
-  diagnostic.
+  float-cast-overflow, 2026-08-27, on MA2-1: core `111336`, hosted `109`,
+  MIDI map `22`, architecture `227`; zero failures. Both compiler core-symbol
+  audits pass.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
-- Core implementation status: MA0 and MA1-1 through MA1-7 are closed;
-  interstitial MA1-AUD, MA1-6-AUD, MA1-6P and MA1-6R are closed; work is
-  stopped at the boundary before MA1-8.
+- Core implementation status: MA0, MA1 and MA2-1 are closed.
 
 ## MA0 task ledger
 
@@ -55,7 +52,18 @@ one.
 | MA1-6P | done | MA1-6 | VCO1 sine, compiled Tepih/Lead patch selection and deterministic listening evidence. |
 | MA1-6R | done | MA1-6P | Shared enriched Mamut sine, Dubina, concrete patch files and all-C Patchlab; spectral, round-trip, headless and live-null gates green. |
 | MA1-7 | done | MA1-6 | Centered dual-mono output, body bypass, DC block, safety diagnostics and deterministic signatures. |
-| MA1-8 | queued | MA1-7 | `make exhibit-ma1`, evidence document, cost table and operator listening verdict; public MA1 gate closes only here. |
+| MA1-8 | done | MA1-7 | Operator accepted the registered long-form render and closed MA1 without additional evidence writing or measurement. |
+
+## MA2 internal task ledger
+
+| ID | Status | Depends on | Deliverable and closing check |
+| --- | --- | --- | --- |
+| MA2-1 | done | MA1 | Five caller-owned `ma_synth` cards, explicit ownership phases, round-robin idle search, oldest-age steal and oldest-held repeated-note release. |
+| MA2-2 | queued | MA2-1 | Sustain, pedal-up release and panic ownership transitions. |
+| MA2-3 | queued | MA2-2 | LFO, glide and panic-bounded unison enter/play/leave behavior. |
+| MA2-4 | queued | MA2-3 | Fixed-seed per-card character with an exact character-zero baseline. |
+| MA2-5 | queued | MA2-4 | Deterministic card pan and shared mid/side body. |
+| MA2-6 | queued | MA2-5 | Allocator, compass, stereo, character, cost and listening exhibit closing the public MA2 gate. |
 
 ## Decision log
 
@@ -77,6 +85,7 @@ one.
 | 2026-08-26 | Promote the enriched Mamut sine to the shared VCO control aggregate and pin H2/H3/H5 rather than adding a waveform menu. | VCO2 can dominate Dubina while both oscillators retain one concrete, auditable waveform mixer and the existing anti-alias path. |
 | 2026-08-26 | Supersede MAD8 with one concrete `ma_patch` value and a strict hosted `.mapatch` file; keep I/O and discovery out of the core. | Sound design now needs recall, but a generic registry/plugin framework would broaden the product boundary without helping this one instrument. |
 | 2026-08-26 | Build Patchlab as one ANSI/termios and synchronous ALSA C loop, with headless modes that never open ALSA. | The current one-card voice needs an audible vertical tool; ncurses, a GUI framework, threads and callbacks are unnecessary ownership. |
+| 2026-08-27 | Close MA1 without further evidence writing or measurement and proceed to MA2. | The operator accepted the registered 248-second listening take and made the milestone decision explicitly. |
 
 ## Entries
 
@@ -387,3 +396,23 @@ one.
   `111320`, hosted `102` and MIDI map `22`; both core-symbol audits,
   GCC `-fanalyzer` and `git diff --check` are clean. MA1-8 remains queued and
   still owns the public evidence and human listening gate.
+
+### 2026-08-27 — MA1 operator closure and MA2-1 fixed-card allocator
+
+- Recorded the operator decision to close MA1 after accepting the registered
+  248-second listening take. No additional MA1 evidence document or cost
+  measurement is queued.
+- Added `ma_card_bank`: five fixed caller-owned `ma_synth` cards, a round-robin
+  cursor, monotonically increasing assignment ages and explicit idle, held and
+  released ownership phases. No allocation or audio-loop heap use was added.
+- Idle search begins at the cursor; exhaustion steals the oldest assigned card.
+  Repeated NoteOn events may occupy separate cards, and NoteOff releases the
+  oldest still-held matching channel/note instance. Released cards retain their
+  age until their envelopes finish and participate in the same steal order.
+- `ma_card_bank_tick` advances all five cards and returns their frames in fixed
+  slot order. Sustain, panic, unison, character, pan and shared summing remain
+  outside MA2-1.
+- GCC, Clang and ASan/UBSan/float-cast-overflow pass core `111336`, hosted
+  `109`, MIDI map `22` and architecture `227`; both core-symbol audits pass.
+  The MA2 bank translation unit is analyzer-clean. The full analyzer build
+  retains a warning in unchanged `driver/ma_architecture_render.c`.

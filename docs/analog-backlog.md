@@ -1,7 +1,7 @@
 # tonewheel91 — Mamut Analog implementation backlog
 
-Date: 2026-08-20. Status: active; MA0 through MA1-7 and the interstitial
-MA1-6R are complete, and MA1-8 is the next queued task.
+Date: 2026-08-20. Status: active; MA0, MA1 and MA2-1 are closed, and MA2-2
+is the next queued task.
 This document is decision-complete for `MA0` and the first implementation
 slice; task state and validation results live in `docs/ma-dev-journal.md`.
 
@@ -748,6 +748,11 @@ Acceptance:
 - two fresh renders of every acceptance take are byte-identical;
 - an operator listening note answers the experiment question before MA2.
 
+Closure note, 2026-08-27: the operator accepted the registered 248-second
+listening take and explicitly closed MA1 without further evidence writing or
+measurement. The list above remains the original milestone contract rather
+than an outstanding work queue.
+
 ### MA2 — five-card body
 
 Add the fixed five-card bank, allocator, sustain, LFO, glide, unison,
@@ -962,7 +967,7 @@ zone; transport does not define the DSP model.
 | Item | Backlog status | Earliest action |
 | --- | --- | --- |
 | Analog/Mamut identity contract | committed | MA0 |
-| Mozaik AUX | implemented through MA1-3 | MA1-8 evidence completion |
+| Mozaik AUX | implemented and accepted in closed MA1 | MA1 |
 | Five-card analog body | committed | MA2 |
 | Stereo + Mamut FX | committed | MA3 |
 | Hidden GFM field | committed; donor field implementation exists but insertion differs | MA4 |

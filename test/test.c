@@ -5434,6 +5434,96 @@ static void test_ma_output(void) {
           "MA output render/signature must be deterministic");
 }
 
+static void test_ma_card_bank(void) {
+    ma_patch quick = ma_patch_tepih;
+    quick.amp_adsr = (ma_adsr){
+        .attack_ms = 1.0f, .decay_ms = 1.0f,
+        .sustain = 0.5f, .release_ms = 1.0f,
+    };
+    quick.filter_adsr = quick.amp_adsr;
+
+    ma_card_bank bank;
+    ma_card_bank_init_patch(&bank, 48000.0f, &quick);
+    bool initialized = bank.cursor == 0 && bank.next_age == 1;
+    for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++)
+        initialized = initialized
+                   && bank.owner[slot].phase == MA_CARD_IDLE
+                   && bank.card[slot].sample_rate_hz == 48000.0f;
+    CHECK(initialized, "MA2 fixed card bank initialization");
+
+    for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++) {
+        uint8_t chosen = ma_card_bank_note_on(
+            &bank, 2, (uint8_t)(60 + slot), (uint8_t)(100 + slot));
+        CHECK(chosen == slot && bank.owner[slot].age == (uint64_t)slot + 1
+              && bank.owner[slot].phase == MA_CARD_HELD
+              && bank.owner[slot].channel == 2
+              && bank.owner[slot].note == 60 + slot,
+              "MA2 round-robin assignment slot %u", slot);
+    }
+    CHECK(bank.cursor == 0 && bank.next_age == 6,
+          "MA2 full-bank cursor and monotonic age");
+
+    uint8_t stolen = ma_card_bank_note_on(&bank, 3, 72, 255);
+    CHECK(stolen == 0 && bank.cursor == 1 && bank.owner[0].age == 6
+          && bank.owner[0].channel == 3 && bank.owner[0].note == 72
+          && bank.card[0].velocity == 127,
+          "MA2 exhaustion must steal oldest assigned card");
+
+    ma_card_bank_init_patch(&bank, 48000.0f, &quick);
+    uint8_t repeat0 = ma_card_bank_note_on(&bank, 4, 57, 90);
+    uint8_t repeat1 = ma_card_bank_note_on(&bank, 4, 57, 91);
+    uint8_t release0 = ma_card_bank_note_off(&bank, 4, 57, 64);
+    CHECK(repeat0 == 0 && repeat1 == 1 && release0 == 0
+          && bank.owner[0].phase == MA_CARD_RELEASED
+          && bank.owner[1].phase == MA_CARD_HELD,
+          "MA2 repeated note-off must release oldest held instance");
+    uint8_t release1 = ma_card_bank_note_off(&bank, 4, 57, 32);
+    CHECK(release1 == 1 && bank.owner[1].phase == MA_CARD_RELEASED
+          && bank.ignored_release_velocities == 2,
+          "MA2 repeated note release order and event accounting");
+
+    ma_card_bank_init_patch(&bank, 48000.0f, &quick);
+    for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++)
+        (void)ma_card_bank_note_on(&bank, 0, (uint8_t)(48 + slot), 100);
+    CHECK(ma_card_bank_note_off(&bank, 0, 48, 0) == 0,
+          "MA2 oldest held card release setup");
+    CHECK(ma_card_bank_note_on(&bank, 0, 80, 100) == 0
+          && bank.owner[0].age == 6,
+          "MA2 released cards must participate in oldest-age stealing");
+
+    ma_card_bank_init_patch(&bank, 48000.0f, &quick);
+    (void)ma_card_bank_note_on(&bank, 0, 48, 100);
+    (void)ma_card_bank_note_on(&bank, 0, 49, 100);
+    (void)ma_card_bank_note_on(&bank, 0, 50, 100);
+    (void)ma_card_bank_note_off(&bank, 0, 49, 0);
+    ma_frame frames[MA_CARD_COUNT] = { 0 };
+    bool finite = true;
+    for (int frame = 0; frame < 512; frame++) {
+        ma_card_bank_tick(&bank, frames);
+        for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++)
+            finite = finite && isfinite(frames[slot].left)
+                            && isfinite(frames[slot].right);
+    }
+    CHECK(finite && bank.owner[1].phase == MA_CARD_IDLE,
+          "MA2 bank tick must reap completed releases and stay finite");
+    CHECK(ma_card_bank_note_on(&bank, 0, 51, 100) == 3,
+          "MA2 idle search must begin at the round-robin cursor");
+
+    uint8_t cursor = bank.cursor;
+    uint64_t age = bank.next_age;
+    CHECK(ma_card_bank_note_on(&bank, 16, 60, 100) == MA_CARD_NONE
+          && ma_card_bank_note_on(&bank, 0, 200, 100) == MA_CARD_NONE
+          && ma_card_bank_note_off(&bank, 16, 60, 0) == MA_CARD_NONE
+          && ma_card_bank_note_off(&bank, 0, 200, 0) == MA_CARD_NONE
+          && bank.cursor == cursor && bank.next_age == age,
+          "MA2 hostile events must not disturb allocation state");
+
+    ma_card_bank_init(&bank, NAN);
+    CHECK(bank.card[0].sample_rate_hz == 48000.0f
+          && bank.card[MA_CARD_COUNT - 1].sample_rate_hz == 48000.0f,
+          "MA2 card bank must inherit voice sample-rate sanitization");
+}
+
 int main(void) {
     test_frequency_table();
     test_foldback();
@@ -5494,6 +5584,7 @@ int main(void) {
     test_ma_envelopes();
     test_ma_identity_and_performance();
     test_ma_output();
+    test_ma_card_bank();
     printf("%d checks, %d failures\n", checks, fails);
     return fails ? 1 : 0;
 }

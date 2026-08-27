@@ -17,7 +17,7 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
 # The Mamut Analog line is a sibling core. Keep it out of the organ and EP
 # products; the aggregate core test and symbol audit are its first hosts.
-MA_OBJS := $(BUILD)/ma_voice.o
+MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_bank.o
 MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
 MA1_LONG_LISTENING_SOURCE := driver/exhibit_ma_blues.c
 MA1_LONG_LISTENING_WAV := $(BUILD)/ma_blade_runner_blues_expanded.wav
@@ -35,6 +35,8 @@ $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o: $(BUILD)/%.o: src/%.c src/epiano.h src/
 
 $(BUILD)/ma_voice.o: src/ma_voice.c src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
+
+$(BUILD)/ma_bank.o: src/ma_bank.c src/mamutanalog.h src/tonewheel.h | $(BUILD)
 
 $(BUILD)/ma_voice_source.o: src/ma_voice.c src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -DMA_SOURCE_EVIDENCE -c $< -o $@

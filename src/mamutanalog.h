@@ -270,6 +270,34 @@ typedef struct {
 
 static_assert(sizeof(ma_synth) < 1024u * 1024u);
 
+enum {
+    MA_CARD_COUNT = 5,
+    MA_CARD_NONE = UINT8_MAX,
+};
+
+typedef enum {
+    MA_CARD_IDLE,
+    MA_CARD_HELD,
+    MA_CARD_RELEASED,
+} ma_card_phase;
+
+typedef struct {
+    uint64_t age;
+    uint8_t channel;
+    uint8_t note;
+    ma_card_phase phase;
+} ma_card_owner;
+
+typedef struct {
+    ma_synth card[MA_CARD_COUNT];
+    ma_card_owner owner[MA_CARD_COUNT];
+    uint64_t next_age;
+    uint64_t ignored_release_velocities;
+    uint8_t cursor;
+} ma_card_bank;
+
+static_assert(sizeof(ma_card_bank) < 1024u * 1024u);
+
 /* MIDI-domain table lookups. Values 128..255 are hostile input and return
  * zero instead of indexing outside the pinned tables. */
 [[nodiscard]] float ma_note_frequency_hz(uint8_t note);
@@ -313,5 +341,19 @@ void ma_synth_set_filter_adsr(ma_synth *s, ma_adsr adsr);
 void ma_synth_set_macro(ma_synth *s, ma_macro_id macro, float value);
 void ma_synth_set_output(ma_synth *s, float body_drive, float width,
                          float crossfeed, float master_level);
+
+void ma_card_bank_init(ma_card_bank *bank, float sample_rate_hz);
+void ma_card_bank_init_patch(ma_card_bank *bank, float sample_rate_hz,
+                             const ma_patch *patch);
+/* Event calls return the affected slot, or MA_CARD_NONE. */
+[[nodiscard]] uint8_t ma_card_bank_note_on(ma_card_bank *bank,
+                                           uint8_t channel, uint8_t note,
+                                           uint8_t velocity);
+[[nodiscard]] uint8_t ma_card_bank_note_off(ma_card_bank *bank,
+                                            uint8_t channel, uint8_t note,
+                                            uint8_t release_velocity);
+/* Per-card frames retain fixed slot order; stereo summing lands later in MA2. */
+void ma_card_bank_tick(ma_card_bank *bank,
+                       ma_frame frames[static MA_CARD_COUNT]);
 
 #endif
