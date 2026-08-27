@@ -19,6 +19,8 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 # products; the aggregate core test and symbol audit are its first hosts.
 MA_OBJS := $(BUILD)/ma_voice.o
 MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
+MA1_LONG_LISTENING_SOURCE := driver/exhibit_ma_blues.c
+MA1_LONG_LISTENING_WAV := $(BUILD)/ma_blade_runner_blues_expanded.wav
 
 all: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/test_ma_architecture $(BUILD)/exhibit_phase $(BUILD)/exhibit_contacts $(BUILD)/exhibit_taper $(BUILD)/exhibit_percussion $(BUILD)/exhibit_scanner $(BUILD)/exhibit_drive $(BUILD)/exhibit_rotary $(BUILD)/exhibit_wear $(BUILD)/exhibit_depth $(BUILD)/exhibit_warmth $(BUILD)/exhibit_viz $(BUILD)/exhibit_ep_voice $(BUILD)/render_midi $(BUILD)/render_ma_architecture $(BUILD)/tw91 $(BUILD)/ep73 $(BUILD)/patchlab $(BUILD)/exhibit_ma_blues
 
@@ -190,6 +192,12 @@ derive-ma-constants: $(BUILD)/derive_ma_constants
 exhibit-ma1-osc: $(BUILD)/exhibit_ma_osc
 	./$(BUILD)/exhibit_ma_osc
 
+# The MA1 listening arm deliberately reuses the longer Blues study.  It does
+# not render implicitly: audition-ma-blues is the explicit regeneration step.
+exhibit-ma1: $(BUILD)/exhibit_ma_blues $(MA1_LONG_LISTENING_SOURCE)
+	test -f $(MA1_LONG_LISTENING_WAV)
+	sha256sum $(MA1_LONG_LISTENING_SOURCE) $(MA1_LONG_LISTENING_WAV)
+
 audition-ma1-5: $(BUILD)/exhibit_ma_voice
 	./$(BUILD)/exhibit_ma_voice
 
@@ -268,4 +276,4 @@ viz: $(BUILD)/exhibit_viz
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-clang sanitize analyze fuzz-smf derive-ma-constants exhibit-ma1-osc audition-ma1-5 audition-ma1-6 audition-ma1-6p audition-ma1-6r audition-ma1-7 audition-ma-blues audition-ma-architecture-preview audition-ma-architecture check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean
+.PHONY: all test test-clang sanitize analyze fuzz-smf derive-ma-constants exhibit-ma1 exhibit-ma1-osc audition-ma1-5 audition-ma1-6 audition-ma1-6p audition-ma1-6r audition-ma1-7 audition-ma-blues audition-ma-architecture-preview audition-ma-architecture check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean

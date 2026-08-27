@@ -23,10 +23,11 @@ make audition-ma-blues
 ```
 
 The command builds and runs `driver/exhibit_ma_blues.c`, writing
-`build/ma_blade_runner_blues.wav`. The MIDI-like event desk is intentionally
-small and concrete: nine long chord changes, nine Dubina roots, and nine widely
-spaced Lead phrases. There are no bell events, leaving long passages for Tepih
-and Dubina alone. Their source bank files are not modified by the wrapper.
+`build/ma_blade_runner_blues_expanded.wav`. The 234-second performance plus
+14-second tail uses a fixed hosted overdub desk: dark and haze Tepih layers,
+root and moving Dubina layers, and sparse Lead phrases. There are no bell
+events, leaving long passages for the two Tepih and two Dubina colours to carry
+the arrangement. Their source bank files are not modified by the wrapper.
 
 Lead is a listening-only overlay in a low register (MIDI 54–64), close in
 colour to Tepih and Dubina: triangle and sine dominate, with an 880 Hz filter,
@@ -35,6 +36,24 @@ filter drive (`.085`) add motion without bringing back a bright or dirty edge.
 The wrapper adds fixed stereo pan positions and a bounded four-comb/two-allpass
 reverb. It is not the future MA2 allocator and does not define product
 polyphony or stealing semantics.
+
+## MA1 long listening arm
+
+```text
+make exhibit-ma1
+```
+
+The MA1 exhibit does not introduce another short render or another driver. It
+registers and hashes the reviewed source/WAV pair:
+
+```text
+driver/exhibit_ma_blues.c
+build/ma_blade_runner_blues_expanded.wav
+```
+
+It intentionally fails when the WAV is absent. Regeneration remains the
+explicit `make audition-ma-blues` operation, so running the evidence check does
+not silently replace the artifact that received the listening verdict.
 
 ## Evidence
 
@@ -63,3 +82,17 @@ core-output change.
 
 Build/test gates: GCC and Clang `make test`, sanitizer coverage, a warning-clean
 exhibit build, and `git diff --check`.
+
+The expanded long-form take is 248 seconds, 48 kHz stereo float, and
+95,232,056 bytes. At commit `db6271fa258fb0f1b0236b6a190de86d69e94720`,
+the registered pair is:
+
+```text
+9ed126191bafa58444a4fb2cf8680b413826e53961438253d4eb219bbb45ff05  driver/exhibit_ma_blues.c
+1ec97582ec543c3a00ca0f215b54bccf3f6b13ea44396b72a313cabc41de4ac7  build/ma_blade_runner_blues_expanded.wav
+```
+
+Operator verdict, 2026-08-27: accepted; the renders passed the listening gate.
+This long take answers the musical-coherence part of the MA1 experiment. It
+does not replace the separate numeric, hostile-input, bypass, cost or safety
+evidence required for final MA1-8 closure.
