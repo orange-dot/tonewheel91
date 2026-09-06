@@ -617,6 +617,17 @@ Direct domains [DECISION] are:
 | LFO rate | `[.03,20] Hz` |
 | glide | `[0,10] s` |
 | Mozaik slope/contrast/phason/drift controls | `[0,1]` |
+| Raster mix/position/warp | `[0,1]` |
+
+Glide is linear in MIDI-note space. The first note assigned to a card starts
+at its target; later NoteOn events begin from that card's current, possibly
+mid-glide pitch. The duration is rounded to the nearest sample, and the final
+step lands exactly on the target. Disabling glide or selecting zero seconds
+snaps to the current target.
+
+The voice LFO is a sine starting at phase zero. Depth `1` is `+/-1` semitone;
+rate and depth use the shared 6 ms smoother. Exact depth zero bypasses pitch
+modulation and leaves LFO phase untouched.
 
 Non-finite setter input selects that control's compiled default; finite
 input clamps. Integer MIDI conversion is [DECISION]:
@@ -650,6 +661,100 @@ uses `10*unit(cc)` seconds rather than the envelope-time table. Every other
 continuous CC uses `unit(cc)`. The CC ownership is the map in
 `analog-backlog.md`; that table is normative and is not duplicated here.
 
+## 10A. Raster digital source (MA2-DIG)
+
+Raster is an explicitly digital wavetable oscillator, not a circuit model.
+Each card owns one Q48 phase accumulator and the selected mip ordinal. All
+tables are immutable core data: eight phase-aligned families, seven mips and
+256 signed-Q15 samples per table. Mip harmonic limits are
+`64, 32, 16, 8, 4, 2, 1`.
+
+At render rate `r`, `step=clamp(f/r,0,.45)`. Select the first mip whose
+`step*(1+.8*warp)*harmonic_limit <= .45`, or the final mip. As that selected
+load rises from `.225` to `.45`, linearly crossfade into the next coarser mip;
+the boundary is therefore continuous. Position maps linearly from `[0,1]`
+to families `[0,7]`; table interpolation and the adjacent-family morph are
+both linear. Warp is [DECISION]:
+
+```text
+read_phase = wrap(phase + .12*warp*sin(2*pi*phase))
+```
+
+Raster joins the existing normalized pre-filter source mixer. Literal
+`mix=0` takes the former source-mix branch byte for byte, performs no table
+read and leaves Raster phase/mip state untouched. Positive mix advances at
+the native 2x ladder-input rate. The source-evidence build advances once at
+its public render rate. Mix, position and warp use the common 6 ms smoother;
+setting mix to literal zero snaps its bypass smoother to zero.
+
+The compiled Raster patch disables both analog VCO mixes, noise and Mozaik;
+its Raster controls are `1/.78/.42` and master is `.90`. Prizma is the hybrid
+patch with Raster `.48/.36/.18`, master `.80`, and restrained
+sine/triangle/saw and Mozaik sources.
+
+## 10B. BCS nonlinear feedback coordinate (MA2-BCS)
+
+BCS transfers the Hopf/Duffing equations from donor commit
+`d7672912706731b73839d1fc25801669450fd0f1`, but not its scenario player or
+parallel audible layer. Each card owns `(hopf_re, hopf_im, duffing_x,
+duffing_v)`, initialized to `(.025, 0, .001, 0)`. Four RK4 substeps advance
+the state per public audio frame. Frequency follows the sounding/gliding note
+and is clamped to `20..min(.125*sample_rate, 8000) Hz` before integration.
+
+The unit `regime` coordinate linearly interpolates consecutive landmarks:
+
+| Parameter | Stable `0` | Edge `1/3` | Subharmonic `2/3` | Recovery `1` |
+| --- | ---: | ---: | ---: | ---: |
+| Hopf mu | 18 | 18 | 16 | 18 |
+| Hopf nonlinearity | 32 | 32 | 32 | 32 |
+| Duffing frequency ratio | 1 | 1 | .42 | 1 |
+| Duffing damping | .18 | .18 | .10 | .18 |
+| Duffing edge | .10 | .42 | .40 | .36 |
+| Cubic stiffness | .35 | .35 | .48 | .35 |
+| Cubic damping | 1.15 | 1.15 | 1.40 | 1.15 |
+| Drive | .030 | .105 | .050 | .090 |
+| Duffing-to-Hopf feedback | .004 | .010 | .002 | .008 |
+| Hopf readout mix | 1 | 1 | .05 | 1 |
+| Duffing readout mix | .16 | .40 | 1.35 | .36 |
+| Readout gain | .58 | .54 | .60 | .56 |
+
+For `omega=2*pi*f`, the continuous derivatives are:
+
+```text
+r2     = re*re + im*im
+radial = hopf_mu - hopf_nonlinearity*r2
+wd     = omega*duffing_frequency_ratio
+drive  = duffing_drive*re
+       + .018*amount*clamp(previous_ladder_y4,-1,1)
+
+dre = radial*re - omega*im + duffing_feedback*omega*x
+dim = omega*re + radial*im
+dx  = wd*v
+dv  = ((duffing_edge-duffing_damping)*wd
+       - duffing_cubic_damping*wd*x*x)*v
+      - wd*x - duffing_cubic_stiffness*wd*x*x*x + wd*drive
+```
+
+The bounded control readout is
+`sat((hopf_mix*re + duffing_mix*x)*readout_gain)`. It is not audio. With
+positive amount it changes the existing destinations by:
+
+```text
+crossmod += amount * (.10 + .20*regime) * readout
+resonance += amount * (.08 + .08*regime) * readout
+```
+
+Both results clamp to `[0,1]`. Amount and regime use the common 6 ms linear
+smoother; assigning amount zero snaps to exact bypass. Literal amount zero
+does not integrate, read or mutate BCS state and leaves all former render
+arithmetic untouched. Non-finite state or any component beyond `+/-32`
+resets to the seed and increments `reset_count`; readout is zero for that
+frame. `maximum_state` records the largest accepted absolute component.
+
+Granica uses amount/regime `.72/.62`, no pulse components, a sine/triangle
+spine with VCO2 one octave down, restrained Raster `.10/.68/.12`, cutoff
+`820 Hz`, resonance `.26`, filter drive `.15` and master `.54`.
+
 ## 11. Card character and pan (MA2 constants pinned early)
 
 Character seed: `0x4d41434841523031` (`MACHAR01`) [DECISION]. For card
@@ -678,7 +783,14 @@ At character `1`, bounds are VCO1 `+/-6 cents`, VCO2 additional
 `+/-8 cents`, tuning walk `+/-3 cents`, cutoff `+/-0.12 octave`, every
 envelope stage time `+/-8%`, and VCA trim `+/-3%` [DECISION]. Walk updates
 once per 32 samples, uses its own continuing SplitMix state and clamps to
-the bound. Character zero multiplies every deviation by literal zero.
+the bound. MA2-4 pins a target step of `0.03 * draw` cents, starting from
+zero, followed by 32-sample linear interpolation and an exact endpoint
+snap. The first draw is at public sample 32. Walk clocks continue when
+idle and at character zero; the draw budget is sample-clock defined,
+not invariant in seconds across sample rates. Sustain tags are reserved:
+only A/D/R stage times vary; sustain levels do not. Character zero bypasses
+the deviation arithmetic exactly. Full control/lifetime and evidence:
+`ma2-4-character-evidence.md`.
 
 Card base positions are `[-.750,-.375,0,.375,.750]` [DECISION]. With
 effective position `q=clamp(base*width + identity_offset + gfm_offset,-1,1)`:

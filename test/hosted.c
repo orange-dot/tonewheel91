@@ -272,6 +272,40 @@ static void test_ma_patch_files(void) {
     CHECK(!strcmp(roundtrip.name, source.name)
           && !memcmp(&roundtrip.value, &source.value, sizeof source.value),
           "MA patch text round-trip changed its value object");
+    FILE *legacy = tmpfile();
+    bool legacy_copy = file && legacy && fseek(file, 0, SEEK_SET) == 0;
+    char line[256];
+    while (legacy_copy && fgets(line, sizeof line, file)) {
+        if (!strncmp(line, "raster.", 7) || !strncmp(line, "bcs.", 4))
+            continue;
+        char const *output = !strcmp(line, "mamutanalog_patch=3\n")
+                           ? "mamutanalog_patch=1\n" : line;
+        legacy_copy = fputs(output, legacy) >= 0;
+    }
+    legacy_copy = legacy_copy && !ferror(file) && fflush(legacy) == 0
+               && fseek(legacy, 0, SEEK_SET) == 0;
+    ma_patch_document migrated = { 0 };
+    CHECK(legacy_copy && ma_patch_read(legacy, &migrated, &error)
+          && !memcmp(&migrated.value, &source.value, sizeof source.value),
+          "legacy v1 MA patch did not migrate with Raster bypassed: %s",
+          error.message);
+    if (legacy) fclose(legacy);
+    FILE *version2 = tmpfile();
+    bool version2_copy = file && version2 && fseek(file, 0, SEEK_SET) == 0;
+    while (version2_copy && fgets(line, sizeof line, file)) {
+        if (!strncmp(line, "bcs.", 4)) continue;
+        char const *output = !strcmp(line, "mamutanalog_patch=3\n")
+                           ? "mamutanalog_patch=2\n" : line;
+        version2_copy = fputs(output, version2) >= 0;
+    }
+    version2_copy = version2_copy && !ferror(file) && fflush(version2) == 0
+                  && fseek(version2, 0, SEEK_SET) == 0;
+    migrated = (ma_patch_document){ 0 };
+    CHECK(version2_copy && ma_patch_read(version2, &migrated, &error)
+          && !memcmp(&migrated.value, &source.value, sizeof source.value),
+          "legacy v2 MA patch did not migrate with BCS bypassed: %s",
+          error.message);
+    if (version2) fclose(version2);
     if (file) fclose(file);
 
     ma_patch_document invalid = { 0 };
@@ -298,10 +332,20 @@ static void test_ma_patch_files(void) {
                            &invalid, &error)
           && strstr(error.message, "domain"),
           "fractional MA patch integer was accepted");
-    CHECK(!read_patch_text("mamutanalog_patch=2\nname=x\n",
+    CHECK(!read_patch_text("mamutanalog_patch=4\nname=x\n",
                            &invalid, &error)
           && strstr(error.message, "version"),
           "unsupported MA patch version was accepted");
+    CHECK(!read_patch_text("mamutanalog_patch=1\nname=x\n"
+                           "raster.mix=.2\n",
+                           &invalid, &error)
+          && strstr(error.message, "newer"),
+          "MA patch v1 accepted a Raster field");
+    CHECK(!read_patch_text("mamutanalog_patch=2\nname=x\n"
+                           "bcs.amount=.2\n",
+                           &invalid, &error)
+          && strstr(error.message, "version 3"),
+          "MA patch v2 accepted a BCS field");
     CHECK(!read_patch_text("mamutanalog_patch=1\nname=bad=name\n",
                            &invalid, &error)
           && strstr(error.message, "name"),
@@ -330,6 +374,10 @@ static void test_ma_patch_files(void) {
         { "patches/mamutanalog/tepih.mapatch", "Tepih", &ma_patch_tepih },
         { "patches/mamutanalog/lead.mapatch", "Lead", &ma_patch_lead },
         { "patches/mamutanalog/dubina.mapatch", "Dubina", &ma_patch_dubina },
+        { "patches/mamutanalog/raster.mapatch", "Raster", &ma_patch_raster },
+        { "patches/mamutanalog/prizma.mapatch", "Prizma", &ma_patch_prizma },
+        { "patches/mamutanalog/granica.mapatch", "Granica",
+          &ma_patch_granica },
     };
     for (size_t i = 0; i < sizeof builtins / sizeof *builtins; i++) {
         ma_patch_document document = { 0 };
@@ -341,7 +389,7 @@ static void test_ma_patch_files(void) {
               builtins[i].name, error.line, error.message);
     }
 
-    CHECK(ma_patch_field_count() == 45,
+    CHECK(ma_patch_field_count() == 50,
           "MA patch field catalog count changed unexpectedly");
     ma_patch_field_info field = { 0 };
     double value = 0.0;

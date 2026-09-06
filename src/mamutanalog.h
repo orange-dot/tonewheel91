@@ -58,6 +58,11 @@ typedef struct {
     float sync_softness;
     float crossmod_amount;
     float noise_level;
+    float raster_mix;
+    float raster_position;
+    float raster_warp;
+    float bcs_amount;
+    float bcs_regime;
     float mozaik_mix;
     float mozaik_slope;
     float mozaik_contrast;
@@ -82,6 +87,9 @@ typedef struct {
 extern const ma_patch ma_patch_tepih;
 extern const ma_patch ma_patch_lead;
 extern const ma_patch ma_patch_dubina;
+extern const ma_patch ma_patch_raster;
+extern const ma_patch ma_patch_prizma;
+extern const ma_patch ma_patch_granica;
 
 typedef struct {
     float current;
@@ -89,6 +97,47 @@ typedef struct {
     float step;
     uint16_t remaining;
 } ma_smoother;
+
+typedef struct {
+    float attack;
+    float decay;
+    float release;
+} ma_envelope_time_bias;
+
+/* Bank-owned physical-card calibration. Time and VCA biases are fractional
+ * full-character values; sustain has no stage time and is not varied. */
+typedef struct {
+    float amount;
+    ma_smoother smoother;
+    float vco1_cents;
+    float vco2_cents;
+    float cutoff_octaves;
+    ma_envelope_time_bias amp_time_bias;
+    ma_envelope_time_bias filter_time_bias;
+    float vca_bias;
+    uint64_t walk_state;
+    float walk_target;
+    float walk_cents;
+    float walk_step;
+    uint8_t walk_phase;
+    bool assigned;
+} ma_character;
+
+typedef struct {
+    float current_note;
+    float target_note;
+    float step;
+    float seconds;
+    uint32_t remaining;
+    bool enabled;
+    bool initialized;
+} ma_glide;
+
+typedef struct {
+    float phase;
+    float depth;
+    float rate_hz;
+} ma_lfo;
 
 typedef struct {
     ma_smoother saw_level;
@@ -107,6 +156,11 @@ typedef struct {
     ma_smoother sync_softness;
     ma_smoother crossmod_amount;
     ma_smoother noise_level;
+    ma_smoother raster_mix;
+    ma_smoother raster_position;
+    ma_smoother raster_warp;
+    ma_smoother bcs_amount;
+    ma_smoother bcs_regime;
     ma_smoother mozaik_mix;
     ma_smoother mozaik_slope;
     ma_smoother mozaik_contrast;
@@ -119,6 +173,8 @@ typedef struct {
     ma_smoother filter_keytrack;
     ma_smoother pitch_bend_semitones;
     ma_smoother poly_pressure;
+    ma_smoother lfo_depth;
+    ma_smoother lfo_rate_hz;
     ma_smoother body_drive;
     ma_smoother body_load_ratio;
     ma_smoother width;
@@ -177,6 +233,21 @@ typedef struct {
 } ma_mozaik;
 
 typedef struct {
+    uint64_t phase_q48;
+    uint8_t mip;
+} ma_raster;
+
+typedef struct {
+    float hopf_re;
+    float hopf_im;
+    float duffing_x;
+    float duffing_v;
+    float output;
+    float maximum_state;
+    uint64_t reset_count;
+} ma_bcs;
+
+typedef struct {
     float state[4];
     float y4_guess;
     float output_history[7];
@@ -216,6 +287,11 @@ typedef struct {
     float sync_softness;
     float crossmod_amount;
     float noise_level;
+    float raster_mix;
+    float raster_position;
+    float raster_warp;
+    float bcs_amount;
+    float bcs_regime;
     float mozaik_mix;
     float mozaik_slope;
     float mozaik_contrast_control;
@@ -237,6 +313,9 @@ typedef struct {
     ma_envelope filter_envelope;
     float macro[MA_MACRO_COUNT];
     float pitch_bend_semitones;
+    ma_glide glide;
+    ma_lfo lfo;
+    ma_character character;
     float channel_pressure;
     float poly_pressure;
     float mod_wheel;
@@ -251,6 +330,8 @@ typedef struct {
     uint64_t noise_state;
     ma_oscillator oscillator1;
     ma_oscillator oscillator2;
+    ma_raster raster;
+    ma_bcs bcs;
     ma_mozaik mozaik;
     ma_ladder ladder;
     ma_output_state output;
@@ -278,6 +359,7 @@ enum {
 typedef enum {
     MA_CARD_IDLE,
     MA_CARD_HELD,
+    MA_CARD_SUSTAINED,
     MA_CARD_RELEASED,
 } ma_card_phase;
 
@@ -294,6 +376,8 @@ typedef struct {
     uint64_t next_age;
     uint64_t ignored_release_velocities;
     uint8_t cursor;
+    bool sustain;
+    bool unison;
 } ma_card_bank;
 
 static_assert(sizeof(ma_card_bank) < 1024u * 1024u);
@@ -309,7 +393,8 @@ static_assert(sizeof(ma_card_bank) < 1024u * 1024u);
 void ma_synth_init(ma_synth *s, float sample_rate_hz);
 void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
                          const ma_patch *patch);
-/* Retains the initialized sample rate and resets the complete voice/DSP. */
+/* Retains sample rate and physical-card character (including its clock),
+ * and resets the remaining voice/DSP. */
 void ma_synth_apply_patch(ma_synth *s, const ma_patch *patch);
 void ma_synth_note_on(ma_synth *s, uint8_t channel, uint8_t note,
                       uint8_t velocity);
@@ -330,6 +415,11 @@ void ma_synth_set_oscillator_modulation(ma_synth *s, float sync_amount,
                                         float sync_softness,
                                         float crossmod_amount,
                                         float noise_level);
+void ma_synth_set_raster(ma_synth *s, float mix, float position, float warp);
+/* BCS is a feedback coordinate, not an audible parallel source. Amount zero
+ * is an exact state-preserving bypass; regime traverses stable, edge,
+ * subharmonic and recovery landmarks over the unit interval. */
+void ma_synth_set_bcs(ma_synth *s, float amount, float regime);
 void ma_synth_set_mozaik(ma_synth *s, float mix, float slope,
                          float contrast, float phason, float drift);
 void ma_synth_set_filter(ma_synth *s, float cutoff_hz, float resonance,
@@ -338,6 +428,8 @@ void ma_synth_set_filter_modulation(ma_synth *s, float envelope_amount,
                                     float keytrack);
 void ma_synth_set_amp_adsr(ma_synth *s, ma_adsr adsr);
 void ma_synth_set_filter_adsr(ma_synth *s, ma_adsr adsr);
+void ma_synth_set_glide(ma_synth *s, bool enabled, float seconds);
+void ma_synth_set_lfo(ma_synth *s, float depth, float rate_hz);
 void ma_synth_set_macro(ma_synth *s, ma_macro_id macro, float value);
 void ma_synth_set_output(ma_synth *s, float body_drive, float width,
                          float crossfeed, float master_level);
@@ -352,6 +444,14 @@ void ma_card_bank_init_patch(ma_card_bank *bank, float sample_rate_hz,
 [[nodiscard]] uint8_t ma_card_bank_note_off(ma_card_bank *bank,
                                             uint8_t channel, uint8_t note,
                                             uint8_t release_velocity);
+void ma_card_bank_set_sustain(ma_card_bank *bank, bool down);
+void ma_card_bank_panic(ma_card_bank *bank);
+/* Mode changes panic first; unison NoteOn owns all five cards. */
+void ma_card_bank_set_unison(ma_card_bank *bank, bool enabled);
+/* Session control, default .20; finite values clamp to [0,1], others to 0.
+ * Zero bypasses immediately; positive edits use the ordinary 6 ms ramp.
+ * Call on the render thread, as with other bank controls. */
+void ma_card_bank_set_character(ma_card_bank *bank, float amount);
 /* Per-card frames retain fixed slot order; stereo summing lands later in MA2. */
 void ma_card_bank_tick(ma_card_bank *bank,
                        ma_frame frames[static MA_CARD_COUNT]);

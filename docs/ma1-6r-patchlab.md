@@ -23,6 +23,13 @@ file I/O, directory scanning, ALSA and terminal handling remain in `driver/`.
   and out-of-domain values fail. Writing uses enough digits for exact f32
   round trips. Save writes, flushes and `fsync`s a sibling temporary file,
   then renames it over the destination.
+- MA2-DIG later extends this boundary with strict version 2 and three required
+  Raster fields, for 48 total. The reader still accepts strict version 1 and
+  supplies Raster mix, position and warp as literal zero; the writer emits
+  version 2.
+- MA2-BCS extends it again with strict version 3 and two required BCS fields,
+  for 50 total. The reader accepts v1 with Raster/BCS bypassed and v2 with
+  BCS bypassed; Patchlab now writes v3.
 - Patchlab is a concrete C program. Headless modes do not open ALSA. Live mode
   uses the existing synchronous ALSA writer as its clock and adds a small
   ANSI/termios editor; there is no ncurses, GUI toolkit, background thread,

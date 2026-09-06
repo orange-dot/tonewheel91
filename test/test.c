@@ -5524,6 +5524,446 @@ static void test_ma_card_bank(void) {
           "MA2 card bank must inherit voice sample-rate sanitization");
 }
 
+static void test_ma_card_bank_sustain_and_panic(void) {
+    ma_patch quick = ma_patch_tepih;
+    quick.amp_adsr = (ma_adsr){
+        .attack_ms = 1.0f, .decay_ms = 1.0f,
+        .sustain = 0.5f, .release_ms = 1.0f,
+    };
+    quick.filter_adsr = quick.amp_adsr;
+
+    ma_card_bank bank;
+    ma_card_bank_init_patch(&bank, 48000.0f, &quick);
+    (void)ma_card_bank_note_on(&bank, 3, 57, 90);
+    (void)ma_card_bank_note_on(&bank, 3, 57, 91);
+    ma_card_bank_set_sustain(&bank, true);
+    uint8_t first = ma_card_bank_note_off(&bank, 3, 57, 64);
+    uint8_t second = ma_card_bank_note_off(&bank, 3, 57, 32);
+    CHECK(first == 0 && second == 1 && bank.sustain
+          && bank.owner[0].phase == MA_CARD_SUSTAINED
+          && bank.owner[1].phase == MA_CARD_SUSTAINED
+          && bank.card[0].note_active && bank.card[1].note_active
+          && bank.card[0].amp_envelope.stage != MA_ENVELOPE_RELEASE
+          && bank.card[1].amp_envelope.stage != MA_ENVELOPE_RELEASE,
+          "MA2 sustain must defer repeated-note releases");
+    CHECK(ma_card_bank_note_off(&bank, 3, 57, 0) == MA_CARD_NONE
+          && bank.ignored_release_velocities == 3,
+          "MA2 sustained instances are no longer held NoteOff candidates");
+
+    uint64_t age0 = bank.owner[0].age, age1 = bank.owner[1].age;
+    ma_card_bank_set_sustain(&bank, true);
+    ma_card_bank_set_sustain(&bank, false);
+    CHECK(!bank.sustain && bank.owner[0].phase == MA_CARD_RELEASED
+          && bank.owner[1].phase == MA_CARD_RELEASED
+          && !bank.card[0].note_active && !bank.card[1].note_active
+          && bank.card[0].amp_envelope.stage == MA_ENVELOPE_RELEASE
+          && bank.card[1].amp_envelope.stage == MA_ENVELOPE_RELEASE
+          && bank.owner[0].age == age0 && bank.owner[1].age == age1
+          && bank.ignored_release_velocities == 3,
+          "MA2 pedal-up must release sustained cards without reordering ages");
+
+    ma_card_bank_init_patch(&bank, 48000.0f, &quick);
+    for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++)
+        (void)ma_card_bank_note_on(&bank, 0, (uint8_t)(48 + slot), 100);
+    ma_card_bank_set_sustain(&bank, true);
+    (void)ma_card_bank_note_off(&bank, 0, 48, 0);
+    CHECK(bank.owner[0].phase == MA_CARD_SUSTAINED
+          && ma_card_bank_note_on(&bank, 0, 80, 100) == 0
+          && bank.owner[0].phase == MA_CARD_HELD
+          && bank.owner[0].age == 6,
+          "MA2 sustained cards must participate in oldest-age stealing");
+
+    ma_card_bank_init_patch(&bank, 48000.0f, &quick);
+    (void)ma_card_bank_note_on(&bank, 1, 60, 100);
+    (void)ma_card_bank_note_on(&bank, 1, 61, 101);
+    (void)ma_card_bank_note_on(&bank, 1, 62, 102);
+    ma_frame frames[MA_CARD_COUNT] = { 0 };
+    for (int frame = 0; frame < 64; frame++)
+        ma_card_bank_tick(&bank, frames);
+    (void)ma_card_bank_note_off(&bank, 1, 61, 0);
+    ma_card_bank_set_sustain(&bank, true);
+    (void)ma_card_bank_note_off(&bank, 1, 60, 0);
+    uint64_t phases[3] = {
+        bank.card[0].oscillator1.phase_q48,
+        bank.card[1].oscillator1.phase_q48,
+        bank.card[2].oscillator1.phase_q48,
+    };
+    uint8_t cursor = bank.cursor;
+    uint64_t ages[3] = {
+        bank.owner[0].age, bank.owner[1].age, bank.owner[2].age,
+    };
+    ma_card_bank_panic(&bank);
+    bool released = !bank.sustain && bank.cursor == cursor
+                 && bank.ignored_release_velocities == 2;
+    for (uint8_t slot = 0; slot < 3; slot++)
+        released = released
+                && bank.owner[slot].phase == MA_CARD_RELEASED
+                && bank.owner[slot].age == ages[slot]
+                && !bank.card[slot].note_active
+                && bank.card[slot].amp_envelope.stage == MA_ENVELOPE_RELEASE
+                && bank.card[slot].oscillator1.phase_q48 == phases[slot];
+    CHECK(released,
+          "MA2 panic must release ownership without resetting DSP or ages");
+
+    bool finite = true;
+    for (int frame = 0; frame < 512; frame++) {
+        ma_card_bank_tick(&bank, frames);
+        for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++)
+            finite = finite && isfinite(frames[slot].left)
+                            && isfinite(frames[slot].right);
+    }
+    ma_card_bank_panic(&bank);
+    bool idle = finite && !bank.sustain;
+    for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++)
+        idle = idle && bank.owner[slot].phase == MA_CARD_IDLE;
+    CHECK(idle, "MA2 panic releases must decay to idle deterministically");
+}
+
+static void test_ma_glide_lfo_and_unison(void) {
+    ma_synth baseline, bypass;
+    ma_synth_init(&baseline, 48000.0f);
+    ma_synth_init(&bypass, 48000.0f);
+    ma_synth_set_glide(&bypass, false, 0.0f);
+    ma_synth_set_lfo(&bypass, 0.0f, 1.0f);
+    ma_synth_note_on(&baseline, 0, 60, 100);
+    ma_synth_note_on(&bypass, 0, 60, 100);
+    uint64_t baseline_hash = 0, bypass_hash = 0;
+    for (int frame = 0; frame < 2048; frame++) {
+        ma_frame a = ma_synth_tick(&baseline);
+        ma_frame b = ma_synth_tick(&bypass);
+        baseline_hash = tw_fnv1a64(&a, sizeof a, baseline_hash);
+        bypass_hash = tw_fnv1a64(&b, sizeof b, bypass_hash);
+    }
+    CHECK(baseline_hash == bypass_hash && baseline_hash != 0,
+          "MA2 glide/LFO off must preserve the MA2-2 PCM baseline");
+
+    ma_synth voice;
+    ma_synth_init(&voice, 48000.0f);
+    ma_synth_set_glide(&voice, true, 1.0f);
+    ma_synth_note_on(&voice, 0, 48, 100);
+    CHECK(voice.glide.current_note == 48.0f && !voice.glide.remaining,
+          "MA2 first played note must not glide from the idle pitch");
+    ma_synth_set_glide(&voice, false, 0.0f);
+    ma_synth_init(&voice, 48000.0f);
+    ma_synth_note_on(&voice, 0, 48, 100);
+    ma_synth_set_glide(&voice, true, 0.01f);
+    ma_synth_note_on(&voice, 0, 60, 100);
+    CHECK(voice.glide.current_note == 48.0f
+          && voice.glide.target_note == 60.0f
+          && voice.glide.remaining == 480
+          && fabsf(voice.glide.step - 0.025f) < 1e-7f,
+          "MA2 glide must begin at the card's preceding pitch");
+    for (int frame = 0; frame < 240; frame++) (void)ma_synth_tick(&voice);
+    float midpoint = voice.glide.current_note;
+    ma_synth_note_on(&voice, 0, 72, 100);
+    CHECK(voice.glide.current_note == midpoint
+          && voice.glide.target_note == 72.0f
+          && voice.glide.remaining == 480,
+          "MA2 glide retarget must continue from the current pitch");
+    for (int frame = 0; frame < 480; frame++) (void)ma_synth_tick(&voice);
+    CHECK(voice.glide.current_note == 72.0f && !voice.glide.remaining,
+          "MA2 glide must land exactly on its target");
+    ma_synth_note_on(&voice, 0, 36, 100);
+    (void)ma_synth_tick(&voice);
+    ma_synth_set_glide(&voice, false, 9.0f);
+    CHECK(voice.glide.current_note == 36.0f && !voice.glide.remaining,
+          "MA2 disabling glide must snap to the current target");
+    ma_synth_set_glide(&voice, true, NAN);
+    CHECK(voice.glide.seconds == 0.0f,
+          "MA2 hostile glide time must select the compiled default");
+    ma_synth_set_glide(&voice, true, 20.0f);
+    CHECK(voice.glide.seconds == 10.0f,
+          "MA2 glide time must clamp to ten seconds");
+
+    ma_synth_init(&voice, 48000.0f);
+    ma_synth_note_on(&voice, 0, 60, 100);
+    float phase = voice.lfo.phase;
+    for (int frame = 0; frame < 512; frame++) (void)ma_synth_tick(&voice);
+    CHECK(voice.lfo.phase == phase,
+          "MA2 depth-zero LFO must leave phase state untouched");
+    ma_synth_set_lfo(&voice, 2.0f, NAN);
+    for (int frame = 0; frame < 512; frame++) (void)ma_synth_tick(&voice);
+    CHECK(voice.lfo.depth == 1.0f && voice.lfo.rate_hz == 1.0f
+          && voice.smoothers.lfo_depth.current == 1.0f
+          && voice.lfo.phase > 0.0f,
+          "MA2 LFO domains, smoothing and phase advance");
+    phase = voice.lfo.phase;
+    ma_synth_set_lfo(&voice, 0.0f, 20.0f);
+    for (int frame = 0; frame < 64; frame++) (void)ma_synth_tick(&voice);
+    CHECK(voice.lfo.phase == phase,
+          "MA2 LFO bypass must freeze at the disabling phase");
+
+    ma_patch quick = ma_patch_tepih;
+    quick.amp_adsr = (ma_adsr){ 1.0f, 1.0f, .5f, 2.0f };
+    quick.filter_adsr = quick.amp_adsr;
+    ma_card_bank bank;
+    ma_card_bank_init_patch(&bank, 48000.0f, &quick);
+    (void)ma_card_bank_note_on(&bank, 2, 55, 90);
+    (void)ma_card_bank_note_on(&bank, 2, 59, 91);
+    ma_card_bank_set_unison(&bank, true);
+    CHECK(bank.unison && !bank.sustain
+          && bank.owner[0].phase == MA_CARD_RELEASED
+          && bank.owner[1].phase == MA_CARD_RELEASED,
+          "MA2 unison enter must perform the panic transition first");
+
+    CHECK(ma_card_bank_note_on(&bank, 4, 64, 110) == 0,
+          "MA2 unison NoteOn must return its first card");
+    bool all = bank.cursor == 0 && bank.next_age == 8;
+    for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++)
+        all = all && bank.owner[slot].phase == MA_CARD_HELD
+                  && bank.owner[slot].channel == 4
+                  && bank.owner[slot].note == 64
+                  && bank.owner[slot].age == (uint64_t)slot + 3;
+    CHECK(all, "MA2 unison play must assign all five cards in slot order");
+
+    (void)ma_card_bank_note_on(&bank, 4, 67, 111);
+    all = bank.next_age == 13;
+    for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++)
+        all = all && bank.owner[slot].phase == MA_CARD_HELD
+                  && bank.owner[slot].note == 67
+                  && bank.owner[slot].age == (uint64_t)slot + 8;
+    CHECK(all && ma_card_bank_note_off(&bank, 4, 64, 0) == MA_CARD_NONE,
+          "MA2 unison must replace every card with the newest note");
+
+    ma_card_bank_set_sustain(&bank, true);
+    CHECK(ma_card_bank_note_off(&bank, 4, 67, 63) == 0,
+          "MA2 unison NoteOff must identify the five-card assignment");
+    all = bank.sustain;
+    for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++)
+        all = all && bank.owner[slot].phase == MA_CARD_SUSTAINED;
+    CHECK(all, "MA2 unison release must cover all five cards under sustain");
+    ma_card_bank_set_sustain(&bank, false);
+    ma_card_bank_set_unison(&bank, false);
+    all = !bank.unison && !bank.sustain;
+    for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++)
+        all = all && bank.owner[slot].phase == MA_CARD_RELEASED;
+    CHECK(all, "MA2 unison leave must preserve ordinary release tails");
+    CHECK(ma_card_bank_note_on(&bank, 1, 72, 100) == 0
+          && bank.owner[0].phase == MA_CARD_HELD
+          && bank.owner[1].phase == MA_CARD_RELEASED,
+          "MA2 post-unison play must return to the ordinary allocator");
+}
+
+static uint64_t ma_raster_hash(ma_patch patch, uint8_t note) {
+    ma_synth synth;
+    ma_synth_init_patch(&synth, 48000.0f, &patch);
+    ma_synth_note_on(&synth, 0, note, 112);
+    uint64_t hash = 0;
+    for (int frame = 0; frame < 4096; frame++) {
+        ma_frame sample = ma_synth_tick(&synth);
+        hash = tw_fnv1a64(&sample, sizeof sample, hash);
+    }
+    return hash;
+}
+
+static void test_ma_raster(void) {
+    ma_synth baseline, bypass;
+    ma_synth_init(&baseline, 48000.0f);
+    ma_synth_init(&bypass, 48000.0f);
+    ma_synth_set_raster(&bypass, 0.0f, 1.0f, 1.0f);
+    ma_synth_note_on(&baseline, 0, 60, 100);
+    ma_synth_note_on(&bypass, 0, 60, 100);
+    uint64_t baseline_hash = 0, bypass_hash = 0;
+    for (int frame = 0; frame < 4096; frame++) {
+        ma_frame a = ma_synth_tick(&baseline);
+        ma_frame b = ma_synth_tick(&bypass);
+        baseline_hash = tw_fnv1a64(&a, sizeof a, baseline_hash);
+        bypass_hash = tw_fnv1a64(&b, sizeof b, bypass_hash);
+    }
+    CHECK(baseline_hash == bypass_hash && baseline_hash != 0
+          && bypass.raster.phase_q48 == 0 && bypass.raster.mip == 0,
+          "MA2-DIG Raster mix-zero must preserve PCM and phase state");
+
+    ma_patch first = ma_patch_raster;
+    ma_patch middle = ma_patch_raster;
+    ma_patch last = ma_patch_raster;
+    first.raster_position = 0.0f;
+    first.raster_warp = 0.0f;
+    middle.raster_position = 0.5f;
+    last.raster_position = 1.0f;
+    uint64_t first_hash = ma_raster_hash(first, 60);
+    uint64_t middle_hash = ma_raster_hash(middle, 60);
+    uint64_t last_hash = ma_raster_hash(last, 60);
+    CHECK(first_hash && middle_hash && last_hash
+          && first_hash != middle_hash && middle_hash != last_hash
+          && first_hash != last_hash,
+          "MA2-DIG Raster spectral positions must produce distinct PCM");
+    CHECK(first_hash == ma_raster_hash(first, 60)
+          && middle_hash == ma_raster_hash(middle, 60)
+          && last_hash == ma_raster_hash(last, 60),
+          "MA2-DIG Raster rendering must be deterministic");
+
+    ma_synth low, high;
+    ma_synth_init_patch(&low, 48000.0f, &ma_patch_raster);
+    ma_synth_init_patch(&high, 48000.0f, &ma_patch_raster);
+    ma_synth_note_on(&low, 0, 24, 100);
+    ma_synth_note_on(&high, 0, 120, 100);
+    (void)ma_synth_tick(&low);
+    (void)ma_synth_tick(&high);
+    CHECK(low.raster.mip == 0 && high.raster.mip >= 4
+          && low.raster.phase_q48 != 0 && high.raster.phase_q48 != 0,
+          "MA2-DIG Raster mip selection must follow oscillator pitch");
+
+    ma_synth hostile;
+    ma_synth_init(&hostile, 48000.0f);
+    ma_synth_set_raster(&hostile, NAN, INFINITY, -INFINITY);
+    CHECK(hostile.raster_mix == 0.0f && hostile.raster_position == 0.0f
+          && hostile.raster_warp == 0.0f,
+          "MA2-DIG hostile Raster controls must select zero defaults");
+    ma_synth_set_raster(&hostile, 2.0f, 2.0f, 2.0f);
+    CHECK(hostile.raster_mix == 1.0f && hostile.raster_position == 1.0f
+          && hostile.raster_warp == 1.0f,
+          "MA2-DIG Raster controls must clamp to the unit domain");
+
+    CHECK(ma_patch_raster.raster_mix == 1.0f
+          && ma_patch_raster.vco1.saw_level == 0.0f
+          && ma_patch_raster.vco1.sine_level == 0.0f
+          && ma_patch_raster.mozaik_mix == 0.0f
+          && ma_patch_prizma.raster_mix > 0.0f
+          && ma_patch_prizma.vco1.sine_level > 0.0f,
+          "MA2-DIG factory bank must contain pure Raster and hybrid Prizma");
+
+    static constexpr float rates[] = { 44100.0f, 48000.0f, 96000.0f,
+                                       192000.0f };
+    static constexpr uint8_t notes[] = { 0, 60, 127 };
+    bool finite = true;
+    for (size_t rate = 0; rate < sizeof rates / sizeof *rates; rate++) {
+        for (size_t note = 0; note < sizeof notes / sizeof *notes; note++) {
+            ma_synth synth;
+            ma_synth_init_patch(&synth, rates[rate], &ma_patch_raster);
+            ma_synth_set_raster(&synth, 1.0f, 1.0f, 1.0f);
+            ma_synth_note_on(&synth, 15, notes[note], 127);
+            for (int frame = 0; frame < 512; frame++) {
+                ma_frame sample = ma_synth_tick(&synth);
+                finite = finite && isfinite(sample.left)
+                                && isfinite(sample.right);
+            }
+        }
+    }
+    CHECK(finite, "MA2-DIG Raster full-domain sweep must stay finite");
+}
+
+static uint64_t ma_bcs_hash(float regime) {
+    ma_patch patch = ma_patch_granica;
+    patch.bcs_regime = regime;
+    ma_synth synth;
+    ma_synth_init_patch(&synth, 48000.0f, &patch);
+    ma_synth_note_on(&synth, 0, 43, 112);
+    uint64_t hash = 0;
+    for (int frame = 0; frame < 8192; frame++) {
+        ma_frame sample = ma_synth_tick(&synth);
+        hash = tw_fnv1a64(&sample, sizeof sample, hash);
+    }
+    return hash;
+}
+
+static void test_ma_bcs(void) {
+    ma_synth baseline, bypass;
+    ma_synth_init(&baseline, 48000.0f);
+    ma_synth_init(&bypass, 48000.0f);
+    ma_synth_set_bcs(&bypass, 0.0f, 1.0f);
+    ma_synth_note_on(&baseline, 0, 60, 100);
+    ma_synth_note_on(&bypass, 0, 60, 100);
+    uint64_t baseline_hash = 0, bypass_hash = 0;
+    for (int frame = 0; frame < 4096; frame++) {
+        ma_frame a = ma_synth_tick(&baseline);
+        ma_frame b = ma_synth_tick(&bypass);
+        baseline_hash = tw_fnv1a64(&a, sizeof a, baseline_hash);
+        bypass_hash = tw_fnv1a64(&b, sizeof b, bypass_hash);
+    }
+    CHECK(baseline_hash == bypass_hash && baseline_hash != 0
+          && bypass.bcs.hopf_re == 0.025f && bypass.bcs.hopf_im == 0.0f
+          && bypass.bcs.duffing_x == 0.001f
+          && bypass.bcs.duffing_v == 0.0f && bypass.bcs.output == 0.0f
+          && bypass.bcs.maximum_state == 0.0f
+          && bypass.bcs.reset_count == 0,
+          "MA2-BCS amount-zero must preserve PCM and nonlinear state");
+
+    uint64_t stable = ma_bcs_hash(0.0f);
+    uint64_t edge = ma_bcs_hash(1.0f / 3.0f);
+    uint64_t subharmonic = ma_bcs_hash(2.0f / 3.0f);
+    uint64_t recovery = ma_bcs_hash(1.0f);
+    CHECK(stable && edge && subharmonic && recovery
+          && stable != edge && stable != subharmonic && stable != recovery
+          && edge != subharmonic && edge != recovery
+          && subharmonic != recovery,
+          "MA2-BCS landmarks must produce four distinct feedback responses");
+    CHECK(stable == ma_bcs_hash(0.0f)
+          && subharmonic == ma_bcs_hash(2.0f / 3.0f)
+          && recovery == ma_bcs_hash(1.0f),
+          "MA2-BCS rendering must be deterministic");
+
+    ma_patch control_only = ma_patch_granica;
+    control_only.vco1 = (ma_vco_controls){ .pulse_width = 0.5f };
+    control_only.vco2 = (ma_vco_controls){ .pulse_width = 0.5f };
+    control_only.vco2_level = 0.0f;
+    control_only.noise_level = 0.0f;
+    control_only.raster_mix = 0.0f;
+    control_only.mozaik_mix = 0.0f;
+    for (int macro = 0; macro < MA_MACRO_COUNT; macro++)
+        control_only.macro[macro] = 0.0f;
+    ma_synth silent;
+    ma_synth_init_patch(&silent, 48000.0f, &control_only);
+    ma_synth_note_on(&silent, 0, 48, 127);
+    bool direct_audio = false;
+    for (int frame = 0; frame < 4096; frame++) {
+        ma_frame sample = ma_synth_tick(&silent);
+        direct_audio = direct_audio || sample.left != 0.0f
+                                    || sample.right != 0.0f;
+    }
+    CHECK(!direct_audio && silent.bcs.output != 0.0f
+          && silent.bcs.maximum_state > 0.0f,
+          "MA2-BCS must remain a control path, not a parallel audio source");
+
+    ma_synth hostile;
+    ma_synth_init(&hostile, 48000.0f);
+    ma_synth_set_bcs(&hostile, NAN, INFINITY);
+    CHECK(hostile.bcs_amount == 0.0f && hostile.bcs_regime == 0.0f,
+          "MA2-BCS hostile controls must select bypass defaults");
+    ma_synth_set_bcs(&hostile, 2.0f, 2.0f);
+    CHECK(hostile.bcs_amount == 1.0f && hostile.bcs_regime == 1.0f
+          && hostile.smoothers.bcs_amount.remaining == 288
+          && hostile.smoothers.bcs_regime.remaining == 288,
+          "MA2-BCS controls must clamp and use the common smoother");
+    hostile.smoothers.bcs_amount = (ma_smoother){
+        .current = 1.0f, .target = 1.0f,
+    };
+    hostile.bcs.hopf_re = INFINITY;
+    (void)ma_synth_tick(&hostile);
+    CHECK(hostile.bcs.reset_count == 1 && hostile.bcs.hopf_re == 0.025f
+          && hostile.bcs.duffing_x == 0.001f
+          && hostile.bcs.output == 0.0f,
+          "MA2-BCS unsafe state must recover to the pinned seed");
+
+    static constexpr float rates[] = { 44100.0f, 48000.0f, 96000.0f,
+                                       192000.0f };
+    static constexpr uint8_t notes[] = { 0, 60, 127 };
+    bool finite = true;
+    for (size_t rate = 0; rate < sizeof rates / sizeof *rates; rate++) {
+        for (size_t note = 0; note < sizeof notes / sizeof *notes; note++) {
+            ma_synth synth;
+            ma_synth_init_patch(&synth, rates[rate], &ma_patch_granica);
+            ma_synth_set_bcs(&synth, 1.0f, 1.0f);
+            ma_synth_note_on(&synth, 15, notes[note], 127);
+            for (int frame = 0; frame < 1024; frame++) {
+                ma_frame sample = ma_synth_tick(&synth);
+                finite = finite && isfinite(sample.left)
+                                && isfinite(sample.right)
+                                && isfinite(synth.bcs.output)
+                                && fabsf(synth.bcs.output) <= 1.0f
+                                && synth.bcs.maximum_state
+                                    <= 32.0f;
+            }
+        }
+    }
+    CHECK(finite, "MA2-BCS full-domain sweep must stay finite and bounded");
+    CHECK(ma_patch_granica.bcs_amount > 0.0f
+          && ma_patch_granica.bcs_regime > 0.5f
+          && ma_patch_granica.vco1.pulse_level == 0.0f
+          && ma_patch_granica.vco2.pulse_level == 0.0f,
+          "MA2-BCS factory Granica patch must expose the nonlinear coordinate");
+}
+
 int main(void) {
     test_frequency_table();
     test_foldback();
@@ -5585,6 +6025,10 @@ int main(void) {
     test_ma_identity_and_performance();
     test_ma_output();
     test_ma_card_bank();
+    test_ma_card_bank_sustain_and_panic();
+    test_ma_glide_lfo_and_unison();
+    test_ma_raster();
+    test_ma_bcs();
     printf("%d checks, %d failures\n", checks, fails);
     return fails ? 1 : 0;
 }

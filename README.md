@@ -54,11 +54,15 @@ to the organ, and the organ's pinned signatures — the whole-song render
 hashes included — reproduce bit-for-bit.
 
     make test      # core, hosted-boundary and MIDI-dispatch checks
+    make bench-ma  # five-card CPU/wall timing and pinned PCM checks (host only)
+    make audition-ma2-4  # dry chord/unison comparison: character 0 / .20 / 1
     make exhibit   # renders the evidence WAVs into build/
     make viz       # renders the evidence PNGs into docs/viz/
     make audition-ma1-5  # renders the provisional Mamut Analog listening WAVs
     make audition-ma1-6r # Mamut sine / Tepih / Lead / Dubina WAV evidence
     make audition-ma1-7  # output body / DC blocker / safety A/B WAVs
+    make audition-ma2-dig # Raster digital source / Prizma hybrid listening WAV
+    make audition-ma2-bcs # Granica nonlinear-feedback listening WAV
     make audition-ma-blues # hosted F#-minor Blade Runner Blues performance study
     make audition-ma-architecture-preview # original ten-line 180 s preview
     make audition-ma-architecture # explicit full 960 s audition (not in tests)
@@ -90,7 +94,11 @@ hashes included — reproduce bit-for-bit.
     ./build/patchlab --list                     # Mamut Analog patch bank
     ./build/patchlab --dump Dubina              # canonical .mapatch text
     ./build/patchlab --render Dubina build/dubina.wav
-    ./build/exhibit_ma_blues # writes build/ma_blade_runner_blues.wav
+    ./build/patchlab --render Raster build/raster.wav
+    ./build/patchlab --render Granica build/granica.wav
+    ./build/exhibit_ma_blues # writes build/ma_blade_runner_blues_expanded.wav
+    ./build/exhibit_ma_blues_panic
+                   # MA2-2 banks -> build/ma_blade_runner_blues_panic.wav
     ./build/render_ma_architecture -d 180 \
         -o build/mamut_architecture_180s.wav
     ./build/patchlab -d hw:CARD=AG06AG03 -m hw:X,Y,Z --patch Tepih

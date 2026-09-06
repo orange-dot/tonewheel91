@@ -12,15 +12,16 @@ its internal sub-gates already has working code.
 ## Current position
 
 - Active milestone: **MA2 — five-card body**.
-- Active task: none. **MA2-2 — sustain, pedal-up release and panic** is the
-  next queued task.
+- Active task: none. **MA2-5 — card pan and shared mid/side body** is next.
+  MA2-4 is closed; task ledger and evidence: `docs/ma2-4-character-evidence.md`.
 - Last green aggregate run: GCC, Clang and ASan/UBSan/
-  float-cast-overflow, 2026-08-27, on MA2-1: core `111336`, hosted `109`,
-  MIDI map `22`, architecture `227`; zero failures. Both compiler core-symbol
+  float-cast-overflow, 2026-09-06, on MA2-4: core `111378`, hosted `116`,
+  MIDI map `22`, architecture `227`, character `8700`; zero failures. Both compiler core-symbol
   audits pass.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
-- Core implementation status: MA0, MA1 and MA2-1 are closed.
+- Core implementation status: MA0, MA1, MA2-1 through MA2-4, MA2-DIG,
+  MA2-BCS and MA2-PERF are closed.
 
 ## MA0 task ledger
 
@@ -59,9 +60,12 @@ one.
 | ID | Status | Depends on | Deliverable and closing check |
 | --- | --- | --- | --- |
 | MA2-1 | done | MA1 | Five caller-owned `ma_synth` cards, explicit ownership phases, round-robin idle search, oldest-age steal and oldest-held repeated-note release. |
-| MA2-2 | queued | MA2-1 | Sustain, pedal-up release and panic ownership transitions. |
-| MA2-3 | queued | MA2-2 | LFO, glide and panic-bounded unison enter/play/leave behavior. |
-| MA2-4 | queued | MA2-3 | Fixed-seed per-card character with an exact character-zero baseline. |
+| MA2-2 | done | MA2-1 | Sustain, pedal-up release and panic ownership transitions. |
+| MA2-3 | done | MA2-2 | LFO, glide and panic-bounded unison enter/play/leave behavior. |
+| MA2-DIG | done | MA2-3 | Eight-family mipmapped Raster oscillator, spectral morph/warp, two patches, Patchlab controls and deterministic audition. |
+| MA2-BCS | done | MA2-DIG | Feedback-only Hopf/Duffing coordinate, exact bypass, Granica patch and deterministic audition. |
+| MA2-PERF | done | MA2-BCS | Five-card cost referee, pinned pre-change PCM and removal of redundant source work; evidence in `ma2-perf-evidence.md`. |
+| MA2-4 | done | MA2-3 | Fixed-seed per-card character with an exact character-zero baseline; `ma2-4-character-evidence.md`. |
 | MA2-5 | queued | MA2-4 | Deterministic card pan and shared mid/side body. |
 | MA2-6 | queued | MA2-5 | Allocator, compass, stereo, character, cost and listening exhibit closing the public MA2 gate. |
 
@@ -69,6 +73,8 @@ one.
 
 | Date | Decision | Reason |
 | --- | --- | --- |
+| 2026-09-06 | Close MA2-4 with bank character `.20`, independent A/D/R time biases and a continuous 32-sample walk clock. | Physical calibration survives note and patch events; exact zero PCM, numeric routing probes and deterministic listening evidence pass. Sustain levels remain authored. |
+| 2026-09-05 | Insert MA2-PERF before MA2-4; preserve PCM and the existing 8x/2x topology. | The operator accepted early profiling after review exposed a thin host rendering budget. Card character remains the next functional slice. |
 | 2026-08-20 | Keep the public milestone as one MA1 slice but expose eight internal gates in this journal. | The backlog requires a complete voice while also requiring source/filter/identity failures to stop later work. |
 | 2026-08-20 | Track this journal in Git instead of using the ignored `docs/ep-journal.md` pattern. | MA0/MA1 status and validation provenance are part of the handoff, not disposable listening notes. |
 | 2026-08-20 | Do not edit organ or EP core translation units. | Their frozen signatures are the regression boundary for the third line. |
@@ -86,6 +92,8 @@ one.
 | 2026-08-26 | Supersede MAD8 with one concrete `ma_patch` value and a strict hosted `.mapatch` file; keep I/O and discovery out of the core. | Sound design now needs recall, but a generic registry/plugin framework would broaden the product boundary without helping this one instrument. |
 | 2026-08-26 | Build Patchlab as one ANSI/termios and synchronous ALSA C loop, with headless modes that never open ALSA. | The current one-card voice needs an audible vertical tool; ncurses, a GUI framework, threads and callbacks are unnecessary ownership. |
 | 2026-08-27 | Close MA1 without further evidence writing or measurement and proceed to MA2. | The operator accepted the registered 248-second listening take and made the milestone decision explicitly. |
+| 2026-08-27 | Insert the ad hoc MA2-DIG Raster vertical slice without renumbering MA2. | The operator requested one audibly digital direction before returning to fixed-seed card character; exact zero bypass keeps the analog line's prior contract intact. |
+| 2026-08-27 | Promote BCS early as an ad hoc feedback-only slice, without renumbering regular MA2 work. | The operator selected BCS from the later candidate list; retaining one continuous coordinate and forbidding direct audio preserves the intended experiment while avoiding the donor scenario player. |
 
 ## Entries
 
@@ -416,3 +424,152 @@ one.
   `109`, MIDI map `22` and architecture `227`; both core-symbol audits pass.
   The MA2 bank translation unit is analyzer-clean. The full analyzer build
   retains a warning in unchanged `driver/ma_architecture_render.c`.
+
+### 2026-08-27 — MA2-2 sustain, release and panic closed
+
+- Added the sustained ownership phase and bank-level pedal state. NoteOff
+  under a down pedal removes the oldest matching held instance from key
+  ownership without starting its envelopes' release.
+- Pedal-up starts the ordinary release on every sustained card while retaining
+  assignment ages and cursor order. Held, sustained and already-released cards
+  remain peers in the oldest-age steal rule.
+- Added the bank panic transition: sustain clears, held and sustained cards
+  enter ordinary release, already-released cards continue, and oscillator,
+  filter and output state are not reset. Effect tails therefore remain able to
+  decay when the later shared stages land.
+- Tests cover repeated notes under sustain, unmatched NoteOff accounting,
+  pedal idempotence, sustained-card stealing, mixed-phase panic, preserved
+  ages/cursor/DSP phase and deterministic decay back to idle.
+- GCC, Clang and ASan/UBSan/float-cast-overflow pass core `111342`, hosted
+  `109`, MIDI map `22` and architecture `227`; both core-symbol audits and the
+  focused GCC analyzer pass, and `git diff --check` is clean.
+
+### 2026-08-27 — Blade Runner Blues Panic hosted audition
+
+- Added a separate `driver/exhibit_ma_blues_panic.c`; the accepted MA1 Blues
+  source and WAV were not changed. Three five-card hosted overdub banks retain
+  Tepih, Dubina and dark Lead colours while exercising the landed MA2-2
+  allocator, repeated-note, sustain, steal and panic paths.
+- The three 72-second arcs end in ordinary-release panic transitions, leaving
+  envelope and reverb tails rather than hard-zeroing DSP state. The hosted
+  role mix is not the future MA2 card-pan/shared-body topology.
+- Two complete passes are PCM-identical at FNV64 `43a8af4dd33b877e`: 88
+  notes, 12-card peak, 39 steals, three panic events, peak `.126336`, RMS
+  `.016443`, finite with headroom. WAV SHA-256 is
+  `8b97c6c459df249f17c45bc87b0b5a2008a720d10ce2a46c2e0a024b9dc6523c`.
+
+### 2026-08-27 — MA2-3 glide, LFO and unison closed
+
+- Added per-card linear glide in MIDI-note space. The first assigned pitch
+  starts directly, later notes glide from the current pitch, mid-glide
+  retargeting does not jump, and the last sample lands exactly on target.
+- Added the bounded sine voice LFO with smoothed depth/rate and a one-semitone
+  maximum pitch span. Exact depth zero rejoins the prior PCM path and leaves
+  phase state untouched.
+- Added the bank unison mode machine. Enter and leave perform the existing
+  ordinary-release panic transition; unison NoteOn assigns all five slots in
+  fixed order to the newest note, and NoteOff/sustain operate on all five.
+  Leaving restores the ordinary allocator without migrating ownership.
+- Tests cover the exact glide/LFO-off PCM baseline, first-note and retarget
+  rules, hostile domains, LFO phase bypass, unison enter/play/replace/release/
+  leave and the post-unison allocator state.
+- GCC and Clang pass core `111361`, hosted `109`, MIDI map `22` and architecture
+  `227`; ASan/UBSan/float-cast-overflow pass with the repository's required
+  leak check disable, and both core-symbol audits pass.
+
+### 2026-08-27 — MA2-DIG Raster oscillator and spectral morph closed
+
+- Added one explicitly digital Raster source per fixed card: eight immutable
+  phase-aligned families, seven harmonic mip levels, linear sample/family
+  interpolation, continuous adjacent-mip crossfade and bounded phase warp.
+- Literal mix zero executes the prior source-mix branch byte for byte and
+  leaves Raster phase/mip state untouched. Positive mix enters the existing
+  normalized 2x source bus before pressure and the ladder; the three controls
+  use the common 6 ms smoother.
+- Added the pure Raster and hybrid Prizma compiled patches and exact file
+  mirrors. Patchlab exposes all three controls. The strict 48-field file is
+  version 2; version-1 45-field input remains readable with Raster bypassed.
+- Added the 56-second two-bank `make audition-ma2-dig` exhibit. Both passes
+  equal FNV `f70e00dd1cf6d64a`; peak is `.522408`, RMS `.097373`, all samples
+  are finite and no frame clips. The WAV SHA-256 is
+  `a1687f4a59a8a84bb6bef7599fa2fb5da65c1a43de41e100d9659a131e7a6142`.
+- Permanent tests cover exact bypass, spectral-position distinction,
+  determinism, mip selection, hostile controls, factory roles and full-rate/
+  note-domain finiteness. MA2-4 remains the next queued task.
+- GCC, Clang and ASan/UBSan/float-cast-overflow pass core `111369`, hosted
+  `112`, MIDI map `22` and architecture `227`; both core-symbol audits, the
+  focused GCC analyzer and `git diff --check` pass.
+
+### 2026-08-27 — MA2-BCS nonlinear feedback coordinate closed
+
+- Ported the donor's four-state Hopf/Duffing model at the pinned commit into
+  each fixed card, with four RK4 substeps per public frame. One continuous
+  coordinate interpolates stable, edge, subharmonic and recovery coefficient
+  landmarks; no scenario enum, timeline or hosted donor layer entered core.
+- The bounded BCS readout changes existing cross-mod and ladder-feedback
+  controls, and the previous ladder state weakly excites Duffing. A permanent
+  source-null test proves that nonzero BCS state contributes no direct PCM.
+- Literal amount zero skips integration and destination arithmetic, preserves
+  nonlinear state and reproduces the pre-slice render byte for byte. Unsafe
+  state resets to the pinned seed; hostile full-note sweeps at 44.1, 48, 96
+  and 192 kHz remain finite and bounded.
+- Added the pulse-free dark Granica compiled/file patch and Patchlab controls.
+  Strict `.mapatch` version 3 has 50 fields; v1 supplies Raster/BCS zeros and
+  v2 supplies BCS zeros.
+- Added `make audition-ma2-bcs`. Its 56-second Granica-over-Prizma render is
+  identical in both passes at FNV `b0ce05ae487a1495`: peak `.276843`, RMS
+  `.058201`, BCS maximum state `1.165633`, zero safety resets, non-finite
+  frames or clips. WAV SHA-256 is
+  `459a6be8d3c1e6af002c4573cd02a59bcd8754b398f83f06263bb2c4de0214ba`.
+- GCC, Clang and ASan/UBSan/float-cast-overflow pass core `111378`, hosted
+  `116`, MIDI map `22` and architecture `227`; both compiler core-symbol
+  audits, the focused GCC analyzer and `git diff --check` pass. MA2-4 remains
+  the next queued task; operator listening of Granica remains an explicit
+  musical verdict rather than an automated claim.
+
+### 2026-09-05 — MA2-PERF five-card cost slice closed
+
+- Added `make bench-ma`: five fixed bank scenarios, separate thread CPU and
+  elapsed timing, two fresh passes, finite PCM checks and signatures captured
+  before core changes. Timed rendering excludes event dispatch and hashing.
+- A separate gprof build identified the source path as a significant cost.
+  Reused the VCO2 preview already computed for cross-mod and prepared invariant
+  source controls once per public frame rather than eight times. Kept the
+  8x source, 2x ladder, arithmetic order, continuous idle cards and public
+  state layout; no factory patch or DSP algorithm changed.
+- The affinity-pinned i7-4600U/GCC comparison observed 17–20% lower mean CPU
+  time in active scenarios. Five-note Tepih moved from 1404.64 to 1117.66 us
+  per 128-frame block; Granica with BCS from 1855.27 to 1491.16 us. Both
+  passes and p99 observations are recorded in `docs/ma2-perf-evidence.md`.
+  The half-deadline budget and Raspberry Pi acceptance remain open.
+- GCC/Clang aggregate tests and optimized core-symbol audits pass. Clang
+  ASan/UBSan/float-cast-overflow passes the aggregate suite and the benchmark.
+  Counts remain core `111378`, hosted `116`, MIDI map `22`, architecture
+  `227`. All five benchmark signatures remain identical on both compilers
+  and under sanitizers; all 16 oscillator alias/harmonic cases pass on GCC
+  and Clang. `git diff --check` passes.
+- Next functional task: MA2-4 fixed-seed card character. No MA2-4 code has
+  started; this performance slice does not close public MA2 or MA5.
+
+### 2026-09-06 — MA2-4: physical-card character
+
+- Closed all six implementation tasks in `docs/ma2-4-character-evidence.md`.
+  Ten independent fixed-seed draws per card control common/additional VCO
+  tuning, cutoff, six envelope times and VCA trim. Sustain levels stay fixed.
+- Added bank character control with factory `.20`, immediate zero bypass
+  and the existing positive-control ramp. The bounded walk takes one draw
+  every 32 samples and interpolates over the following 32. Physical state
+  continues while idle or bypassed and survives steals, sustain, panic,
+  unison and patch replacement. Standalone MA1 voices retain zero character.
+- All five pre-character benchmark signatures remain exact; four positive
+  character signatures are pinned. Six 8-second dry chord/unison WAVs at
+  `0/.20/1` repeat exactly and agree across GCC and Clang. Listening
+  preference remains the operator's decision.
+- GCC, Clang and ASan/UBSan/float-cast-overflow aggregate tests pass:
+  core `111378`, hosted `116`, MIDI map `22`, architecture `227`, character
+  `8700`. Both freestanding audits and all 16 source alias/harmonic cases
+  pass. Final fixed state is 1792 bytes/card and 9064 bytes/bank on x86-64.
+- Final affinity-pinned host means at `.20` are 1139.43/1136.26 us for
+  Tepih five and 1520.48/1524.81 us for Granica BCS per 128 frames. Full
+  timing conditions and p99 values are in the evidence document. The
+  half-deadline/Pi cost gate remains open. Next functional task is MA2-5.

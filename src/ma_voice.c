@@ -1,6 +1,7 @@
 /* Mamut Analog one-voice core. MA1 begins with the pinned pitch/control
  * spine; render state lands behind this concrete public object. */
 #include "mamutanalog.h"
+#include "ma_raster_table.h"
 
 static constexpr uint64_t NOISE_SEED = UINT64_C(0x4d414e4f49534531);
 #if !defined(MA_SOURCE_EVIDENCE)
@@ -16,6 +17,10 @@ static constexpr float OUTPUT_TINY = 1.0e-9f;
 #endif
 static constexpr float SAFETY_KNEE = 0.98f;
 static constexpr float SAFETY_RANGE = 0.02f;
+static constexpr float LFO_RATE_DEFAULT_HZ = 1.0f;
+static constexpr float BCS_TAU = 6.283185307179586f;
+static constexpr float BCS_STATE_CEILING = 32.0f;
+static constexpr int BCS_INTEGRATION_STEPS = 4;
 
 typedef struct {
     float sigma;
@@ -31,6 +36,11 @@ typedef struct {
     float sync_softness;
     float crossmod_amount;
     float noise_level;
+    float raster_mix;
+    float raster_position;
+    float raster_warp;
+    float bcs_amount;
+    float bcs_regime;
     float mozaik_mix;
     uint32_t mozaik_slope_q32;
     float mozaik_contrast;
@@ -43,6 +53,8 @@ typedef struct {
     float filter_keytrack;
     float pitch_bend_semitones;
     float poly_pressure;
+    float lfo_depth;
+    float lfo_rate_hz;
     float body_drive;
     float body_load_ratio;
     float width;
@@ -121,6 +133,7 @@ const ma_patch ma_patch_tepih = {
               .pulse_width = 0.50f },
     .vco2_level = 0.62f, .vco2_interval = 0, .vco2_fine_cents = 7.0f,
     .noise_level = 0.02f,
+    .raster_mix = 0.0f,
     .mozaik_mix = 0.20f, .mozaik_slope = 0x1.1ec72ep-1f,
     .mozaik_contrast = 0x1.07b1cap-1f, .mozaik_drift = 0.05f,
     .mixer_pressure = 0.15f,
@@ -142,6 +155,7 @@ const ma_patch ma_patch_lead = {
     .vco2_level = 0.55f, .vco2_interval = 0, .vco2_fine_cents = 7.0f,
     .sync_amount = 0.22f, .sync_softness = 0.18f,
     .crossmod_amount = 0.12f, .noise_level = 0.01f,
+    .raster_mix = 0.0f,
     .mozaik_mix = 0.08f, .mozaik_slope = 0x1.1ec72ep-1f,
     .mozaik_contrast = 0.60f, .mozaik_drift = 0.03f,
     .mixer_pressure = 0.32f,
@@ -163,6 +177,7 @@ const ma_patch ma_patch_dubina = {
     .vco2_level = 0.90f, .vco2_interval = -12,
     .vco2_fine_cents = 0.0f,
     .crossmod_amount = 0.04f, .noise_level = 0.01f,
+    .raster_mix = 0.0f,
     .mozaik_mix = 0.05f, .mozaik_slope = 0x1.1ec72ep-1f,
     .mozaik_contrast = 0x1.07b1cap-1f, .mozaik_drift = 0.02f,
     .mixer_pressure = 0.18f,
@@ -174,6 +189,64 @@ const ma_patch ma_patch_dubina = {
     .macro = { 0.20f, 0.0f, 0.18f, 0.04f, 0.0f },
     .body_drive = 0.18f, .width = 0.35f, .crossfeed = 0.12f,
     .master_level = 0.18f,
+};
+
+const ma_patch ma_patch_raster = {
+    .vco1 = { .pulse_width = 0.50f },
+    .vco2 = { .pulse_width = 0.50f },
+    .raster_mix = 1.0f, .raster_position = 0.78f, .raster_warp = 0.42f,
+    .mozaik_slope = 0x1.1ec72ep-1f,
+    .mozaik_contrast = 0x1.07b1cap-1f,
+    .filter_cutoff_hz = 5200.0f, .filter_resonance = 0.12f,
+    .filter_drive = 0.04f, .filter_env_amount = 0.20f,
+    .filter_keytrack = 0.62f,
+    .amp_adsr = { 18.0f, 420.0f, 0.72f, 1700.0f },
+    .filter_adsr = { 12.0f, 680.0f, 0.34f, 1500.0f },
+    .macro = { 0.0f, 0.08f, 0.0f, 0.02f, 0.04f },
+    .width = 0.78f, .master_level = 0.90f,
+};
+
+const ma_patch ma_patch_prizma = {
+    .vco1 = { .saw_level = 0.18f, .triangle_level = 0.24f,
+              .sine_level = 0.38f, .pulse_width = 0.50f },
+    .vco2 = { .triangle_level = 0.18f, .sine_level = 0.46f,
+              .pulse_width = 0.50f },
+    .vco2_level = 0.44f, .vco2_fine_cents = 5.0f,
+    .noise_level = 0.005f,
+    .raster_mix = 0.48f, .raster_position = 0.36f, .raster_warp = 0.18f,
+    .mozaik_mix = 0.08f, .mozaik_slope = 0x1.1ec72ep-1f,
+    .mozaik_contrast = 0x1.07b1cap-1f, .mozaik_drift = 0.025f,
+    .mixer_pressure = 0.08f,
+    .filter_cutoff_hz = 1450.0f, .filter_resonance = 0.17f,
+    .filter_drive = 0.08f, .filter_env_amount = 0.34f,
+    .filter_keytrack = 0.48f,
+    .amp_adsr = { 420.0f, 1500.0f, 0.80f, 4300.0f },
+    .filter_adsr = { 260.0f, 1900.0f, 0.46f, 3600.0f },
+    .macro = { 0.04f, 0.14f, 0.02f, 0.01f, 0.08f },
+    .body_drive = 0.04f, .width = 0.76f, .master_level = 0.80f,
+};
+
+const ma_patch ma_patch_granica = {
+    .vco1 = { .saw_level = 0.10f, .triangle_level = 0.34f,
+              .sine_level = 0.48f, .pulse_width = 0.50f },
+    .vco2 = { .triangle_level = 0.24f, .sine_level = 0.72f,
+              .pulse_width = 0.50f },
+    .vco2_level = 0.68f, .vco2_interval = -12, .vco2_fine_cents = 3.0f,
+    .sync_amount = 0.03f, .sync_softness = 0.70f,
+    .crossmod_amount = 0.05f, .noise_level = 0.004f,
+    .raster_mix = 0.10f, .raster_position = 0.68f, .raster_warp = 0.12f,
+    .bcs_amount = 0.72f, .bcs_regime = 0.62f,
+    .mozaik_mix = 0.04f, .mozaik_slope = 0x1.1ec72ep-1f,
+    .mozaik_contrast = 0x1.07b1cap-1f, .mozaik_drift = 0.018f,
+    .mixer_pressure = 0.16f,
+    .filter_cutoff_hz = 820.0f, .filter_resonance = 0.26f,
+    .filter_drive = 0.15f, .filter_env_amount = 0.36f,
+    .filter_keytrack = 0.38f,
+    .amp_adsr = { 70.0f, 520.0f, 0.78f, 1900.0f },
+    .filter_adsr = { 40.0f, 760.0f, 0.38f, 1500.0f },
+    .macro = { 0.24f, 0.02f, 0.15f, 0.08f, 0.01f },
+    .body_drive = 0.10f, .width = 0.42f, .crossfeed = 0.10f,
+    .master_level = 0.54f,
 };
 
 static constexpr float NOTE_HZ[128] = {
@@ -334,15 +407,14 @@ static float preview_oscillator(const ma_oscillator *oscillator,
 }
 
 static float render_oscillator(ma_oscillator *oscillator,
-                               ma_vco_controls controls, float step,
+                               float preview, float step,
                                float sync_correction) {
     if (!oscillator->triangle_initialized) {
         oscillator->triangle = raw_triangle(
             phase_turns(oscillator->phase_q48));
         oscillator->triangle_initialized = true;
     }
-    float sample = preview_oscillator(oscillator, controls, step)
-                 + oscillator->sync_residual + sync_correction;
+    float sample = preview + oscillator->sync_residual + sync_correction;
     oscillator->sync_residual = 0.0f;
     oscillator->triangle = clamp_signal(
         oscillator->triangle
@@ -393,6 +465,55 @@ static float interval_ratio(int interval) {
 static float phase_step(float frequency_hz, float sample_rate_hz) {
     float step = frequency_hz / sample_rate_hz;
     return clamp_signal(step, 0.0f, 0.45f);
+}
+
+static float note_position_hz(float note) {
+    note = clamp_signal(note, 0.0f, 127.0f);
+    uint8_t floor_note = (uint8_t)note;
+    float fraction = note - floor_note;
+    return NOTE_HZ[floor_note] * octave_ratio_small(fraction / 12.0f);
+}
+
+static uint32_t glide_frames(const ma_synth *s) {
+    float frames = s->glide.seconds * s->sample_rate_hz + 0.5f;
+    if (frames < 1.0f) return 1;
+    return (uint32_t)frames;
+}
+
+static void glide_to_note(ma_synth *s, uint8_t note) {
+    float target = note;
+    if (!s->glide.initialized || !s->glide.enabled
+        || s->glide.seconds == 0.0f) {
+        s->glide.current_note = target;
+        s->glide.target_note = target;
+        s->glide.step = 0.0f;
+        s->glide.remaining = 0;
+    } else {
+        s->glide.target_note = target;
+        s->glide.remaining = glide_frames(s);
+        s->glide.step = (target - s->glide.current_note)
+                      / (float)s->glide.remaining;
+    }
+    s->glide.initialized = true;
+}
+
+static float next_glide_note(ma_synth *s) {
+    float note = s->glide.current_note;
+    if (s->glide.remaining) {
+        s->glide.current_note += s->glide.step;
+        s->glide.remaining--;
+        if (!s->glide.remaining)
+            s->glide.current_note = s->glide.target_note;
+    }
+    return note;
+}
+
+static float next_lfo(ma_synth *s, const ma_render_controls *controls) {
+    if (controls->lfo_depth == 0.0f) return 0.0f;
+    float value = controls->lfo_depth * tw_sin_turns(s->lfo.phase);
+    s->lfo.phase += controls->lfo_rate_hz / s->sample_rate_hz;
+    if (s->lfo.phase >= 1.0f) s->lfo.phase -= 1.0f;
+    return value;
 }
 
 static uint64_t phase_step_q48(float step) {
@@ -509,6 +630,22 @@ static float next_guard_gain(ma_oscillator *oscillator) {
 static float next_noise(uint64_t *state) {
     uint32_t top = (uint32_t)(tw_splitmix64(state) >> 40);
     return (float)top * (1.0f / 8388608.0f) - 1.0f;
+}
+
+static float next_character(ma_synth *s) {
+    ma_character *c = &s->character;
+    if (!c->assigned) return 0.0f;
+    set_bypass_smoother_target(&c->smoother,
+        clamp_control(c->amount, 0.0f, 1.0f, 0.0f), s->sample_rate_hz);
+    c->walk_cents = clamp_signal(c->walk_cents + c->walk_step, -3.0f, 3.0f);
+    if (++c->walk_phase == 32) {
+        c->walk_phase = 0;
+        c->walk_cents = c->walk_target;
+        c->walk_target = clamp_signal(
+            c->walk_target + .03f * next_noise(&c->walk_state), -3.0f, 3.0f);
+        c->walk_step = (c->walk_target - c->walk_cents) * (1.0f / 32.0f);
+    }
+    return next_smoother(&c->smoother);
 }
 
 static uint32_t mozaik_slope_q32(float control) {
@@ -661,6 +798,11 @@ static ma_render_controls target_render_controls(const ma_synth *s) {
         .crossmod_amount = clamp_signal(s->crossmod_amount + crossmod_delta,
                                         0.0f, 1.0f),
         .noise_level = s->noise_level,
+        .raster_mix = s->raster_mix,
+        .raster_position = s->raster_position,
+        .raster_warp = s->raster_warp,
+        .bcs_amount = s->bcs_amount,
+        .bcs_regime = s->bcs_regime,
         .mozaik_mix = clamp_signal(s->mozaik_mix
                                    + 0.10f * identity->bloom, 0.0f, 1.0f),
         .mozaik_slope_q32 = mozaik_slope_q32(s->mozaik_slope),
@@ -683,6 +825,8 @@ static ma_render_controls target_render_controls(const ma_synth *s) {
                                         0.0f, 1.0f),
         .pitch_bend_semitones = s->pitch_bend_semitones,
         .poly_pressure = s->poly_pressure,
+        .lfo_depth = s->lfo.depth,
+        .lfo_rate_hz = s->lfo.rate_hz,
         .body_drive = clamp_signal(s->body_drive + body_drive_delta,
                                    0.0f, 1.0f),
         .body_load_ratio = clamp_signal(body_load_ratio, 0.75f, 1.50f),
@@ -703,6 +847,11 @@ static void initialize_control_smoothers(ma_synth *s) {
         .sync_softness = initialized_smoother(target.sync_softness),
         .crossmod_amount = initialized_smoother(target.crossmod_amount),
         .noise_level = initialized_smoother(target.noise_level),
+        .raster_mix = initialized_smoother(target.raster_mix),
+        .raster_position = initialized_smoother(target.raster_position),
+        .raster_warp = initialized_smoother(target.raster_warp),
+        .bcs_amount = initialized_smoother(target.bcs_amount),
+        .bcs_regime = initialized_smoother(target.bcs_regime),
         .mozaik_mix = initialized_smoother(target.mozaik_mix),
         .mozaik_slope = initialized_smoother(s->mozaik_slope),
         .mozaik_contrast = initialized_smoother(target.mozaik_contrast),
@@ -716,6 +865,8 @@ static void initialize_control_smoothers(ma_synth *s) {
         .pitch_bend_semitones = initialized_smoother(
             target.pitch_bend_semitones),
         .poly_pressure = initialized_smoother(target.poly_pressure),
+        .lfo_depth = initialized_smoother(target.lfo_depth),
+        .lfo_rate_hz = initialized_smoother(target.lfo_rate_hz),
         .body_drive = initialized_smoother(target.body_drive),
         .body_load_ratio = initialized_smoother(target.body_load_ratio),
         .width = initialized_smoother(target.width),
@@ -738,6 +889,16 @@ static void update_control_targets(ma_synth *s) {
     set_smoother_target(&s->smoothers.crossmod_amount,
                         target.crossmod_amount, s->sample_rate_hz);
     set_smoother_target(&s->smoothers.noise_level, target.noise_level,
+                        s->sample_rate_hz);
+    set_bypass_smoother_target(&s->smoothers.raster_mix, target.raster_mix,
+                               s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.raster_position,
+                        target.raster_position, s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.raster_warp, target.raster_warp,
+                        s->sample_rate_hz);
+    set_bypass_smoother_target(&s->smoothers.bcs_amount, target.bcs_amount,
+                               s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.bcs_regime, target.bcs_regime,
                         s->sample_rate_hz);
     set_bypass_smoother_target(&s->smoothers.mozaik_mix, target.mozaik_mix,
                                s->sample_rate_hz);
@@ -763,6 +924,10 @@ static void update_control_targets(ma_synth *s) {
                         target.pitch_bend_semitones, s->sample_rate_hz);
     set_smoother_target(&s->smoothers.poly_pressure, target.poly_pressure,
                         s->sample_rate_hz);
+    set_bypass_smoother_target(&s->smoothers.lfo_depth, target.lfo_depth,
+                               s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.lfo_rate_hz, target.lfo_rate_hz,
+                        s->sample_rate_hz);
     set_smoother_target(&s->smoothers.body_drive, target.body_drive,
                         s->sample_rate_hz);
     set_smoother_target(&s->smoothers.body_load_ratio,
@@ -784,6 +949,11 @@ static ma_render_controls next_render_controls(ma_synth *s) {
         .sync_softness = next_smoother(&s->smoothers.sync_softness),
         .crossmod_amount = next_smoother(&s->smoothers.crossmod_amount),
         .noise_level = next_smoother(&s->smoothers.noise_level),
+        .raster_mix = next_smoother(&s->smoothers.raster_mix),
+        .raster_position = next_smoother(&s->smoothers.raster_position),
+        .raster_warp = next_smoother(&s->smoothers.raster_warp),
+        .bcs_amount = next_smoother(&s->smoothers.bcs_amount),
+        .bcs_regime = next_smoother(&s->smoothers.bcs_regime),
         .mozaik_mix = next_smoother(&s->smoothers.mozaik_mix),
         .mozaik_slope_q32 = mozaik_slope_q32(slope),
         .mozaik_contrast = next_smoother(&s->smoothers.mozaik_contrast),
@@ -798,6 +968,8 @@ static ma_render_controls next_render_controls(ma_synth *s) {
         .pitch_bend_semitones = next_smoother(
             &s->smoothers.pitch_bend_semitones),
         .poly_pressure = next_smoother(&s->smoothers.poly_pressure),
+        .lfo_depth = next_smoother(&s->smoothers.lfo_depth),
+        .lfo_rate_hz = next_smoother(&s->smoothers.lfo_rate_hz),
         .body_drive = next_smoother(&s->smoothers.body_drive),
         .body_load_ratio = next_smoother(&s->smoothers.body_load_ratio),
         .width = next_smoother(&s->smoothers.width),
@@ -936,6 +1108,13 @@ static ma_patch sanitize_patch(const ma_patch *value, float sample_rate_hz) {
         .crossmod_amount = clamp_control(source->crossmod_amount,
                                          0.0f, 1.0f, 0.0f),
         .noise_level = clamp_control(source->noise_level, 0.0f, 1.0f, 0.02f),
+        .raster_mix = clamp_control(source->raster_mix, 0.0f, 1.0f, 0.0f),
+        .raster_position = clamp_control(source->raster_position,
+                                         0.0f, 1.0f, 0.0f),
+        .raster_warp = clamp_control(source->raster_warp,
+                                     0.0f, 1.0f, 0.0f),
+        .bcs_amount = clamp_control(source->bcs_amount, 0.0f, 1.0f, 0.0f),
+        .bcs_regime = clamp_control(source->bcs_regime, 0.0f, 1.0f, 0.0f),
         .mozaik_mix = clamp_control(source->mozaik_mix, 0.0f, 1.0f, 0.20f),
         .mozaik_slope = clamp_control(source->mozaik_slope,
                                       0.0f, 1.0f, 0.5601133f),
@@ -1041,16 +1220,20 @@ static float filter_envelope_amount(const ma_synth *s,
 
 static float effective_filter_cutoff(const ma_synth *s,
                                      const ma_render_controls *controls,
-                                     float envelope_amount) {
+                                     float envelope_amount,
+                                     float note_position) {
     float envelope = 1.0f + 0.78f * s->filter_envelope.level
                                   * envelope_amount;
     float keytrack = 1.0f
-                   + ((float)s->note - 60.0f) * (1.0f / 48.0f)
+                   + (note_position - 60.0f) * (1.0f / 48.0f)
                    * controls->filter_keytrack * 0.42f;
     keytrack = clamp_signal(keytrack, 0.55f, 1.35f);
     float cutoff = controls->filter_cutoff_hz * envelope * keytrack;
     if (controls->poly_pressure > 0.0f)
         cutoff *= octave_ratio_small(0.25f * controls->poly_pressure);
+    if (s->character.smoother.current > 0.0f)
+        cutoff *= octave_ratio_small(s->character.smoother.current
+                                     * s->character.cutoff_octaves);
     float cutoff_max = 0.42f * s->sample_rate_hz;
     if (cutoff_max > 20000.0f) cutoff_max = 20000.0f;
     return clamp_signal(cutoff, 20.0f, cutoff_max);
@@ -1095,6 +1278,11 @@ void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
         .sync_softness = value.sync_softness,
         .crossmod_amount = value.crossmod_amount,
         .noise_level = value.noise_level,
+        .raster_mix = value.raster_mix,
+        .raster_position = value.raster_position,
+        .raster_warp = value.raster_warp,
+        .bcs_amount = value.bcs_amount,
+        .bcs_regime = value.bcs_regime,
         .mozaik_mix = value.mozaik_mix,
         .mozaik_slope = value.mozaik_slope,
         .mozaik_contrast_control = value.mozaik_contrast,
@@ -1112,6 +1300,11 @@ void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
         .amp_adsr = value.amp_adsr,
         .filter_adsr = value.filter_adsr,
         .pitch_bend_semitones = 0.0f,
+        .glide = {
+            .current_note = 69.0f,
+            .target_note = 69.0f,
+        },
+        .lfo = { .rate_hz = LFO_RATE_DEFAULT_HZ },
         .channel_pressure = 0.0f,
         .poly_pressure = 0.0f,
         .mod_wheel = 0.0f,
@@ -1135,6 +1328,10 @@ void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
             .guard_target = 1.0f,
             .triangle_initialized = true,
         },
+        .bcs = {
+            .hopf_re = 0.025f,
+            .duffing_x = 0.001f,
+        },
         .note = 69,
         .velocity = 0,
         .channel = 0,
@@ -1157,7 +1354,9 @@ void ma_synth_init(ma_synth *s, float sample_rate_hz) {
 }
 
 void ma_synth_apply_patch(ma_synth *s, const ma_patch *patch) {
+    ma_character character = s->character;
     ma_synth_init_patch(s, s->sample_rate_hz, patch);
+    s->character = character;
 }
 
 void ma_synth_note_on(ma_synth *s, uint8_t channel, uint8_t note,
@@ -1169,6 +1368,7 @@ void ma_synth_note_on(ma_synth *s, uint8_t channel, uint8_t note,
     }
     s->channel = channel;
     s->note = note;
+    glide_to_note(s, note);
     s->velocity = velocity < 128 ? velocity : 127;
     s->note_active = true;
     s->poly_pressure = 0.0f;
@@ -1193,30 +1393,63 @@ void ma_synth_note_off(ma_synth *s, uint8_t channel, uint8_t note,
     }
 }
 
-static float render_source_substep(ma_synth *s,
-                                   const ma_render_controls *controls,
-                                   float base_hz, float noise,
-                                   float guard1, float guard2,
-                                   float filter_modulation) {
-    float oversampled_rate_hz = 8.0f * s->sample_rate_hz;
-    ma_vco_controls vco1_controls = controls->vco1;
-    ma_vco_controls vco2_controls = controls->vco2;
+/* These destinations are held over all eight source substeps. */
+typedef struct {
+    ma_vco_controls vco1;
+    ma_vco_controls vco2;
+    float rate_hz;
+    float vco2_hz;
+    float vco2_step;
+    uint64_t vco2_step_q48;
+    float envelope_ratio;
+    float sync;
+} ma_source_frame;
+
+static ma_source_frame prepare_source_frame(const ma_synth *s,
+                                             const ma_render_controls *controls,
+                                             float base_hz,
+                                             float filter_modulation) {
+    ma_source_frame source = {
+        .vco1 = controls->vco1,
+        .vco2 = controls->vco2,
+        .rate_hz = 8.0f * s->sample_rate_hz,
+        .envelope_ratio = 1.0f,
+        .sync = controls->sync_amount
+              * clamp_signal(1.0f - 0.75f * controls->sync_softness,
+                             0.0f, 1.0f),
+    };
 #if !defined(MA_SOURCE_EVIDENCE)
-    vco1_controls.pulse_width = clamp_signal(
-        vco1_controls.pulse_width + 0.120f * filter_modulation,
+    source.vco1.pulse_width = clamp_signal(
+        source.vco1.pulse_width + 0.120f * filter_modulation,
         0.05f, 0.95f);
-    vco2_controls.pulse_width = clamp_signal(
-        vco2_controls.pulse_width - 0.080f * filter_modulation,
+    source.vco2.pulse_width = clamp_signal(
+        source.vco2.pulse_width - 0.080f * filter_modulation,
         0.05f, 0.95f);
+    source.envelope_ratio = octave_ratio_small(0.125f * filter_modulation);
 #else
     (void)filter_modulation;
 #endif
     float fine_ratio = octave_ratio_small(
         controls->vco2_fine_cents / 1200.0f);
-    float vco2_hz = base_hz * interval_ratio(s->vco2_interval) * fine_ratio;
-    float vco2_step = phase_step(vco2_hz, oversampled_rate_hz);
-    uint64_t vco2_step_q48 = phase_step_q48(vco2_step);
-    vco2_step = phase_turns(vco2_step_q48);
+    source.vco2_hz = base_hz * interval_ratio(s->vco2_interval) * fine_ratio;
+    if (s->character.smoother.current > 0.0f)
+        source.vco2_hz *= octave_ratio_small(s->character.smoother.current
+                                            * s->character.vco2_cents / 1200.0f);
+    float step = phase_step(source.vco2_hz, source.rate_hz);
+    source.vco2_step_q48 = phase_step_q48(step);
+    source.vco2_step = phase_turns(source.vco2_step_q48);
+    return source;
+}
+
+static float render_source_substep(ma_synth *s,
+                                   const ma_render_controls *controls,
+                                   const ma_source_frame *source,
+                                   float base_hz, float noise,
+                                   float guard1, float guard2) {
+    ma_vco_controls vco1_controls = source->vco1;
+    ma_vco_controls vco2_controls = source->vco2;
+    float vco2_step = source->vco2_step;
+    uint64_t vco2_step_q48 = source->vco2_step_q48;
     float vco2_preview = preview_oscillator(&s->oscillator2, vco2_controls,
                                             vco2_step);
     float cross_ratio = clamp_signal(
@@ -1224,21 +1457,19 @@ static float render_source_substep(ma_synth *s,
         0.25f, 4.0f);
     float vco1_hz = base_hz * cross_ratio;
 #if !defined(MA_SOURCE_EVIDENCE)
-    vco1_hz *= octave_ratio_small(0.125f * filter_modulation);
+    vco1_hz *= source->envelope_ratio;
 #endif
-    float vco1_step = phase_step(vco1_hz, oversampled_rate_hz);
+    float vco1_step = phase_step(vco1_hz, source->rate_hz);
     uint64_t vco1_step_q48 = phase_step_q48(vco1_step);
     vco1_step = phase_turns(vco1_step_q48);
 
     float guard_hz = 0.45f * s->sample_rate_hz;
     set_guard_target(&s->oscillator1, vco1_hz < guard_hz ? 1.0f : 0.0f,
                      s->sample_rate_hz);
-    set_guard_target(&s->oscillator2, vco2_hz < guard_hz ? 1.0f : 0.0f,
+    set_guard_target(&s->oscillator2, source->vco2_hz < guard_hz ? 1.0f : 0.0f,
                      s->sample_rate_hz);
     bool master_wrap = phase_will_wrap(&s->oscillator1, vco1_step_q48);
-    float sync = controls->sync_amount
-               * clamp_signal(1.0f - 0.75f * controls->sync_softness,
-                              0.0f, 1.0f);
+    float sync = source->sync;
     float sync_now = 0.0f;
     float sync_next = 0.0f;
     float event_fraction = 1.0f;
@@ -1264,9 +1495,12 @@ static float render_source_substep(ma_synth *s,
         sync_next = jump * (smoothstep5(after) - 1.0f);
     }
 
-    float vco1 = render_oscillator(&s->oscillator1, vco1_controls,
+    float vco1_preview = preview_oscillator(&s->oscillator1, vco1_controls,
+                                            vco1_step);
+    float vco1 = render_oscillator(&s->oscillator1, vco1_preview,
                                    vco1_step, 0.0f);
-    float vco2 = render_oscillator(&s->oscillator2, vco2_controls,
+    /* Cross-mod already read VCO2 at this phase, before sync correction. */
+    float vco2 = render_oscillator(&s->oscillator2, vco2_preview,
                                    vco2_step, sync_now);
     s->oscillator2.sync_residual += sync_next;
     advance_phase(&s->oscillator1, vco1_step_q48);
@@ -1314,6 +1548,269 @@ static float decimate_oversample(const float history[31], uint8_t position) {
     return output;
 }
 
+static uint8_t raster_mip(float phase_step, float warp, float *blend) {
+    static constexpr uint8_t harmonic_limit[MA_RASTER_MIPS] = {
+        64, 32, 16, 8, 4, 2, 1,
+    };
+    float effective_step = phase_step * (1.0f + 0.8f * warp);
+    uint8_t mip = 0;
+    while (mip + 1 < MA_RASTER_MIPS
+           && effective_step * harmonic_limit[mip] > 0.45f)
+        mip++;
+    float load = effective_step * harmonic_limit[mip];
+    *blend = mip + 1 < MA_RASTER_MIPS
+           ? clamp_signal((load - 0.225f) * (1.0f / 0.225f), 0.0f, 1.0f)
+           : 0.0f;
+    return mip;
+}
+
+static float raster_table_sample(uint8_t family, uint8_t mip, float phase) {
+    float table_phase = phase * (float)MA_RASTER_SAMPLES;
+    uint16_t index = (uint16_t)table_phase & (MA_RASTER_SAMPLES - 1);
+    uint16_t next = (index + 1) & (MA_RASTER_SAMPLES - 1);
+    float fraction = table_phase - (float)(uint16_t)table_phase;
+    float first = (float)MA_RASTER_TABLE[family][mip][index]
+                * (1.0f / 32768.0f);
+    float second = (float)MA_RASTER_TABLE[family][mip][next]
+                 * (1.0f / 32768.0f);
+    return first + fraction * (second - first);
+}
+
+static float render_raster(ma_synth *s, const ma_render_controls *controls,
+                           float frequency_hz, float render_rate_hz) {
+    float step = phase_step(frequency_hz, render_rate_hz);
+    uint64_t step_q48 = phase_step_q48(step);
+    float phase = phase_turns(s->raster.phase_q48);
+    float warped = phase
+                 + 0.12f * controls->raster_warp * tw_sin_turns(phase);
+    if (warped < 0.0f) warped += 1.0f;
+    if (warped >= 1.0f) warped -= 1.0f;
+
+    float family_position = controls->raster_position
+                          * (float)(MA_RASTER_FAMILIES - 1);
+    uint8_t family = (uint8_t)family_position;
+    float morph = family_position - (float)family;
+    uint8_t next_family = family;
+    if (family + 1 < MA_RASTER_FAMILIES) next_family++;
+    float mip_blend = 0.0f;
+    s->raster.mip = raster_mip(step, controls->raster_warp, &mip_blend);
+    float first = raster_table_sample(family, s->raster.mip, warped);
+    float second = raster_table_sample(next_family, s->raster.mip, warped);
+    float sample = first + morph * (second - first);
+    if (mip_blend > 0.0f) {
+        uint8_t coarse_mip = s->raster.mip + 1;
+        first = raster_table_sample(family, coarse_mip, warped);
+        second = raster_table_sample(next_family, coarse_mip, warped);
+        float coarse = first + morph * (second - first);
+        sample += mip_blend * (coarse - sample);
+    }
+    s->raster.phase_q48 = (s->raster.phase_q48 + step_q48)
+                        & PHASE_MASK_Q48;
+    return sample;
+}
+
+typedef struct {
+    float hopf_mu;
+    float hopf_nonlinearity;
+    float duffing_frequency_ratio;
+    float duffing_damping;
+    float duffing_edge;
+    float duffing_cubic_stiffness;
+    float duffing_cubic_damping;
+    float duffing_drive;
+    float duffing_feedback;
+    float hopf_mix;
+    float duffing_mix;
+    float output_gain;
+} ma_bcs_parameters;
+
+typedef struct {
+    float hopf_re;
+    float hopf_im;
+    float duffing_x;
+    float duffing_v;
+} ma_bcs_vector;
+
+static constexpr ma_bcs_parameters BCS_LANDMARK[4] = {
+    {
+        .hopf_mu = 18.0f, .hopf_nonlinearity = 32.0f,
+        .duffing_frequency_ratio = 1.0f, .duffing_damping = 0.18f,
+        .duffing_edge = 0.10f, .duffing_cubic_stiffness = 0.35f,
+        .duffing_cubic_damping = 1.15f, .duffing_drive = 0.030f,
+        .duffing_feedback = 0.004f, .hopf_mix = 1.0f,
+        .duffing_mix = 0.16f, .output_gain = 0.58f,
+    },
+    {
+        .hopf_mu = 18.0f, .hopf_nonlinearity = 32.0f,
+        .duffing_frequency_ratio = 1.0f, .duffing_damping = 0.18f,
+        .duffing_edge = 0.42f, .duffing_cubic_stiffness = 0.35f,
+        .duffing_cubic_damping = 1.15f, .duffing_drive = 0.105f,
+        .duffing_feedback = 0.010f, .hopf_mix = 1.0f,
+        .duffing_mix = 0.40f, .output_gain = 0.54f,
+    },
+    {
+        .hopf_mu = 16.0f, .hopf_nonlinearity = 32.0f,
+        .duffing_frequency_ratio = 0.42f, .duffing_damping = 0.10f,
+        .duffing_edge = 0.40f, .duffing_cubic_stiffness = 0.48f,
+        .duffing_cubic_damping = 1.40f, .duffing_drive = 0.050f,
+        .duffing_feedback = 0.002f, .hopf_mix = 0.05f,
+        .duffing_mix = 1.35f, .output_gain = 0.60f,
+    },
+    {
+        .hopf_mu = 18.0f, .hopf_nonlinearity = 32.0f,
+        .duffing_frequency_ratio = 1.0f, .duffing_damping = 0.18f,
+        .duffing_edge = 0.36f, .duffing_cubic_stiffness = 0.35f,
+        .duffing_cubic_damping = 1.15f, .duffing_drive = 0.090f,
+        .duffing_feedback = 0.008f, .hopf_mix = 1.0f,
+        .duffing_mix = 0.36f, .output_gain = 0.56f,
+    },
+};
+
+static float bcs_lerp(float first, float second, float fraction) {
+    return first + fraction * (second - first);
+}
+
+static ma_bcs_parameters bcs_parameters(float regime) {
+    float position = regime * 3.0f;
+    int landmark = (int)position;
+    if (landmark > 2) landmark = 2;
+    float fraction = position - (float)landmark;
+    ma_bcs_parameters const *first = &BCS_LANDMARK[landmark];
+    ma_bcs_parameters const *second = &BCS_LANDMARK[landmark + 1];
+#define BCS_INTERPOLATE(member) \
+    .member = bcs_lerp(first->member, second->member, fraction)
+    return (ma_bcs_parameters){
+        BCS_INTERPOLATE(hopf_mu),
+        BCS_INTERPOLATE(hopf_nonlinearity),
+        BCS_INTERPOLATE(duffing_frequency_ratio),
+        BCS_INTERPOLATE(duffing_damping),
+        BCS_INTERPOLATE(duffing_edge),
+        BCS_INTERPOLATE(duffing_cubic_stiffness),
+        BCS_INTERPOLATE(duffing_cubic_damping),
+        BCS_INTERPOLATE(duffing_drive),
+        BCS_INTERPOLATE(duffing_feedback),
+        BCS_INTERPOLATE(hopf_mix),
+        BCS_INTERPOLATE(duffing_mix),
+        BCS_INTERPOLATE(output_gain),
+    };
+#undef BCS_INTERPOLATE
+}
+
+static ma_bcs_vector bcs_derivative(ma_bcs_vector state,
+                                    ma_bcs_parameters parameters,
+                                    float omega, float external_drive) {
+    float radius2 = state.hopf_re * state.hopf_re
+                  + state.hopf_im * state.hopf_im;
+    float radial = parameters.hopf_mu
+                 - parameters.hopf_nonlinearity * radius2;
+    float duffing_omega = omega * parameters.duffing_frequency_ratio;
+    float square = state.duffing_x * state.duffing_x;
+    float edge_damping = (parameters.duffing_edge
+                          - parameters.duffing_damping) * duffing_omega;
+    float nonlinear_damping = parameters.duffing_cubic_damping
+                            * duffing_omega * square;
+    float cubic = parameters.duffing_cubic_stiffness * duffing_omega
+                * square * state.duffing_x;
+    float drive = parameters.duffing_drive * state.hopf_re + external_drive;
+    return (ma_bcs_vector){
+        .hopf_re = radial * state.hopf_re - omega * state.hopf_im
+                 + parameters.duffing_feedback * omega * state.duffing_x,
+        .hopf_im = omega * state.hopf_re + radial * state.hopf_im,
+        .duffing_x = duffing_omega * state.duffing_v,
+        .duffing_v = (edge_damping - nonlinear_damping) * state.duffing_v
+                   - duffing_omega * state.duffing_x - cubic
+                   + duffing_omega * drive,
+    };
+}
+
+static ma_bcs_vector bcs_advance(ma_bcs_vector state,
+                                 ma_bcs_vector derivative, float scale) {
+    return (ma_bcs_vector){
+        .hopf_re = state.hopf_re + scale * derivative.hopf_re,
+        .hopf_im = state.hopf_im + scale * derivative.hopf_im,
+        .duffing_x = state.duffing_x + scale * derivative.duffing_x,
+        .duffing_v = state.duffing_v + scale * derivative.duffing_v,
+    };
+}
+
+static void reset_bcs(ma_bcs *bcs) {
+    bcs->hopf_re = 0.025f;
+    bcs->hopf_im = 0.0f;
+    bcs->duffing_x = 0.001f;
+    bcs->duffing_v = 0.0f;
+    bcs->output = 0.0f;
+    bcs->reset_count++;
+}
+
+static bool bcs_state_is_safe(ma_bcs_vector state, float *maximum) {
+    float values[4] = {
+        state.hopf_re, state.hopf_im, state.duffing_x, state.duffing_v,
+    };
+    float peak = 0.0f;
+    for (int i = 0; i < 4; i++) {
+        if (!(values[i] >= -FLT_MAX && values[i] <= FLT_MAX)
+            || tw_fabsf(values[i]) > BCS_STATE_CEILING)
+            return false;
+        if (tw_fabsf(values[i]) > peak) peak = tw_fabsf(values[i]);
+    }
+    *maximum = peak;
+    return true;
+}
+
+static float render_bcs(ma_synth *s, float frequency_hz, float amount,
+                        float regime, float feedback_sample) {
+    ma_bcs_parameters parameters = bcs_parameters(regime);
+    float upper_hz = 0.125f * s->sample_rate_hz;
+    if (upper_hz > 8000.0f) upper_hz = 8000.0f;
+    frequency_hz = clamp_signal(frequency_hz, 20.0f, upper_hz);
+    float omega = BCS_TAU * frequency_hz;
+    float step = 1.0f / (s->sample_rate_hz * BCS_INTEGRATION_STEPS);
+    float external_drive = 0.018f * amount
+                         * clamp_signal(feedback_sample, -1.0f, 1.0f);
+    ma_bcs_vector state = {
+        s->bcs.hopf_re, s->bcs.hopf_im, s->bcs.duffing_x, s->bcs.duffing_v,
+    };
+    for (int substep = 0; substep < BCS_INTEGRATION_STEPS; substep++) {
+        ma_bcs_vector k1 = bcs_derivative(state, parameters, omega,
+                                          external_drive);
+        ma_bcs_vector k2 = bcs_derivative(
+            bcs_advance(state, k1, 0.5f * step), parameters, omega,
+            external_drive);
+        ma_bcs_vector k3 = bcs_derivative(
+            bcs_advance(state, k2, 0.5f * step), parameters, omega,
+            external_drive);
+        ma_bcs_vector k4 = bcs_derivative(
+            bcs_advance(state, k3, step), parameters, omega,
+            external_drive);
+        state.hopf_re += (step / 6.0f)
+                       * (k1.hopf_re + 2.0f * k2.hopf_re
+                          + 2.0f * k3.hopf_re + k4.hopf_re);
+        state.hopf_im += (step / 6.0f)
+                       * (k1.hopf_im + 2.0f * k2.hopf_im
+                          + 2.0f * k3.hopf_im + k4.hopf_im);
+        state.duffing_x += (step / 6.0f)
+                         * (k1.duffing_x + 2.0f * k2.duffing_x
+                            + 2.0f * k3.duffing_x + k4.duffing_x);
+        state.duffing_v += (step / 6.0f)
+                         * (k1.duffing_v + 2.0f * k2.duffing_v
+                            + 2.0f * k3.duffing_v + k4.duffing_v);
+    }
+    float maximum = 0.0f;
+    if (!bcs_state_is_safe(state, &maximum)) {
+        reset_bcs(&s->bcs);
+        return 0.0f;
+    }
+    s->bcs.hopf_re = state.hopf_re;
+    s->bcs.hopf_im = state.hopf_im;
+    s->bcs.duffing_x = state.duffing_x;
+    s->bcs.duffing_v = state.duffing_v;
+    if (maximum > s->bcs.maximum_state) s->bcs.maximum_state = maximum;
+    s->bcs.output = tw_sat((parameters.hopf_mix * state.hopf_re
+                            + parameters.duffing_mix * state.duffing_x)
+                           * parameters.output_gain);
+    return s->bcs.output;
+}
+
 static float filter_prewarp(float cutoff_hz, float sample_rate_hz) {
     float x = cutoff_hz / (2.0f * sample_rate_hz);
     float z = 2.0f * x * (1.0f / 0.42f) - 1.0f;
@@ -1329,16 +1826,33 @@ static float filter_prewarp(float cutoff_hz, float sample_rate_hz) {
 
 static float mix_source_2x(const ma_render_controls *controls, float analog,
                            float guard1, float guard2,
-                           float mozaik_gain, float mozaik) {
-    if (!(controls->mozaik_mix > 0.0f && mozaik_gain > 0.0f)) return analog;
+                           float mozaik_gain, float mozaik, float raster) {
+    if (controls->raster_mix == 0.0f) {
+        if (!(controls->mozaik_mix > 0.0f && mozaik_gain > 0.0f))
+            return analog;
+        float vco1_weight = guard1 > 0.0f ? 1.0f : 0.0f;
+        float vco2_weight = guard2 > 0.0f ? controls->vco2_level : 0.0f;
+        float analog_weight = vco1_weight + vco2_weight
+                            + controls->noise_level;
+        if (analog_weight < 1.0f) analog_weight = 1.0f;
+        return (analog_weight * analog
+                + controls->mozaik_mix * mozaik_gain * mozaik)
+             / (analog_weight + controls->mozaik_mix);
+    }
+
     float vco1_weight = guard1 > 0.0f ? 1.0f : 0.0f;
     float vco2_weight = guard2 > 0.0f ? controls->vco2_level : 0.0f;
     float analog_weight = vco1_weight + vco2_weight
                         + controls->noise_level;
     if (analog_weight < 1.0f) analog_weight = 1.0f;
-    return (analog_weight * analog
-            + controls->mozaik_mix * mozaik_gain * mozaik)
-         / (analog_weight + controls->mozaik_mix);
+    float weighted = analog_weight * analog
+                   + controls->raster_mix * raster;
+    float weight = analog_weight + controls->raster_mix;
+    if (controls->mozaik_mix > 0.0f && mozaik_gain > 0.0f) {
+        weighted += controls->mozaik_mix * mozaik_gain * mozaik;
+        weight += controls->mozaik_mix;
+    }
+    return weighted / weight;
 }
 
 #if !defined(MA_SOURCE_EVIDENCE)
@@ -1472,20 +1986,56 @@ static ma_frame render_output(ma_synth *s,
 }
 #endif
 
+#if !defined(MA_SOURCE_EVIDENCE)
+static ma_adsr character_adsr(ma_adsr authored, ma_envelope_time_bias bias,
+                              float amount) {
+    if (amount > 0.0f) {
+        authored.attack_ms *= 1.0f + amount * bias.attack;
+        authored.decay_ms *= 1.0f + amount * bias.decay;
+        authored.release_ms *= 1.0f + amount * bias.release;
+    }
+    return authored;
+}
+#endif
+
 ma_frame ma_synth_tick(ma_synth *s) {
     ma_render_controls controls = next_render_controls(s);
-    float base_hz = ma_note_frequency_hz(s->note);
-    if (controls.pitch_bend_semitones != 0.0f)
-        base_hz *= octave_ratio_small(controls.pitch_bend_semitones / 12.0f);
+    float character = next_character(s);
+    float note_position = next_glide_note(s);
+    float pitch_delta = controls.pitch_bend_semitones + next_lfo(s, &controls);
+    float base_hz = note_position_hz(note_position);
+    if (pitch_delta != 0.0f)
+        base_hz *= octave_ratio_small(pitch_delta / 12.0f);
+    if (character > 0.0f)
+        base_hz *= octave_ratio_small(character
+            * (s->character.vco1_cents + s->character.walk_cents) / 1200.0f);
+    if (controls.bcs_amount > 0.0f) {
+        float bcs = render_bcs(s, base_hz, controls.bcs_amount,
+                               controls.bcs_regime, s->ladder.y4_guess);
+        float crossmod_depth = 0.10f + 0.20f * controls.bcs_regime;
+        float resonance_depth = 0.08f + 0.08f * controls.bcs_regime;
+        controls.crossmod_amount = clamp_signal(
+            controls.crossmod_amount
+                + controls.bcs_amount * crossmod_depth * bcs,
+            0.0f, 1.0f);
+        controls.filter_resonance = clamp_signal(
+            controls.filter_resonance
+                + controls.bcs_amount * resonance_depth * bcs,
+            0.0f, 1.0f);
+    }
 #if !defined(MA_SOURCE_EVIDENCE)
-    (void)render_envelope(&s->filter_envelope, s->filter_adsr,
+    ma_adsr filter_adsr = character_adsr(s->filter_adsr,
+        s->character.filter_time_bias, character);
+    ma_adsr amp_adsr = character_adsr(s->amp_adsr,
+        s->character.amp_time_bias, character);
+    (void)render_envelope(&s->filter_envelope, filter_adsr,
                           s->sample_rate_hz);
-    (void)render_envelope(&s->amp_envelope, s->amp_adsr,
+    (void)render_envelope(&s->amp_envelope, amp_adsr,
                           s->sample_rate_hz);
     float envelope_amount = filter_envelope_amount(s, &controls);
     float filter_modulation = s->filter_envelope.level * envelope_amount;
     s->filter_cutoff_effective_hz = effective_filter_cutoff(
-        s, &controls, envelope_amount);
+        s, &controls, envelope_amount, note_position);
     float filter_g = filter_prewarp(s->filter_cutoff_effective_hz,
                                     s->sample_rate_hz);
 #else
@@ -1494,18 +2044,18 @@ ma_frame ma_synth_tick(ma_synth *s) {
     float guard1 = s->oscillator1.guard_gain;
     float guard2 = s->oscillator2.guard_gain;
     float noise = next_noise(&s->noise_state);
+    ma_source_frame source_frame = prepare_source_frame(
+        s, &controls, base_hz, filter_modulation);
     for (int at_2x = 0; at_2x < 2; at_2x++) {
         for (int at_4x = 0; at_4x < 2; at_4x++) {
             push_oversample_history(
                 s->oversample_history[0], &s->oversample_history_pos[0],
-                render_source_substep(s, &controls, base_hz, noise,
-                                      guard1, guard2,
-                                      filter_modulation));
+                render_source_substep(s, &controls, &source_frame,
+                                      base_hz, noise, guard1, guard2));
             push_oversample_history(
                 s->oversample_history[0], &s->oversample_history_pos[0],
-                render_source_substep(s, &controls, base_hz, noise,
-                                      guard1, guard2,
-                                      filter_modulation));
+                render_source_substep(s, &controls, &source_frame,
+                                      base_hz, noise, guard1, guard2));
             float sample_4x = decimate_oversample(
                 s->oversample_history[0], s->oversample_history_pos[0]);
             push_oversample_history(
@@ -1523,8 +2073,12 @@ ma_frame ma_synth_tick(ma_synth *s) {
         float mozaik = render_mozaik(s, &controls, base_hz,
                                      2.0f * s->sample_rate_hz);
         (void)next_mozaik_guard_gain(&s->mozaik);
+        float raster = controls.raster_mix > 0.0f
+                     ? render_raster(s, &controls, base_hz,
+                                     2.0f * s->sample_rate_hz)
+                     : 0.0f;
         float source = mix_source_2x(&controls, sample_2x, guard1, guard2,
-                                     mozaik_gain, mozaik);
+                                     mozaik_gain, mozaik, raster);
         float pressured = apply_mixer_pressure(source,
                                                 controls.mixer_pressure);
         s->ladder.pressure_input = source;
@@ -1545,8 +2099,11 @@ ma_frame ma_synth_tick(ma_synth *s) {
     float mozaik = render_mozaik(s, &controls, base_hz,
                                  s->sample_rate_hz);
     (void)next_mozaik_guard_gain(&s->mozaik);
+    float raster = controls.raster_mix > 0.0f
+                 ? render_raster(s, &controls, base_hz, s->sample_rate_hz)
+                 : 0.0f;
     float output = mix_source_2x(&controls, analog, guard1, guard2,
-                                 mozaik_gain, mozaik) * level;
+                                 mozaik_gain, mozaik, raster) * level;
 #else
     float velocity_gain = 0.25f + 0.75f * ma_velocity_level(s->velocity);
     float output = decimate_filter(&s->ladder)
@@ -1554,6 +2111,8 @@ ma_frame ma_synth_tick(ma_synth *s) {
 #endif
     if (controls.poly_pressure > 0.0f)
         output *= 1.0f + 0.10f * controls.poly_pressure;
+    if (character > 0.0f)
+        output *= 1.0f + character * s->character.vca_bias;
 #if defined(MA_SOURCE_EVIDENCE)
     return (ma_frame){ .left = output, .right = output };
 #else
@@ -1593,6 +2152,19 @@ void ma_synth_set_oscillator_modulation(ma_synth *s, float sync_amount,
     s->sync_softness = clamp_control(sync_softness, 0.0f, 1.0f, 0.0f);
     s->crossmod_amount = clamp_control(crossmod_amount, 0.0f, 1.0f, 0.0f);
     s->noise_level = clamp_control(noise_level, 0.0f, 1.0f, 0.02f);
+    update_control_targets(s);
+}
+
+void ma_synth_set_raster(ma_synth *s, float mix, float position, float warp) {
+    s->raster_mix = clamp_control(mix, 0.0f, 1.0f, 0.0f);
+    s->raster_position = clamp_control(position, 0.0f, 1.0f, 0.0f);
+    s->raster_warp = clamp_control(warp, 0.0f, 1.0f, 0.0f);
+    update_control_targets(s);
+}
+
+void ma_synth_set_bcs(ma_synth *s, float amount, float regime) {
+    s->bcs_amount = clamp_control(amount, 0.0f, 1.0f, 0.0f);
+    s->bcs_regime = clamp_control(regime, 0.0f, 1.0f, 0.0f);
     update_control_targets(s);
 }
 
@@ -1639,6 +2211,27 @@ void ma_synth_set_amp_adsr(ma_synth *s, ma_adsr adsr) {
 
 void ma_synth_set_filter_adsr(ma_synth *s, ma_adsr adsr) {
     s->filter_adsr = sanitize_adsr(adsr, FILTER_ADSR_DEFAULT);
+}
+
+void ma_synth_set_glide(ma_synth *s, bool enabled, float seconds) {
+    s->glide.enabled = enabled;
+    s->glide.seconds = clamp_control(seconds, 0.0f, 10.0f, 0.0f);
+    if (!enabled || s->glide.seconds == 0.0f) {
+        s->glide.current_note = s->glide.target_note;
+        s->glide.step = 0.0f;
+        s->glide.remaining = 0;
+    } else if (s->glide.remaining) {
+        s->glide.remaining = glide_frames(s);
+        s->glide.step = (s->glide.target_note - s->glide.current_note)
+                      / (float)s->glide.remaining;
+    }
+}
+
+void ma_synth_set_lfo(ma_synth *s, float depth, float rate_hz) {
+    s->lfo.depth = clamp_control(depth, 0.0f, 1.0f, 0.0f);
+    s->lfo.rate_hz = clamp_control(rate_hz, 0.03f, 20.0f,
+                                   LFO_RATE_DEFAULT_HZ);
+    update_control_targets(s);
 }
 
 void ma_synth_set_macro(ma_synth *s, ma_macro_id macro, float value) {

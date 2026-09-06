@@ -1,4 +1,4 @@
-mamutanalog_patch=1
+mamutanalog_patch=3
 name=Lead
 vco1.saw=0.75
 vco1.pulse=0.300000012
@@ -17,6 +17,11 @@ source.sync=0.219999999
 source.sync_softness=0.180000007
 source.crossmod=0.119999997
 source.noise=0.00999999978
+raster.mix=0
+raster.position=0
+raster.warp=0
+bcs.amount=0
+bcs.regime=0
 mozaik.mix=0.0799999982
 mozaik.slope=0.56011337
 mozaik.contrast=0.600000024

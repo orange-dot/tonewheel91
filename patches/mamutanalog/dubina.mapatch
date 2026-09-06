@@ -1,4 +1,4 @@
-mamutanalog_patch=1
+mamutanalog_patch=3
 name=Dubina
 vco1.saw=0.1
 vco1.pulse=0
@@ -17,6 +17,11 @@ source.sync=0
 source.sync_softness=0
 source.crossmod=0.04
 source.noise=0.01
+raster.mix=0
+raster.position=0
+raster.warp=0
+bcs.amount=0
+bcs.regime=0
 mozaik.mix=0.05
 mozaik.slope=0.56011337
 mozaik.contrast=0.515028298

@@ -46,6 +46,11 @@ static const patch_field FIELDS[] = {
     F("source.sync_softness", sync_softness, 0, 1, .01, .10),
     F("source.crossmod", crossmod_amount, 0, 1, .01, .10),
     F("source.noise", noise_level, 0, 1, .01, .10),
+    F("raster.mix", raster_mix, 0, 1, .01, .10),
+    F("raster.position", raster_position, 0, 1, .01, .10),
+    F("raster.warp", raster_warp, 0, 1, .01, .10),
+    F("bcs.amount", bcs_amount, 0, 1, .01, .10),
+    F("bcs.regime", bcs_regime, 0, 1, .01, .10),
     F("mozaik.mix", mozaik_mix, 0, 1, .01, .10),
     F("mozaik.slope", mozaik_slope, 0, 1, .01, .10),
     F("mozaik.contrast", mozaik_contrast, 0, 1, .01, .10),
@@ -78,6 +83,10 @@ static const patch_field FIELDS[] = {
 
 static_assert(sizeof FIELDS / sizeof *FIELDS < 64,
               "patch required-field mask must fit uint64_t");
+static constexpr unsigned RASTER_FIRST_FIELD = 17;
+static constexpr unsigned RASTER_FIELD_COUNT = 3;
+static constexpr unsigned BCS_FIRST_FIELD = 20;
+static constexpr unsigned BCS_FIELD_COUNT = 2;
 
 #undef F
 #undef I
@@ -182,6 +191,7 @@ bool ma_patch_read(FILE *file, ma_patch_document *document,
     if (error) *error = (ma_patch_error){ 0 };
     uint64_t seen = 0;
     bool header = false, name = false;
+    unsigned version = 0;
     char line[256];
     unsigned line_number = 0;
     while (fgets(line, sizeof line, file)) {
@@ -201,10 +211,13 @@ bool ma_patch_read(FILE *file, ma_patch_document *document,
         }
         *separator++ = 0;
         if (!strcmp(line, "mamutanalog_patch")) {
-            if (header || strcmp(separator, "1")) {
+            if (header || (strcmp(separator, "1")
+                           && strcmp(separator, "2")
+                           && strcmp(separator, "3"))) {
                 set_error(error, line_number, "invalid or duplicate version");
                 return false;
             }
+            version = (unsigned)(separator[0] - '0');
             header = true;
             continue;
         }
@@ -238,6 +251,25 @@ bool ma_patch_read(FILE *file, ma_patch_document *document,
         return false;
     }
     uint64_t required = (UINT64_C(1) << (sizeof FIELDS / sizeof *FIELDS)) - 1;
+    uint64_t raster_fields = ((UINT64_C(1) << RASTER_FIELD_COUNT) - 1)
+                           << RASTER_FIRST_FIELD;
+    uint64_t bcs_fields = ((UINT64_C(1) << BCS_FIELD_COUNT) - 1)
+                        << BCS_FIRST_FIELD;
+    if (version == 1) {
+        if (seen & (raster_fields | bcs_fields)) {
+            set_error(error, line_number,
+                      "Raster and BCS fields require newer patch versions");
+            return false;
+        }
+        required &= ~(raster_fields | bcs_fields);
+    } else if (version == 2) {
+        if (seen & bcs_fields) {
+            set_error(error, line_number,
+                      "BCS fields require patch version 3");
+            return false;
+        }
+        required &= ~bcs_fields;
+    }
     if (!header || !name || seen != required) {
         set_error(error, line_number, "patch is missing required fields");
         return false;
@@ -254,7 +286,7 @@ bool ma_patch_write(FILE *file, const ma_patch_document *document) {
             return false;
         if (FIELDS[i].kind == FIELD_INT && value != (int)value) return false;
     }
-    if (fprintf(file, "mamutanalog_patch=1\nname=%s\n", document->name) < 0)
+    if (fprintf(file, "mamutanalog_patch=3\nname=%s\n", document->name) < 0)
         return false;
     for (size_t i = 0; i < sizeof FIELDS / sizeof *FIELDS; i++) {
         const unsigned char *source = (const unsigned char *)&document->value

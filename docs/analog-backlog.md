@@ -1,7 +1,12 @@
 # tonewheel91 — Mamut Analog implementation backlog
 
-Date: 2026-08-20. Status: active; MA0, MA1 and MA2-1 are closed, and MA2-2
-is the next queued task.
+Date: 2026-08-20. Status updated 2026-09-06: active; MA0, MA1, MA2-1
+through MA2-4 and the ad hoc MA2-DIG and MA2-BCS slices are closed.
+MA2-5 is the next queued task. Character control, lifecycle and evidence:
+`docs/ma2-4-character-evidence.md`.
+The interstitial MA2-PERF slice closed on 2026-09-05 with a five-card cost
+referee and PCM-preserving source optimizations; host evidence and remaining
+target-budget limits are recorded in `docs/ma2-perf-evidence.md`.
 This document is decision-complete for `MA0` and the first implementation
 slice; task state and validation results live in `docs/ma-dev-journal.md`.
 
@@ -22,6 +27,10 @@ top-level core type is `ma_synth`.
 - Mamut identity math turns a small number of musical gestures into
   coordinated changes across that spine;
 - Mozaik is a third, structurally aperiodic source inside each voice;
+- Raster is an explicitly digital wavetable source whose spectral motion
+  complements, rather than imitates, the analog spine;
+- BCS is a bounded nonlinear feedback coordinate inside cross-mod and the
+  ladder, not another audible source;
 - bounded card differences make the polyphony breathe before any effect;
 - a later GFM field lets notes inject energy into one shared, hidden
   medium that perturbs the five cards;
@@ -105,7 +114,7 @@ These decisions are inputs to implementation, not milestone questions.
 | MAD8 | The core exposes one concrete `ma_patch` value type and grouped C setters. Hosted tools own a strict versioned one-file-per-patch format; there is no generic registry, plug-in API or core I/O. |
 | MAD9 | MIDI control is a generic, stable map owned by this repo; a PC4 or other controller maps to it externally. |
 | MAD10 | Tepih is the compiled factory dark pad, Lead is the direct voice, and Dubina is the VCO2-sine-dominant low voice. |
-| MAD11 | Mozaik and GFM are committed. BCS, Orbita and Kosava require later evidence and promotion decisions; wild concepts stay research-only. |
+| MAD11 | Mozaik and GFM are committed. BCS may enter only through its isolated feedback-only slice; Orbita and Kosava require later evidence and promotion decisions, and wild concepts stay research-only. |
 
 There are no open product decisions before MA1. Numeric derivations still
 have to be executed and recorded at MA0, but their algorithms, domains and
@@ -517,8 +526,9 @@ domains are:
 Draws come from one canonical seed folded with the card ordinal and
 parameter tag, so adding a later draw cannot perturb existing ones. The
 slow walk is bounded, deterministic and has a fixed update budget.
-`character=0` multiplies every deviation by literal zero and rejoins the
-pre-character render bit for bit. The factory default is `.20`.
+`character=0` bypasses the deviation arithmetic and reproduces a fresh
+pre-character render bit for bit. It does not rewind DSP history after a
+previous nonzero render. The factory bank default is `.20`.
 
 ### Stereo
 
@@ -787,6 +797,49 @@ Acceptance:
 - source guard transitions are smoothed and no source emits a false folded
   or clamped pitch.
 
+### MA2-DIG — Raster oscillator and spectral morph (ad hoc slice)
+
+This operator-requested vertical slice deliberately leaves the analog
+simulation vocabulary. It adds one fixed-state Raster oscillator to every
+card before MA2-4 without changing the remaining MA2 task order:
+
+- eight immutable 256-sample spectral families and seven harmonic mip levels;
+- linear phase lookup and continuous adjacent-family morph;
+- bounded digital phase warp;
+- 6 ms smoothed mix, position and warp controls;
+- an exact, state-neutral `mix=0` branch preserving the pre-slice PCM;
+- pure Raster and hybrid Prizma compiled/file patches;
+- Patchlab editing and a deterministic two-bank listening exhibit.
+
+The core owns no generated-at-runtime table, heap, file I/O or variable-size
+state. Patch files move to strict version 2 with 48 fields; the reader retains
+strict version-1 compatibility by supplying the three Raster controls as zero.
+MA2-DIG does not include generic wavetable import, table editing, user samples,
+FM/PM, oscillator sync or a menu of interchangeable digital engines.
+
+### MA2-BCS — nonlinear feedback coordinate (ad hoc slice)
+
+This operator-requested vertical slice promotes only the donor BCS dynamics,
+not its hosted scenario player or parallel audio layer:
+
+- one fixed four-float Hopf/Duffing state per card and four RK4 substeps per
+  public audio frame;
+- one continuous `bcs.regime` coordinate whose four landmarks are stable,
+  edge, subharmonic and recovery;
+- one `bcs.amount` insertion depth into existing VCO2-to-VCO1 cross-mod and
+  ladder feedback, with the previous ladder state weakly exciting Duffing;
+- bounded readout, a state ceiling and deterministic reset to a pinned seed;
+- an exact, state-preserving `amount=0` branch reproducing pre-slice PCM;
+- the Granica compiled/file patch, Patchlab editing and a deterministic
+  Granica-over-Prizma listening exhibit.
+
+BCS is control-rate topology at audio cadence: its readout is never summed
+into the source mixer. Patch files move to strict version 3 with 50 fields;
+the reader retains strict v1/v2 compatibility by supplying omitted Raster or
+BCS controls as zero. MA2-BCS does not add a regime enum, timeline, generic
+modulation matrix, oscillator choice or allocator behavior. It leaves MA2-4
+as the next regular task.
+
 ### MA3 — first playable, stereo and effects
 
 Land:
@@ -904,15 +957,13 @@ The Raspberry Pi measurement, not a host projection, closes the target
 budget. If no Pi-class target is available, MA5 remains explicitly open;
 host success cannot close it.
 
-MA5 then records three independent promotion decisions. None is silently
-the next implementation task:
+MA5 then records two independent promotion decisions. BCS has already landed
+through the isolated MA2-BCS feedback slice; neither remaining candidate is
+silently the next implementation task:
 
-1. BCS experiment: continuous stable -> edge -> subharmonic -> recovery
-   coordinate inside filter/cross-mod feedback, never the donor scenario
-   player or a parallel oscillator layer.
-2. Orbita experiment: VCO2/AUX resonance capture, hysteretic escape and
+1. Orbita experiment: VCO2/AUX resonance capture, hysteretic escape and
    breakup, offline before engine integration.
-3. Kosava experiment: one global gust CV plus per-card lock-in and chord
+2. Kosava experiment: one global gust CV plus per-card lock-in and chord
    ignition, offline before engine integration.
 
 Each candidate needs its own backlog and v0.1 evidence. A candidate is kept
@@ -925,10 +976,11 @@ scheduled in advance; the operator chooses after their offline evidence.
 
 - a literal clone or revision selector for the 1978 instrument;
 - patch schema, preset browser or persistence;
-- Mamut spectral/additive sources or filter-model menu;
+- additional Mamut spectral/additive sources beyond Raster, or a filter-model
+  menu;
 - PM, AM, ring modulation and generic source cross-mix modes;
 - direct GFM audio, GFM program selector or INSPECT UI;
-- BCS, Orbita or Kosava production integration;
+- Orbita or Kosava production integration;
 - Lavina, Brazda or Mraz implementation;
 - MIDI 2.0 UMP transport, MPE zones or sample-accurate hosted scheduling;
 - a generic instrument framework or cross-repo runtime dependency;
@@ -954,8 +1006,8 @@ zone; transport does not define the DSP model.
   not clamp to a wrong pitch. Every sample rate gets a boundary test.
 - **FX state size.** Fixed maximum-rate buffers can dominate the struct.
   The <1 MiB assertion and static live allocation make this visible.
-- **Feature soup.** Only Mozaik and GFM are committed Mamut worlds. Other
-  donor features remain named exclusions or gated experiments.
+- **Feature soup.** Mozaik, Raster, BCS and GFM each own a narrow insertion
+  contract. Other donor features remain named exclusions or gated experiments.
 - **Fake analog.** Character is tag-seeded and bounded at physical sites;
   no generic random drift or one final warmth knob substitutes for the
   distributed model.
@@ -972,7 +1024,7 @@ zone; transport does not define the DSP model.
 | Stereo + Mamut FX | committed | MA3 |
 | Hidden GFM field | committed; donor field implementation exists but insertion differs | MA4 |
 | Per-note expression state | committed internal landing zone | MA3; no new transport |
-| BCS | candidate; donor playable, listening pending | MA5 promotion decision |
+| BCS | implemented feedback-only in MA2-BCS; operator listening pending | ad hoc slice before MA2-4 |
 | Orbita | candidate; donor plan only | post-MA5 offline backlog if selected |
 | Kosava | candidate; donor plan only | post-MA5 offline backlog if selected |
 | Mraz | research priority among wild concepts | unscheduled |

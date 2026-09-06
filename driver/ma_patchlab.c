@@ -111,6 +111,9 @@ static bool bank_add_compiled_fallbacks(patch_bank *bank) {
         { "Tepih", &ma_patch_tepih },
         { "Lead", &ma_patch_lead },
         { "Dubina", &ma_patch_dubina },
+        { "Raster", &ma_patch_raster },
+        { "Prizma", &ma_patch_prizma },
+        { "Granica", &ma_patch_granica },
     };
     for (size_t i = 0; i < sizeof builtin / sizeof *builtin; i++) {
         if (bank_has_name(bank, builtin[i].name)) continue;
@@ -220,6 +223,9 @@ static void apply_live_controls(ma_synth *synth, const ma_patch *patch) {
     ma_synth_set_oscillator_modulation(
         synth, patch->sync_amount, patch->sync_softness,
         patch->crossmod_amount, patch->noise_level);
+    ma_synth_set_raster(synth, patch->raster_mix, patch->raster_position,
+                        patch->raster_warp);
+    ma_synth_set_bcs(synth, patch->bcs_amount, patch->bcs_regime);
     ma_synth_set_mozaik(synth, patch->mozaik_mix, patch->mozaik_slope,
                         patch->mozaik_contrast, patch->mozaik_phason,
                         patch->mozaik_drift);
