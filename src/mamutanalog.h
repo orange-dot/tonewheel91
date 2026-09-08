@@ -481,4 +481,88 @@ void ma_card_bank_tick(ma_card_bank *bank,
 void ma_card_bank_set_output(ma_card_bank *bank, float body_drive,
                               float width, float crossfeed, float master_level);
 
+/* MA2-7 digital pool. Initialize/reset only while stopped; all subsequent
+ * calls belong to the render thread. No allocation or internal synchronization.
+ * Configuration is session state, never part of ma_patch. IDs start at one;
+ * zero means failure (including velocity-zero NoteOn, which performs NoteOff).
+ * Exhausted uint64_t IDs fail without changing ownership until reset. */
+enum { MA_POOL_CAPACITY = 64 };
+#define MA_POOL_DEFAULT_SEED UINT64_C(0x4d41504f4f4c3031)
+typedef struct {
+    uint8_t limit;                 /* 1..64, divisible by unison_count */
+    uint8_t unison_count;          /* 1, 2, 4, 8 */
+    float detune_cents;            /* finite 0..100, symmetric +/- range */
+    uint64_t session_seed;
+} ma_voice_pool_config;
+extern const ma_voice_pool_config ma_voice_pool_default_config;
+
+typedef struct {
+    ma_synth voice;
+    uint64_t allocation_id;
+    float detune_cents;
+    float last_contribution;
+    float transition_from;
+    uint32_t transition_remaining;
+    uint8_t group;
+    bool awake;
+} ma_pool_slot;
+
+typedef struct {
+    uint64_t allocation_id;
+    uint8_t channel;
+    uint8_t note;
+    ma_card_phase phase;
+} ma_pool_group;
+
+typedef struct {
+    uint64_t steals_released, steals_sustained, steals_held;
+    uint64_t sleeps, wakes;
+    unsigned active_slots, peak_slots;
+} ma_pool_diagnostics;
+
+typedef struct {
+    ma_pool_slot slot[MA_POOL_CAPACITY];
+    ma_pool_group group[MA_POOL_CAPACITY];
+    ma_card_pan pan[MA_POOL_CAPACITY];
+    /* Control template only: never runs oscillator/filter DSP. */
+    ma_synth control;
+    ma_output_state output;
+    ma_voice_pool_config config;
+    ma_pool_diagnostics diagnostics;
+    float bend[16], pressure[16], mod_wheel[16];
+    bool sustain[16];
+    uint64_t next_allocation;
+    uint32_t transition_frames;
+    float group_gain, pan_width, pan_dispersion;
+    uint8_t cursor;
+} ma_voice_pool;
+static_assert(sizeof(ma_voice_pool) < 1024u * 1024u);
+
+/* NULL config/patch selects defaults. Invalid config leaves *pool untouched. */
+[[nodiscard]] bool ma_voice_pool_init(ma_voice_pool *pool, float sample_rate_hz,
+    const ma_voice_pool_config *config, const ma_patch *patch);
+/* Retains current controls/configuration; clears notes, expression, tails,
+ * counters and restarts deterministic session character/phase sequencing. */
+void ma_voice_pool_reset(ma_voice_pool *pool);
+[[nodiscard]] uint64_t ma_voice_pool_note_on(ma_voice_pool *pool,
+    uint8_t channel, uint8_t note, uint8_t velocity);
+[[nodiscard]] uint64_t ma_voice_pool_note_off(ma_voice_pool *pool,
+    uint8_t channel, uint8_t note, uint8_t release_velocity);
+void ma_voice_pool_set_sustain(ma_voice_pool *pool, uint8_t channel, bool down);
+void ma_voice_pool_panic(ma_voice_pool *pool);
+void ma_voice_pool_set_pitch_bend(ma_voice_pool *pool, uint8_t channel, float value);
+void ma_voice_pool_set_channel_pressure(ma_voice_pool *pool, uint8_t channel, float value);
+void ma_voice_pool_set_mod_wheel(ma_voice_pool *pool, uint8_t channel, float value);
+void ma_voice_pool_set_poly_pressure(ma_voice_pool *pool, uint8_t channel,
+    uint8_t note, float value);
+/* Patch edits preserve ownership, envelopes, character and output histories. */
+void ma_voice_pool_set_patch(ma_voice_pool *pool, const ma_patch *patch);
+void ma_voice_pool_set_macro(ma_voice_pool *pool, ma_macro_id macro, float value);
+void ma_voice_pool_set_character(ma_voice_pool *pool, float amount);
+void ma_voice_pool_set_output(ma_voice_pool *pool, float drive, float width,
+    float crossfeed, float master);
+[[nodiscard]] ma_frame ma_voice_pool_tick(ma_voice_pool *pool);
+/* Events are dispatched by the caller at block boundaries. */
+void ma_voice_pool_render(ma_voice_pool *pool, ma_frame *frames, size_t count);
+
 #endif

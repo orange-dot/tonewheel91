@@ -1945,12 +1945,14 @@ static ma_adsr character_adsr(ma_adsr authored, ma_envelope_time_bias bias,
 }
 #endif
 
-static ma_frame synth_tick(ma_synth *s, bool raw) {
+static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     ma_render_controls controls = next_render_controls(s);
     float character = next_character(s);
     float note_position = next_glide_note(s);
     float pitch_delta = controls.pitch_bend_semitones + next_lfo(s, &controls);
     float base_hz = note_position_hz(note_position);
+    if (detune_cents != 0.0f)
+        base_hz *= octave_ratio_small(detune_cents / 1200.0f);
     if (pitch_delta != 0.0f)
         base_hz *= octave_ratio_small(pitch_delta / 12.0f);
     if (character > 0.0f)
@@ -2070,11 +2072,11 @@ static ma_frame synth_tick(ma_synth *s, bool raw) {
 }
 
 ma_frame ma_synth_tick(ma_synth *s) {
-    return synth_tick(s, false);
+    return synth_tick(s, false, 0.0f);
 }
 
 float ma_voice_tick_raw(ma_synth *s) {
-    return synth_tick(s, true).left;
+    return synth_tick(s, true, 0.0f).left;
 }
 
 void ma_synth_set_vco1(ma_synth *s, ma_vco_controls controls) {
@@ -2234,4 +2236,34 @@ void ma_synth_set_mod_wheel(ma_synth *s, float amount) {
     s->mod_wheel = clamp_control(amount, 0.0f, 1.0f, 0.0f);
     resolve_effective_identity(s);
     update_control_targets(s);
+}
+
+/* Pool helpers leave the legacy synth/card execution order unchanged. */
+float ma_voice_tick_detuned(ma_synth *s, float cents) {
+    return synth_tick(s, true, cents).left;
+}
+void ma_voice_tick_controls(ma_synth *s) {
+    (void)next_render_controls(s);
+}
+void ma_voice_snap_controls(ma_synth *s) {
+    initialize_control_smoothers(s);
+}
+void ma_voice_patch_controls(ma_synth *s, const ma_patch *patch) {
+    ma_patch p = sanitize_patch(patch, s->sample_rate_hz);
+    ma_synth_set_vco1(s, p.vco1);
+    ma_synth_set_vco2(s, p.vco2, p.vco2_level, p.vco2_interval, p.vco2_fine_cents);
+    ma_synth_set_oscillator_modulation(s, p.sync_amount, p.sync_softness,
+                                      p.crossmod_amount, p.noise_level);
+    ma_synth_set_raster(s, p.raster_mix, p.raster_position, p.raster_warp);
+    ma_synth_set_bcs(s, p.bcs_amount, p.bcs_regime);
+    ma_synth_set_mozaik(s, p.mozaik_mix, p.mozaik_slope, p.mozaik_contrast,
+                       p.mozaik_phason, p.mozaik_drift);
+    ma_synth_set_filter(s, p.filter_cutoff_hz, p.filter_resonance,
+                       p.filter_drive, p.mixer_pressure);
+    ma_synth_set_filter_modulation(s, p.filter_env_amount, p.filter_keytrack);
+    ma_synth_set_amp_adsr(s, p.amp_adsr);
+    ma_synth_set_filter_adsr(s, p.filter_adsr);
+    for (unsigned i = 0; i < MA_MACRO_COUNT; i++)
+        ma_synth_set_macro(s, (ma_macro_id)i, p.macro[i]);
+    ma_synth_set_output(s, p.body_drive, p.width, p.crossfeed, p.master_level);
 }

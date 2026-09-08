@@ -671,3 +671,44 @@ one.
   and pedal stems sum exactly; no clipping/nonfinite samples. Listening
   peak is -3 dBFS and RMS -19.67342 dBFS. The complete three-part MIDI is
   exported alongside the audio under `build/organ_hurt_full`.
+
+
+### 2026-09-08 — MA2-7 digital pool implementation; host evidence pending
+
+- Added a separate caller-owned 64-slot pool, default limit 32, group allocation
+  and poly-unison 1/2/4/8. Released/sustained groups rank by maximum VCA envelope,
+  held groups by age; replacement uses a 5 ms captured-contribution transition.
+- Added seeded per-slot character, exact-idle sleep, deterministic wake,
+  per-channel sustain/expression and pool-owned stereo/output controls.
+  Gain remains fixed through a single shared body/DC/safety output.
+- Kept `ma_card_bank`, old struct layouts, patch format and historical
+  arrangements intact. Existing PCM assertions and the four new pinned
+  unison scripts pass; GCC/Clang aggregate tests, ASan/UBSan/float-cast-overflow
+  checks and optimized freestanding symbol audits pass.
+- Prepared opt-in `bench_ma_pool` and `exhibit_ma_pool`, with repeated hashes,
+  the 16/32/64-slot and 128/256/512-frame cost matrix, and four RMS-aligned
+  listening cases. Their execution and acceptance are recorded in the later
+  MA2-7 host-evidence entry below.
+- Operator steering at implementation time deferred host measurements to the
+  next model. No realtime claim and no automatic DSP-quality/polyphony reduction.
+- Contract, validation commands and concrete next-model handoff:
+  `docs/ma2-7-pool.md`. MA3 and future GFM now target the configured pool limit;
+  the closed five-card MA2 remains historical reference evidence.
+
+### 2026-09-08 — MA2-7 host cost matrix and listening renders
+
+- Ran the complete 1,440-row matrix on the x86-64 host at CPU affinity 0.
+  The shortened matrix used 8 warmup and 8 measured blocks per pass; every
+  one of 720 repeated PCM pairs matched. RSS stayed within 4,476–4,496 KiB,
+  with no major faults and 121,768-byte pool state.
+- Repeated the Granica/BCS/64-slot/128-frame sustain-release worst case with
+  32 warmup and 256 measured blocks. Both passes matched hash
+  `b9a60a080718203d`; CPU/audio ratios were 9.192 and 8.742. The 64-slot
+  worst case therefore does not meet realtime on this host; no quality or
+  polyphony reduction was applied.
+- Rendered four 12-second stereo listening cases twice: pad, overlap, steal
+  and unison8. Raw hashes and level alignment are recorded in
+  `docs/ma2-7-pool.md`; raw and RMS-matched WAVs are in the local build tree.
+- Operator accepted all four listening cases. MA2-7 is closed; a concrete
+  performance task is needed before MA3 live acceptance only if 64-slot density
+  is required on this host.

@@ -1,8 +1,11 @@
 # tonewheel91 — Mamut Analog implementation backlog
 
 Date: 2026-08-20. Status updated 2026-09-08: active; MA0, MA1, MA2-1
-through MA2-6 and the ad hoc MA2-DIG and MA2-BCS slices are closed.
-MA3 is next. Shared stereo/body evidence:
+through MA2-7 and the ad hoc MA2-DIG and MA2-BCS slices are closed.
+MA2-7 adds the scalable digital pool before MA3. Implementation, functional
+checks, host measurements and listening renders are recorded in
+`docs/ma2-7-pool.md`; operator listening verdict is accepted. Historical
+five-card MA2 remains closed. Shared stereo/body evidence:
 `docs/ma2-5-stereo-evidence.md`; character evidence:
 `docs/ma2-4-character-evidence.md`.
 The interstitial MA2-PERF slice closed on 2026-09-05 with a five-card cost
@@ -22,7 +25,9 @@ top-level core type is `ma_synth`.
 
 ## Product thesis
 
-`mamutanalog` is a five-card analog organism:
+`mamutanalog` carries its analog voice model into the MA2-7 digital pool
+(64 reserved slots, default limit 32). The five-card bank is the historical
+MA2 reference:
 
 - the analog voice is the pitch and body spine;
 - Mamut identity math turns a small number of musical gestures into
@@ -34,12 +39,12 @@ top-level core type is `ma_synth`.
   ladder, not another audible source;
 - bounded card differences make the polyphony breathe before any effect;
 - a later GFM field lets notes inject energy into one shared, hidden
-  medium that perturbs the five cards;
+  medium that perturbs slots within the active pool limit;
 - chorus and reverb provide the first playable stereo finish, but neither
   is allowed to manufacture the source identity.
 
 The success question is therefore not "does it clone the 1978 unit?" It
-is "does an unmistakably analog five-card instrument remain legible while
+is "does an unmistakably analog instrument remain legible while
 Mamut structure, identity and field behavior become part of how it plays?"
 
 The old service documentation and chip data remain useful for reset slew,
@@ -492,6 +497,9 @@ temporary additions and cannot overwrite the base value.
 
 ## Five-card polyphony, character and stereo
 
+This section preserves the closed MA2 bank contract. MA3 uses the MA2-7 pool
+contract in `docs/ma2-7-pool.md`, including group stealing and explicit sleep.
+
 ### Allocator
 
 The bank has five caller-owned cards and a round-robin cursor.
@@ -633,7 +641,7 @@ added later without redesigning a voice.
   under the existing repo contract.
 - Default live target: 48 kHz, 128-frame periods, three-period ALSA buffer.
 - Final reference-host gate: p99 rendering of a worst-case 128-frame period
-  is recorded with five held voices, factory effects and GFM enabled; no xrun
+  is recorded at the configured pool limit, with factory effects and GFM enabled; no xrun
   in a 30-minute soak. The x86-64 Linux host is the only supported target.
 
 ## Evidence protocol
@@ -840,7 +848,26 @@ BCS controls as zero. MA2-BCS does not add a regime enum, timeline, generic
 modulation matrix, oscillator choice or allocator behavior. It leaves MA2-4
 as the next regular task.
 
+### MA2-7 — scalable digital voice pool
+
+Implemented: 64 caller-owned slots, default limit 32, poly-unison 1/2/4/8,
+whole-group release/sustain/held stealing, 5 ms replacement transition,
+seeded slot character, exact-idle sleep and deterministic wake, per-channel
+expression, pool-owned stereo controls and one shared body/DC/safety output.
+Fixed gain is `1/sqrt(unison)` per slot and `1/8` before shared body.
+
+`make prepare-ma2-7` builds functional tests and opt-in host tools. Contract,
+verification, cost evidence and listening results are in
+`docs/ma2-7-pool.md`. Operator listening accepted all four cases. The measured
+64-slot worst case is not realtime on this host; record a concrete performance
+task before MA3 live acceptance if that density is required. No automatic
+quality reduction was applied. MA2-7 is closed.
+
 ### MA3 — first playable, stereo and effects
+
+Use `ma_voice_pool` as the instrument foundation. Effects, cost gates and future
+GFM operate over its configured limit and awake/group ownership; none may assume
+five cards. Preserve historical bank tests and Hurt/Chopin arrangements.
 
 Land:
 
@@ -946,7 +973,7 @@ No new synthesis concept lands. Consolidate:
 - full-chain per-stage cost at factory and maximum controls;
 - `sizeof(ma_synth)` and per-subsystem state inventory;
 - 44.1, 48, 96 and 192 kHz safety/guard sweeps;
-- full MIDI compass, dense five-note performance and pathological
+- full MIDI compass, dense configured-limit performance and pathological
   controller-rate stress;
 - optimized core undefined-symbol audit;
 - 30-minute reference-host live soak;
@@ -1019,7 +1046,8 @@ zone; transport does not define the DSP model.
 | --- | --- | --- |
 | Analog/Mamut identity contract | committed | MA0 |
 | Mozaik AUX | implemented and accepted in closed MA1 | MA1 |
-| Five-card analog body | committed | MA2 |
+| Five-card analog body | closed historical reference | MA2 |
+| Scalable digital pool | closed; cost measured; listening accepted | MA3 |
 | Stereo + Mamut FX | committed | MA3 |
 | Hidden GFM field | committed; donor field implementation exists but insertion differs | MA4 |
 | Per-note expression state | committed internal landing zone | MA3; no new transport |

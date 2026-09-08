@@ -17,7 +17,7 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
 # The Mamut Analog line is a sibling core. Keep it out of the organ and EP
 # products; the aggregate core test and symbol audit are its first hosts.
-MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o
+MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o
 MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
 MA1_LONG_LISTENING_SOURCE := driver/exhibit_ma_blues.c
 MA1_LONG_LISTENING_WAV := $(BUILD)/ma_blade_runner_blues_expanded.wav
@@ -36,7 +36,7 @@ $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o: $(BUILD)/%.o: src/%.c src/epiano.h src/
 $(BUILD)/ma_voice.o: src/ma_voice.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_bank.o $(BUILD)/ma_output.o: $(BUILD)/%.o: src/%.c src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o: $(BUILD)/%.o: src/%.c src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 
 $(BUILD)/ma_voice_source.o: src/ma_voice.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -DMA_SOURCE_EVIDENCE -c $< -o $@
@@ -247,13 +247,14 @@ $(BUILD)/test_ma_character: test/ma_character.c $(MA_RUNTIME_OBJS) src/mamutanal
 $(BUILD)/test_ma_stereo: test/ma_stereo.c $(MA_RUNTIME_OBJS) src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) test/ma_stereo.c $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-test: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/test_ma_architecture $(BUILD)/test_ma_character $(BUILD)/test_ma_stereo $(TEST_EXTRA)
+test: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/test_ma_architecture $(BUILD)/test_ma_character $(BUILD)/test_ma_stereo $(BUILD)/test_ma_pool $(TEST_EXTRA)
 	$(BUILD)/test
 	$(BUILD)/test_hosted
 	$(BUILD)/test_midi_map
 	$(BUILD)/test_ma_architecture
 	$(BUILD)/test_ma_character
 	$(BUILD)/test_ma_stereo
+	$(BUILD)/test_ma_pool
 
 test-clang:
 	$(MAKE) BUILD=build/clang CC=clang test
@@ -388,3 +389,20 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all test test-clang sanitize analyze fuzz-smf derive-ma-constants exhibit-ma1 exhibit-ma1-osc audition-ma1-5 audition-ma1-6 audition-ma1-6p audition-ma1-6r audition-ma1-7 audition-ma-blues audition-ma-blues-panic exhibit-ma-blade-runner-main-titles audition-ma-eno-ascent-noir audition-ma-nin-hurt-noir audition-ma-blues-ma2-full audition-ma-blade-runner-main-titles-ma2-full audition-ma-nin-hurt-noir-ma2-full audition-ma2-dig audition-ma2-bcs audition-ma-architecture-preview audition-ma-architecture check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean
+
+$(BUILD)/test_ma_pool: test/ma_pool.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+
+$(BUILD)/bench_ma_pool: driver/bench_ma_pool.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+$(BUILD)/exhibit_ma_pool: driver/exhibit_ma_pool.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+.PHONY: prepare-ma2-7 bench-ma-pool audition-ma2-7
+prepare-ma2-7: $(BUILD)/bench_ma_pool $(BUILD)/exhibit_ma_pool $(BUILD)/test_ma_pool
+bench-ma-pool: $(BUILD)/bench_ma_pool
+	$(BUILD)/bench_ma_pool --run
+audition-ma2-7: $(BUILD)/exhibit_ma_pool
+	$(BUILD)/exhibit_ma_pool --render $(BUILD)/ma2-7

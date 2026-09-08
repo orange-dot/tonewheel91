@@ -54,6 +54,7 @@ to the organ, and the organ's pinned signatures — the whole-song render
 hashes included — reproduce bit-for-bit.
 
     make test      # core, hosted-boundary and MIDI-dispatch checks
+    make prepare-ma2-7  # build digital pool tests/exhibit/benchmark; no measurement
     make bench-ma  # five-card CPU/wall timing and pinned PCM checks (host only)
     make audition-ma2-4  # dry chord/unison comparison: character 0 / .20 / 1
     make audition-ma2-5  # one/three/five-card stereo and shared-body comparison
@@ -110,6 +111,11 @@ hashes included — reproduce bit-for-bit.
                    # zsxdcvgbhnjm, plays C3..C4, space panics, q quits
                    # MIDI: notes, bend, channel/poly pressure, mod wheel;
                    # CC16..20 edit the five Mamut macros
+
+The MA2-7 digital Mamut pool reserves 64 slots with a default limit of 32.
+Implementation, test, host measurement and listening evidence are in
+[docs/ma2-7-pool.md](docs/ma2-7-pool.md). Existing five-card arrangements
+retain their reference behavior.
 
 ## Layout
 
