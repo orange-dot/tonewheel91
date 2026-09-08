@@ -17,7 +17,7 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
 # The Mamut Analog line is a sibling core. Keep it out of the organ and EP
 # products; the aggregate core test and symbol audit are its first hosts.
-MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_bank.o
+MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o
 MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
 MA1_LONG_LISTENING_SOURCE := driver/exhibit_ma_blues.c
 MA1_LONG_LISTENING_WAV := $(BUILD)/ma_blade_runner_blues_expanded.wav
@@ -33,12 +33,12 @@ $(BUILD)/%.o: src/%.c src/tonewheel.h | $(BUILD)
 $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o: $(BUILD)/%.o: src/%.c src/epiano.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_voice.o: src/ma_voice.c src/ma_raster_table.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/ma_voice.o: src/ma_voice.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_bank.o: src/ma_bank.c src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/ma_bank.o $(BUILD)/ma_output.o: $(BUILD)/%.o: src/%.c src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 
-$(BUILD)/ma_voice_source.o: src/ma_voice.c src/ma_raster_table.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/ma_voice_source.o: src/ma_voice.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -DMA_SOURCE_EVIDENCE -c $< -o $@
 
 $(BUILD)/wav.o: driver/wav.c driver/wav.h | $(BUILD)
@@ -182,6 +182,32 @@ $(BUILD)/exhibit_ma_blade_runner_main_titles_ma2_full: driver/exhibit_ma_blade_r
 $(BUILD)/exhibit_ma_nin_hurt_noir_ma2_full: driver/exhibit_ma_nin_hurt_noir_ma2_full.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_nin_hurt_noir_ma2_full.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
+$(BUILD)/exhibit_ma_hurt_organ: driver/exhibit_ma_hurt_organ.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_OBJS) $(CORE_OBJS) src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_OBJS) $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+.PHONY: audition-ma-hurt-organ
+all: $(BUILD)/exhibit_ma_hurt_organ
+audition-ma-hurt-organ: $(BUILD)/exhibit_ma_hurt_organ
+	./$(BUILD)/exhibit_ma_hurt_organ
+
+$(BUILD)/exhibit_organ_hurt: driver/exhibit_organ_hurt.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(CORE_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+.PHONY: audition-organ-hurt
+all: $(BUILD)/exhibit_organ_hurt
+audition-organ-hurt: $(BUILD)/exhibit_organ_hurt
+	./$(BUILD)/exhibit_organ_hurt
+
+$(BUILD)/exhibit_ma_chopin: driver/exhibit_ma_chopin.c $(BUILD)/wav.o $(BUILD)/smf.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(BUILD)/smf.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+all: $(BUILD)/exhibit_ma_chopin
+.PHONY: check-ma-chopin audition-ma-chopin
+check-ma-chopin: $(BUILD)/exhibit_ma_chopin
+	./$(BUILD)/exhibit_ma_chopin --check
+audition-ma-chopin: $(BUILD)/exhibit_ma_chopin
+	./$(BUILD)/exhibit_ma_chopin --render -o $(BUILD)/ma_chopin_op28_4
+
 $(BUILD)/exhibit_ma_raster: driver/exhibit_ma_raster.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_raster.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
@@ -205,18 +231,29 @@ $(BUILD)/exhibit_ma_character: driver/exhibit_ma_character.c $(BUILD)/wav.o $(MA
 audition-ma2-4: $(BUILD)/exhibit_ma_character
 	$(BUILD)/exhibit_ma_character
 
+$(BUILD)/exhibit_ma_stereo: driver/exhibit_ma_stereo.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_stereo.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+.PHONY: audition-ma2-5
+audition-ma2-5: $(BUILD)/exhibit_ma_stereo
+	$(BUILD)/exhibit_ma_stereo
+
 check-core-symbols: $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
 	sh test/check_core_symbols.sh "$(CC)" "$(BUILD)/core-combined.o" $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
 
 $(BUILD)/test_ma_character: test/ma_character.c $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) test/ma_character.c $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-test: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/test_ma_architecture $(BUILD)/test_ma_character $(TEST_EXTRA)
+$(BUILD)/test_ma_stereo: test/ma_stereo.c $(MA_RUNTIME_OBJS) src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) test/ma_stereo.c $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+test: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/test_ma_architecture $(BUILD)/test_ma_character $(BUILD)/test_ma_stereo $(TEST_EXTRA)
 	$(BUILD)/test
 	$(BUILD)/test_hosted
 	$(BUILD)/test_midi_map
 	$(BUILD)/test_ma_architecture
 	$(BUILD)/test_ma_character
+	$(BUILD)/test_ma_stereo
 
 test-clang:
 	$(MAKE) BUILD=build/clang CC=clang test

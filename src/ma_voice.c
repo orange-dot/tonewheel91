@@ -1,6 +1,6 @@
 /* Mamut Analog one-voice core. MA1 begins with the pinned pitch/control
  * spine; render state lands behind this concrete public object. */
-#include "mamutanalog.h"
+#include "ma_internal.h"
 #include "ma_raster_table.h"
 
 static constexpr uint64_t NOISE_SEED = UINT64_C(0x4d414e4f49534531);
@@ -12,9 +12,6 @@ static constexpr uint32_t MOZAIK_SLOPE_MAX_Q32 = UINT32_C(0xc0000000);
 static constexpr float MOZAIK_GOLDEN_CONTRAST = 1.618034f;
 static constexpr float Q32_ONE_F = 0x1p32f;
 static constexpr float DC_BLOCK_10_HZ = 62.83185307179586f;
-#if !defined(MA_SOURCE_EVIDENCE)
-static constexpr float OUTPUT_TINY = 1.0e-9f;
-#endif
 static constexpr float SAFETY_KNEE = 0.98f;
 static constexpr float SAFETY_RANGE = 0.02f;
 static constexpr float LFO_RATE_DEFAULT_HZ = 1.0f;
@@ -871,6 +868,7 @@ static void initialize_control_smoothers(ma_synth *s) {
         .body_load_ratio = initialized_smoother(target.body_load_ratio),
         .width = initialized_smoother(target.width),
         .crossfeed = initialized_smoother(target.crossfeed),
+        .spatial_dispersion = initialized_smoother(s->identity.spatial_dispersion),
     };
 }
 
@@ -936,9 +934,12 @@ static void update_control_targets(ma_synth *s) {
                         s->sample_rate_hz);
     set_smoother_target(&s->smoothers.crossfeed, target.crossfeed,
                         s->sample_rate_hz);
+    set_smoother_target(&s->smoothers.spatial_dispersion,
+                        s->identity.spatial_dispersion, s->sample_rate_hz);
 }
 
 static ma_render_controls next_render_controls(ma_synth *s) {
+    (void)next_smoother(&s->smoothers.spatial_dispersion);
     float slope = next_smoother(&s->smoothers.mozaik_slope);
     return (ma_render_controls){
         .vco1 = next_vco_controls(&s->smoothers.vco1),
@@ -1924,65 +1925,11 @@ static float decimate_filter(const ma_ladder *ladder) {
     return output;
 }
 
-static float output_dc_tick(ma_output_state *output, float input, float *lp) {
-    if (!(input >= -FLT_MAX && input <= FLT_MAX)) return input;
-    float next = *lp + output->dc_coefficient * (input - *lp);
-    if (next != 0.0f && tw_fabsf(next) < OUTPUT_TINY) {
-        next = 0.0f;
-        output->diagnostics.tiny_flush_count++;
-    }
-    *lp = next;
-    return input - next;
-}
-
-static float output_safety_tick(ma_output_state *output, float input) {
-    if (!(input >= -FLT_MAX && input <= FLT_MAX)) {
-        output->diagnostics.sanitization_count++;
-        return 0.0f;
-    }
-    float magnitude = tw_fabsf(input);
-    if (magnitude > output->diagnostics.pre_peak)
-        output->diagnostics.pre_peak = magnitude;
-    if (magnitude > SAFETY_KNEE) output->diagnostics.knee_hit_count++;
-    float sample = ma_safety_curve(input);
-    float limited = tw_fabsf(sample);
-    if (limited > output->diagnostics.post_peak)
-        output->diagnostics.post_peak = limited;
-    float reduction = magnitude > limited ? magnitude - limited : 0.0f;
-    if (reduction > output->diagnostics.maximum_reduction)
-        output->diagnostics.maximum_reduction = reduction;
-    return sample;
-}
-
 static ma_frame render_output(ma_synth *s,
                               const ma_render_controls *controls,
                               float mono) {
-    ma_output_state *output = &s->output;
-    output->pre_body = mono;
-    if (!(mono >= -FLT_MAX && mono <= FLT_MAX)) {
-        output->post_body = mono;
-        return (ma_frame){
-            .left = output_safety_tick(output, mono),
-            .right = output_safety_tick(output, mono),
-        };
-    }
-
-    float body = mono;
-    if (controls->body_drive > 0.0f) {
-        tw_drive_set(&output->body, controls->body_drive);
-        body = 0.25f * tw_drive_tick(
-            &output->body, 4.0f * controls->body_load_ratio * mono);
-    }
-    output->post_body = body;
-
-    float left = output_dc_tick(output, body, &output->dc_lp_left)
-               * s->master_level;
-    float right = output_dc_tick(output, body, &output->dc_lp_right)
-                * s->master_level;
-    return (ma_frame){
-        .left = output_safety_tick(output, left),
-        .right = output_safety_tick(output, right),
-    };
+    return ma_output_render(&s->output, mono, 0.0f, controls->body_drive,
+                             controls->body_load_ratio, s->master_level);
 }
 #endif
 
@@ -1998,7 +1945,7 @@ static ma_adsr character_adsr(ma_adsr authored, ma_envelope_time_bias bias,
 }
 #endif
 
-ma_frame ma_synth_tick(ma_synth *s) {
+static ma_frame synth_tick(ma_synth *s, bool raw) {
     ma_render_controls controls = next_render_controls(s);
     float character = next_character(s);
     float note_position = next_glide_note(s);
@@ -2114,10 +2061,20 @@ ma_frame ma_synth_tick(ma_synth *s) {
     if (character > 0.0f)
         output *= 1.0f + character * s->character.vca_bias;
 #if defined(MA_SOURCE_EVIDENCE)
+    (void)raw;
     return (ma_frame){ .left = output, .right = output };
 #else
+    if (raw) return (ma_frame){ .left = output, .right = output };
     return render_output(s, &controls, output);
 #endif
+}
+
+ma_frame ma_synth_tick(ma_synth *s) {
+    return synth_tick(s, false);
+}
+
+float ma_voice_tick_raw(ma_synth *s) {
+    return synth_tick(s, true).left;
 }
 
 void ma_synth_set_vco1(ma_synth *s, ma_vco_controls controls) {

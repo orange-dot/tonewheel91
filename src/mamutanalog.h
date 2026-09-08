@@ -179,6 +179,7 @@ typedef struct {
     ma_smoother body_load_ratio;
     ma_smoother width;
     ma_smoother crossfeed;
+    ma_smoother spatial_dispersion;
 } ma_control_smoothers;
 
 typedef struct {
@@ -371,8 +372,24 @@ typedef struct {
 } ma_card_owner;
 
 typedef struct {
+    float position;
+    float left;
+    float right;
+} ma_card_pan;
+
+typedef struct {
+    ma_output_state output;
+    ma_card_pan pan[MA_CARD_COUNT];
+    float width;
+    float dispersion;
+    float pre_side;
+    float post_side;
+} ma_stereo_state;
+
+typedef struct {
     ma_synth card[MA_CARD_COUNT];
     ma_card_owner owner[MA_CARD_COUNT];
+    ma_stereo_state stereo;
     uint64_t next_age;
     uint64_t ignored_release_velocities;
     uint8_t cursor;
@@ -452,8 +469,16 @@ void ma_card_bank_set_unison(ma_card_bank *bank, bool enabled);
  * Zero bypasses immediately; positive edits use the ordinary 6 ms ramp.
  * Call on the render thread, as with other bank controls. */
 void ma_card_bank_set_character(ma_card_bank *bank, float amount);
-/* Per-card frames retain fixed slot order; stereo summing lands later in MA2. */
+/* Legacy per-card MA1 outputs in fixed slot order. Choose this or the stereo
+ * entry point for a bank's lifetime; do not tick both for the same sample. */
 void ma_card_bank_tick(ma_card_bank *bank,
                        ma_frame frames[static MA_CARD_COUNT]);
+/* Sum raw cards through pan, shared mid body, DC block and safety. Card 0
+ * owns shared output/identity controls; the bank remains single-timbre. */
+[[nodiscard]] ma_frame ma_card_bank_tick_stereo(ma_card_bank *bank);
+/* Common output controls on all cards; same ranges/fallbacks as MA1.
+ * Direct width zero forces exact dual mono, including after stereo history. */
+void ma_card_bank_set_output(ma_card_bank *bank, float body_drive,
+                              float width, float crossfeed, float master_level);
 
 #endif

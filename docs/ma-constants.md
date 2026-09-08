@@ -815,12 +815,30 @@ card 4  0.27589938  1.38703990
 Width zero bypasses coefficient calculation and sends the identical mono
 card sum to left and right [DECISION].
 
+MA2-5 resolves `identity_offset = base * .10 * spatial_dispersion * width`
+[DECISION]. Dispersion uses the existing 6 ms smoother; its maximum offset
+is ±.075 and shrinks with width. Width here is the existing resolved and
+smoothed width, including the section 8 identity delta. Literal direct
+width zero overrides that delta and all pan offsets. GFM offset remains
+zero before MA4. The center coefficient pair is literal `(1,1)`; other
+pairs use the sine kernel. The bank caches coefficients until resolved
+width or dispersion changes.
+
 ## 12. Shared body, DC block and safety
 
 MA1 is one centered card, so its pre-effect result is dual mono. MA2 sums
 cards through the pan coefficients, then converts to
 `mid=(L+R)/2`, `side=(L-R)/2`. Width and crossfeed shape side; shared body
 processes mid once [DECISION].
+
+MA2-5 uses the unnormalized, slot-ordered sum of raw post-VCA cards. Width
+acts through card pans once; side then scales by `1-effective_crossfeed`
+[DECISION]. Direct width zero or fully resolved crossfeed one merges the
+two DC trackers by their mean before processing, yielding exact dual mono
+even after prior stereo history. Card 0 owns the single-timbre bank's shared
+output/identity settings; bank output setters apply common direct controls
+to all five cards. The old per-card output entry point is retained for
+historical exhibits. API, examples and evidence: `ma2-5-stereo-evidence.md`.
 
 The body reuses the repository triode `tw_drive` state and kernel [REPO],
 but at the analog bus operating point [DECISION]: when body drive is

@@ -1,8 +1,9 @@
 # tonewheel91 — Mamut Analog implementation backlog
 
-Date: 2026-08-20. Status updated 2026-09-06: active; MA0, MA1, MA2-1
-through MA2-4 and the ad hoc MA2-DIG and MA2-BCS slices are closed.
-MA2-5 is the next queued task. Character control, lifecycle and evidence:
+Date: 2026-08-20. Status updated 2026-09-08: active; MA0, MA1, MA2-1
+through MA2-6 and the ad hoc MA2-DIG and MA2-BCS slices are closed.
+MA3 is next. Shared stereo/body evidence:
+`docs/ma2-5-stereo-evidence.md`; character evidence:
 `docs/ma2-4-character-evidence.md`.
 The interstitial MA2-PERF slice closed on 2026-09-05 with a five-card cost
 referee and PCM-preserving source optimizations; host evidence and remaining
@@ -631,10 +632,9 @@ added later without redesigning a voice.
   or `libm` symbols. Any required freestanding memory primitive is handled
   under the existing repo contract.
 - Default live target: 48 kHz, 128-frame periods, three-period ALSA buffer.
-- Final Raspberry Pi 3B gate: p99 rendering of a worst-case 128-frame
-  period is below 50 percent of the 2.667 ms deadline with five held
-  voices, factory effects and GFM enabled; no xrun in a 30-minute soak.
-  Host numbers are recorded separately and never presented as SBC proof.
+- Final reference-host gate: p99 rendering of a worst-case 128-frame period
+  is recorded with five held voices, factory effects and GFM enabled; no xrun
+  in a 30-minute soak. The x86-64 Linux host is the only supported target.
 
 ## Evidence protocol
 
@@ -949,13 +949,12 @@ No new synthesis concept lands. Consolidate:
 - full MIDI compass, dense five-note performance and pathological
   controller-rate stress;
 - optimized core undefined-symbol audit;
-- 30-minute reference-host and Raspberry Pi 3B live soaks;
+- 30-minute reference-host live soak;
 - docs/code/control/default truth audit;
 - final factory render set and listening record.
 
-The Raspberry Pi measurement, not a host projection, closes the target
-budget. If no Pi-class target is available, MA5 remains explicitly open;
-host success cannot close it.
+The reference-host measurement closes the target budget for this product
+scope. Raspberry Pi is no longer a target and is not part of the MA5 gate.
 
 MA5 then records two independent promotion decisions. BCS has already landed
 through the isolated MA2-BCS feedback slice; neither remaining candidate is

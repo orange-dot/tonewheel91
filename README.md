@@ -56,6 +56,7 @@ hashes included — reproduce bit-for-bit.
     make test      # core, hosted-boundary and MIDI-dispatch checks
     make bench-ma  # five-card CPU/wall timing and pinned PCM checks (host only)
     make audition-ma2-4  # dry chord/unison comparison: character 0 / .20 / 1
+    make audition-ma2-5  # one/three/five-card stereo and shared-body comparison
     make exhibit   # renders the evidence WAVs into build/
     make viz       # renders the evidence PNGs into docs/viz/
     make audition-ma1-5  # renders the provisional Mamut Analog listening WAVs
@@ -64,6 +65,9 @@ hashes included — reproduce bit-for-bit.
     make audition-ma2-dig # Raster digital source / Prizma hybrid listening WAV
     make audition-ma2-bcs # Granica nonlinear-feedback listening WAV
     make audition-ma-blues # hosted F#-minor Blade Runner Blues performance study
+    make audition-ma-hurt-organ # local Hurt MIDIs: full Mamut vocal, wet organ
+    make audition-organ-hurt # organ only: two manuals and bass pedals
+    make check-ma-chopin # free Mamut-only Chopin interpretation; no audio
     make audition-ma-architecture-preview # original ten-line 180 s preview
     make audition-ma-architecture # explicit full 960 s audition (not in tests)
     make           # also builds the live driver
@@ -109,6 +113,19 @@ hashes included — reproduce bit-for-bit.
 
 ## Layout
 
+The free Mamut-only Chopin Op. 28 No. 4 exhibit is prepared for rendering;
+see [docs/ma-chopin.md](docs/ma-chopin.md). Its default run checks the score;
+audio synthesis requires the explicit `--render` switch.
+
+The organ-only Hurt interpretation for two hands and pedals, including
+three-part MIDI export, is documented in [docs/organ-hurt.md](docs/organ-hurt.md).
+
+The current Hurt exhibit, with the full vocal MIDI line on Mamut and wet
+organ, is ready for its next render; see [docs/ma-hurt-vocal.md](docs/ma-hurt-vocal.md).
+The preceding wet-organ take is documented in [docs/ma-hurt-organ.md](docs/ma-hurt-organ.md).
+The earlier Mamut-only listening evidence remains in
+[docs/ma-hurt-dark.md](docs/ma-hurt-dark.md).
+
     src/     freestanding core (no OS, no libm, no allocation): generator,
              contacts, percussion, vibrato/chorus scanner, preamp drive,
              rotary speaker, MIDI byte parser; and the ep73 struck-voice
@@ -132,8 +149,7 @@ hashes included — reproduce bit-for-bit.
 
 ## Targets
 
-Any Linux/ALSA box for development; the instrument target is a Linux SBC
-(Raspberry Pi 3B-class, aarch64).
+The supported instrument target is the current x86-64 Linux/ALSA host.
 
 ## License
 

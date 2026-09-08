@@ -1,5 +1,5 @@
 /* Mamut Analog MA2 fixed-card bank and allocator. */
-#include "mamutanalog.h"
+#include "ma_internal.h"
 #include <float.h>
 
 static uint64_t character_seed(uint8_t slot, uint64_t tag) {
@@ -53,6 +53,26 @@ static void release_card(ma_card_bank *bank, uint8_t slot,
     owner->phase = MA_CARD_RELEASED;
 }
 
+static void update_pan(ma_stereo_state *stereo, float width, float dispersion) {
+    if (stereo->width == width && stereo->dispersion == dispersion) return;
+    stereo->width = width;
+    stereo->dispersion = dispersion;
+    for (unsigned slot = 0; slot < MA_CARD_COUNT; slot++) {
+        float base = ((float)slot - 2.0f) * .375f;
+        float position = width == 0.0f ? 0.0f
+                       : base * width + base * .10f * dispersion * width;
+        if (position < -1.0f) position = -1.0f;
+        if (position > 1.0f) position = 1.0f;
+        ma_card_pan pan = { .position = position, .left = 1, .right = 1 };
+        if (position != 0.0f) {
+            float turns = (position + 1.0f) * .125f;
+            pan.left = 1.41421356237f * tw_sin_turns(.25f - turns);
+            pan.right = 1.41421356237f * tw_sin_turns(turns);
+        }
+        stereo->pan[slot] = pan;
+    }
+}
+
 void ma_card_bank_init_patch(ma_card_bank *bank, float sample_rate_hz,
                              const ma_patch *patch) {
     *bank = (ma_card_bank){ .next_age = 1 };
@@ -60,6 +80,12 @@ void ma_card_bank_init_patch(ma_card_bank *bank, float sample_rate_hz,
         ma_synth_init_patch(&bank->card[slot], sample_rate_hz, patch);
         bank->card[slot].character = card_character(slot);
     }
+    bank->stereo.output = bank->card[0].output;
+    bank->stereo.width = -1.0f;
+    const ma_synth *control = &bank->card[0];
+    update_pan(&bank->stereo, control->width == 0.0f ? 0.0f
+                 : control->smoothers.width.current,
+               control->smoothers.spatial_dispersion.current);
 }
 
 void ma_card_bank_set_character(ma_card_bank *bank, float amount) {
@@ -191,4 +217,51 @@ void ma_card_bank_tick(ma_card_bank *bank,
     for (uint8_t slot = 0; slot < MA_CARD_COUNT; slot++)
         frames[slot] = ma_synth_tick(&bank->card[slot]);
     reap_idle_cards(bank);
+}
+
+void ma_card_bank_set_output(ma_card_bank *bank, float body_drive,
+                              float width, float crossfeed, float master_level) {
+    for (unsigned slot = 0; slot < MA_CARD_COUNT; slot++)
+        ma_synth_set_output(&bank->card[slot], body_drive, width,
+                            crossfeed, master_level);
+    /* A future positive edit must ramp from the audible mono position. */
+    if (bank->card[0].width == 0.0f)
+        for (unsigned slot = 0; slot < MA_CARD_COUNT; slot++)
+            bank->card[slot].smoothers.width = (ma_smoother){ 0 };
+}
+
+ma_frame ma_card_bank_tick_stereo(ma_card_bank *bank) {
+    float raw[MA_CARD_COUNT] = { 0 };
+    for (unsigned slot = 0; slot < MA_CARD_COUNT; slot++)
+        raw[slot] = ma_voice_tick_raw(&bank->card[slot]);
+    reap_idle_cards(bank);
+
+    const ma_synth *control = &bank->card[0];
+    ma_stereo_state *stereo = &bank->stereo;
+    float width = control->width == 0.0f ? 0.0f : control->smoothers.width.current;
+    update_pan(stereo, width, control->smoothers.spatial_dispersion.current);
+    float mid = 0.0f, side = 0.0f;
+    if (width == 0.0f) {
+        for (unsigned slot = 0; slot < MA_CARD_COUNT; slot++) mid += raw[slot];
+    } else {
+        float left = 0.0f, right = 0.0f;
+        for (unsigned slot = 0; slot < MA_CARD_COUNT; slot++) {
+            left += raw[slot] * stereo->pan[slot].left;
+            right += raw[slot] * stereo->pan[slot].right;
+        }
+        mid = .5f * left + .5f * right;
+        side = .5f * left - .5f * right;
+    }
+    stereo->pre_side = side;
+    side *= 1.0f - control->smoothers.crossfeed.current;
+    stereo->post_side = side;
+    if (width == 0.0f || control->smoothers.crossfeed.current == 1.0f) {
+        float dc = .5f * stereo->output.dc_lp_left
+                 + .5f * stereo->output.dc_lp_right;
+        stereo->output.dc_lp_left = dc;
+        stereo->output.dc_lp_right = dc;
+    }
+    return ma_output_render(&stereo->output, mid, side,
+        control->smoothers.body_drive.current,
+        control->smoothers.body_load_ratio.current, control->master_level);
 }

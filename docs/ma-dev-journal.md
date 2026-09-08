@@ -11,16 +11,16 @@ its internal sub-gates already has working code.
 
 ## Current position
 
-- Active milestone: **MA2 — five-card body**.
-- Active task: none. **MA2-5 — card pan and shared mid/side body** is next.
-  MA2-4 is closed; task ledger and evidence: `docs/ma2-4-character-evidence.md`.
+- Active milestone: **MA3 — first playable, stereo and effects**.
+- Active task: none. **MA2-6 — integrated MA2 evidence and closure** is done;
+  evidence is in `docs/ma2-6-evidence.md`.
 - Last green aggregate run: GCC, Clang and ASan/UBSan/
-  float-cast-overflow, 2026-09-06, on MA2-4: core `111378`, hosted `116`,
-  MIDI map `22`, architecture `227`, character `8700`; zero failures. Both compiler core-symbol
-  audits pass.
+  float-cast-overflow, 2026-09-08, on MA2-6: core `111378`, hosted `116`,
+  MIDI map `22`, architecture `227`, character `8700`, stereo `2611`;
+  zero failures. Both compiler core-symbol audits pass.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
-- Core implementation status: MA0, MA1, MA2-1 through MA2-4, MA2-DIG,
+- Core implementation status: MA0, MA1, MA2-1 through MA2-6, MA2-DIG,
   MA2-BCS and MA2-PERF are closed.
 
 ## MA0 task ledger
@@ -66,13 +66,15 @@ one.
 | MA2-BCS | done | MA2-DIG | Feedback-only Hopf/Duffing coordinate, exact bypass, Granica patch and deterministic audition. |
 | MA2-PERF | done | MA2-BCS | Five-card cost referee, pinned pre-change PCM and removal of redundant source work; evidence in `ma2-perf-evidence.md`. |
 | MA2-4 | done | MA2-3 | Fixed-seed per-card character with an exact character-zero baseline; `ma2-4-character-evidence.md`. |
-| MA2-5 | queued | MA2-4 | Deterministic card pan and shared mid/side body. |
-| MA2-6 | queued | MA2-5 | Allocator, compass, stereo, character, cost and listening exhibit closing the public MA2 gate. |
+| MA2-5 | done | MA2-4 | Deterministic card pan and shared mid/side body; `ma2-5-stereo-evidence.md`. |
+| MA2-6 | done | MA2-5 | Allocator, compass, stereo, character, cost and listening exhibit close the public MA2 gate on the x86-64 Linux target; Pi soak removed from scope and operator listening accepted. |
 
 ## Decision log
 
 | Date | Decision | Reason |
 | --- | --- | --- |
+| 2026-09-08 | Close MA2-6 on the x86-64 Linux host; remove Raspberry Pi from target scope and accept the operator listening verdict. | GCC/Clang/sanitizer gates, deterministic MA2-4/5 listening artifacts and host benchmarks pass; the remaining host budget warning is recorded as follow-up work rather than a release blocker. |
+| 2026-09-06 | Close MA2-5 with a raw-card stereo entry point, unnormalized sum and one shared body. | Center-card MA1 and nine older PCM anchors stay exact. Pan, crossfeed, mono transitions and shared-body routing pass; single-timbre shared controls belong to card 0. |
 | 2026-09-06 | Close MA2-4 with bank character `.20`, independent A/D/R time biases and a continuous 32-sample walk clock. | Physical calibration survives note and patch events; exact zero PCM, numeric routing probes and deterministic listening evidence pass. Sustain levels remain authored. |
 | 2026-09-05 | Insert MA2-PERF before MA2-4; preserve PCM and the existing 8x/2x topology. | The operator accepted early profiling after review exposed a thin host rendering budget. Card character remains the next functional slice. |
 | 2026-08-20 | Keep the public milestone as one MA1 slice but expose eight internal gates in this journal. | The backlog requires a complete voice while also requiring source/filter/identity failures to stop later work. |
@@ -573,3 +575,99 @@ one.
   Tepih five and 1520.48/1524.81 us for Granica BCS per 128 frames. Full
   timing conditions and p99 values are in the evidence document. The
   half-deadline/Pi cost gate remains open. Next functional task is MA2-5.
+
+### 2026-09-06 — MA2-5: card pan and shared body
+
+- Closed the five-task ledger in `docs/ma2-5-stereo-evidence.md`.
+  `ma_card_bank_tick_stereo` renders raw post-VCA cards, applies deterministic
+  slot pans, sums without voice-count normalization and processes one shared
+  mid body before stereo DC block, master and safety. Historical per-card
+  rendering remains available for existing exhibits and PCM references.
+- Added the bank output setter, cached equal-power coefficients, smoothed
+  identity pan dispersion and mid-preserving crossfeed. Direct width zero
+  overrides identity widening and merges DC history for immediate exact
+  dual mono. Panic and unison preserve shared chassis state.
+- All 2611 new stereo checks and the prior regression battery pass on GCC,
+  Clang and ASan/UBSan/float-cast-overflow. Both optimized core-symbol audits
+  and all 16 source alias/harmonic cases pass. A lone center card at zero
+  character matches complete MA1 PCM at all four supported test rates.
+- Twelve benchmark anchors and eight repeat-rendered WAV hashes agree
+  across GCC and Clang. The listening set covers one/three/five cards,
+  mono/stereo and shared-body bypass/drive, without gain normalization or
+  effects. Listening preference remains an operator decision.
+- Fixed state is 1808 bytes/card and 9328 bytes/bank on x86-64. Final pinned
+  host stereo means per 128 frames are 1122.05/1139.53 us for Tepih and
+  1504.45/1489.68 us for Granica. Tail timings and Granica mean still miss
+  the half-deadline goal; Raspberry Pi acceptance is open. MA2-6 is next.
+
+### 2026-09-06 — Hurt industrial arrangement with ep73
+
+- Added a separate hosted arrangement around the local Hurt MIDI: Mamut
+  kick, noise backbeat, Raster metal, syncopated bass, harmonic pads and
+  EP voicings/answers. Source pluck, high melody and late guitar notes
+  retain their timing. The arrangement follows half-bar source harmony
+  and explicit phrase boundaries, with a breakdown and a final withdrawal.
+- Pad, texture and metal use real MA2 shared stereo banks and fixed physical
+  character; phrase energy controls width and Raster/BCS. The existing
+  Noir driver remains the comparison reference. Public core APIs are unchanged.
+- Aligned tonal/rhythm/EP stems own their linear reverb returns. A hosted
+  Python tool validates their sum, prepares constant-gain listening and
+  RMS-matched A/B files, and records measured levels and hashes.
+- Task ledger, commands, validation and listening evidence:
+  `docs/ma-hurt-industrial.md`. This offline arrangement does not close
+  MA2-6 or the live performance budget.
+
+### 2026-09-07 — Hurt listening correction: dark Mamut only
+
+- User preferred the original Noir sound and rejected EP and metallic tones.
+  Reworked the hosted take as `exhibit_ma_hurt_dark`, removing EP linkage,
+  events and stem, and deleting the metal bank/sequencer.
+- All patches use softened analog waveforms, low cutoff, gentle envelopes
+  and no Raster/Mozaik/noise/sync/crossmod. Identity macros are zeroed too,
+  so Bloom cannot silently add a Mozaik source back into the mix.
+- Channel 9 follows low harmonic pitches, the melody returns to a slow pad
+  one octave lower, and a soft tonal pulse replaces the noisy backbeat.
+  Both source stems receive stronger, damped reverb.
+- Current commands, task ledger and evidence: `docs/ma-hurt-dark.md`.
+
+### 2026-09-07 — Hurt revision: calmer bass and wet organ
+
+- Kept the praised dark bass patch and harmonic roots, halved its attacks
+  from 256 to 128, lengthened gates and removed final-chorus octave jumps.
+- Moved the 125 existing high-melody notes to a warm `508300000` organ
+  registration with .11 drive, slow rotary, low-pass and its own damped
+  reverb stem. The rest retains the dark Mamut palette, without EP.
+- Inspected the public Hal Leonard vocal preview and placed six short,
+  rhythmically changed verse-motif answers on Mamut: 21 added notes, not
+  a continuous vocal doubling. Source, timing ledger, reproduction and
+  delivery evidence: `docs/ma-hurt-organ.md`.
+
+### 2026-09-07 — Hurt full vocal: exhibit-only handoff
+
+- User accepted the organ take and requested the full vocal melody on a
+  slightly dirtier Mamut. Found and inspected a separate public Songparts
+  MIDI: all 200 vocal notes fit the backing after an eight-bar offset,
+  with original pitches, velocities, rests and gates retained.
+- Replaced the sparse answers, kept the approved bass and main organ,
+  and added a separate slow, diffuse organ harmony in bars 64–67.
+  Vocal and harmony have their own reverb stems and preparation options.
+- Builds, static analysis and schedule checks pass; no new audio render
+  was run, as explicitly requested. The next model's source provenance,
+  commands, balance checkpoints and task ledger are in `docs/ma-hurt-vocal.md`.
+
+### 2026-09-07 — Hurt for two manuals and pedals
+
+- Added the separate organ-only `exhibit_organ_hurt`: one right-hand melody
+  combines 200 vocal attacks with 48 instrumental replies in rests; compact
+  left-hand voicings retain common tones; monophonic pedals follow roots.
+- Pedals address low tonewheel frequencies directly through the existing
+  generator API, avoiding the manual's low-note octave foldback. Manuals
+  use fixed warm registrations, slow rotary and a shared expression curve.
+- Added three-part MIDI export and aligned right/left/pedal stems with damped
+  reverb. Full-score hand-span/polyphony checks, MIDI roundtrip and a short
+  audio check accompany the new exhibit. No Mamut/EP linkage or core changes.
+- Commands, performance assumptions and validation: `docs/organ-hurt.md`.
+- Completed the full 253-second take and listening preparation. Right, left
+  and pedal stems sum exactly; no clipping/nonfinite samples. Listening
+  peak is -3 dBFS and RMS -19.67342 dBFS. The complete three-part MIDI is
+  exported alongside the audio under `build/organ_hurt_full`.
