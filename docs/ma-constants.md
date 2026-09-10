@@ -875,8 +875,10 @@ MA_CHORUS_CAPACITY = round(192000 * .080) = 15360 samples/channel
 MA_REVERB_CAPACITY = round(192000 * .340) = 65280 samples/channel
 ```
 
-Four f32 buffers consume `645120` bytes, leaving more than 400 KiB for the
-rest of `ma_synth` under its 1 MiB assertion [DERIVED].
+Four f32 buffers consume `645120` bytes [DERIVED]. MA3-2 places them once in
+the shared digital pool, never in individual `ma_synth` slots. On x86-64,
+`ma_effects` is 645208 bytes and the complete `ma_voice_pool` is 766976 bytes,
+below its 1 MiB assertion. `ma_synth` remains 1808 bytes.
 
 Chorus uses base delay `14 ms`, modulation reach `6 ms * depth`, phase taps
 `0`, `.31`, `.63`, cross delay multiplier `.74`, cross channel multipliers
@@ -893,6 +895,18 @@ Reverb uses `340 ms` storage, tap fractions `.16+.28*size` and
 Disabled stages return dry PCM and leave state untouched. Enabling clears
 state outside the render loop. Enabled mix zero may advance state but
 returns the incoming float bits directly [DECISION].
+
+MA3-2 uses the existing `tw_sin_turns` polynomial with wrapped phase taps;
+it does not promise donor Rust PCM identity. Feedback writes and wet outputs
+use donor finite/tiny-flush (`1e-20`)/hard ±1 sanitization. Damping state also
+flushes below `1e-20` to avoid denormal tails [DECISION]. Bypass returns input
+bits before output sanitization; the preceding pool output already bounds them.
+
+Dry initialization keeps both effects disabled with mix zero. Prepared wet
+listening values are chorus mix `.30`, depth `.35`, rate `.25 Hz`; reverb mix
+`.25`, size `.65`, damping `.55` [DECISION, operator accepted 2026-09-08].
+Depth/rate/size/damping are also the initialized control values. These are
+session controls outside the existing patch format; no factory patch changes.
 
 ## 14. Future hidden GFM field (MA4 constants pinned early)
 

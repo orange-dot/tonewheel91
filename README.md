@@ -55,6 +55,10 @@ hashes included — reproduce bit-for-bit.
 
     make test      # core, hosted-boundary and MIDI-dispatch checks
     make prepare-ma2-7  # build digital pool tests/exhibit/benchmark; no measurement
+    make check-ma3-1 # dry Mamut MIDI/SMF twins and renderer CLI checks
+    make check-ma3-2 # shared effects, wet MIDI twins, bypass and tail checks
+    make audition-ma3-2 # short Tepih/Granica dry/chorus/reverb/wet WAVs
+    make check-ma3-shows # new Blues/all-Mamut Hurt score checks; no audio
     make bench-ma  # five-card CPU/wall timing and pinned PCM checks (host only)
     make audition-ma2-4  # dry chord/unison comparison: character 0 / .20 / 1
     make audition-ma2-5  # one/three/five-card stereo and shared-body comparison
@@ -96,6 +100,13 @@ hashes included — reproduce bit-for-bit.
                    # CC85 drive, CC91 tremolo, CC92 cabinet, CC93 condition
     ./build/render_midi -I ep73 ...             # its offline twin
 
+    ./build/render_midi -I mamutanalog --patch Tepih --voice-limit 32 \
+        --unison 1 -t 4 -o build/mamut-dry.wav input.mid
+                   # dry by default; optional --chorus-mix .30 --reverb-mix .25
+                   # optional --detune, --seed, --block-frames
+                   # global direct CCs, per-channel sustain/expression;
+                   # macros CC109..113; CC114 unison changes are ignored
+
     ./build/patchlab --list                     # Mamut Analog patch bank
     ./build/patchlab --dump Dubina              # canonical .mapatch text
     ./build/patchlab --render Dubina build/dubina.wav
@@ -116,6 +127,15 @@ The MA2-7 digital Mamut pool reserves 64 slots with a default limit of 32.
 Implementation, test, host measurement and listening evidence are in
 [docs/ma2-7-pool.md](docs/ma2-7-pool.md). Existing five-card arrangements
 retain their reference behavior.
+MA3-1 adds the dry pool-backed MIDI renderer; controls and verification are in
+[docs/ma3-1-hosted.md](docs/ma3-1-hosted.md). The pool limit is a configuration
+choice, not a realtime capacity guarantee.
+MA3-2 adds shared fixed-buffer chorus/reverb, controlled by CC107/108 or CLI;
+[docs/ma3-2-effects.md](docs/ma3-2-effects.md) records the controls, bypass
+contract and short listening pairs.
+New full-length pool/effects versions of Blues and all-Mamut Hurt are prepared
+in [docs/ma3-musical-exhibits.md](docs/ma3-musical-exhibits.md). Rendering is
+explicit; the current handoff stops before audio generation.
 
 ## Layout
 

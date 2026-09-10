@@ -349,16 +349,21 @@ static float poly_blep(float phase, float step) {
     return 0.0f;
 }
 
-static float saw_sample(float phase, float step) {
-    return clamp_signal(2.0f * phase - 1.0f - poly_blep(phase, step),
+static float saw_sample(float phase, float blep) {
+    return clamp_signal(2.0f * phase - 1.0f - blep,
                         -1.25f, 1.25f);
 }
 
-static float pulse_sample(float phase, float width, float step) {
+static float pulse_sample_with_blep(float phase, float width, float step,
+                                     float blep) {
     float sample = phase < width ? 1.0f : -1.0f;
-    sample += poly_blep(phase, step);
+    sample += blep;
     sample -= poly_blep(wrap_phase(phase - width), step);
     return clamp_signal(sample, -1.25f, 1.25f);
+}
+
+static float pulse_sample(float phase, float width, float step) {
+    return pulse_sample_with_blep(phase, width, step, poly_blep(phase, step));
 }
 
 static float mamut_sine(float phase) {
@@ -377,7 +382,8 @@ static float waveform_divisor(ma_vco_controls controls) {
     return sum > 1.0f ? sum : 1.0f;
 }
 
-static float raw_wave_mix(float phase, ma_vco_controls controls) {
+static float raw_wave_mix(float phase, ma_vco_controls controls,
+                           float divisor) {
     float saw = 2.0f * phase - 1.0f;
     float pulse = phase < controls.pulse_width ? 1.0f : -1.0f;
     float triangle = raw_triangle(phase);
@@ -385,22 +391,57 @@ static float raw_wave_mix(float phase, ma_vco_controls controls) {
                  + controls.triangle_level * triangle;
     if (controls.sine_level > 0.0f)
         sample += controls.sine_level * mamut_sine(phase);
-    return sample / waveform_divisor(controls);
+    return sample / divisor;
+}
+
+enum { WAVE_SAW = 1, WAVE_PULSE = 2, WAVE_TRIANGLE = 4,
+       WAVE_ALL = WAVE_SAW | WAVE_PULSE | WAVE_TRIANGLE };
+
+static unsigned active_waveforms(ma_vco_controls controls) {
+    return (controls.saw_level != 0.0f ? WAVE_SAW : 0)
+         | (controls.pulse_level != 0.0f ? WAVE_PULSE : 0)
+         | (controls.triangle_level != 0.0f ? WAVE_TRIANGLE : 0);
 }
 
 static float preview_oscillator(const ma_oscillator *oscillator,
-                                ma_vco_controls controls, float step) {
+                                ma_vco_controls controls, float step,
+                                float divisor) {
     float phase = phase_turns(oscillator->phase_q48);
+    float blep = poly_blep(phase, step);
     float triangle = oscillator->triangle_initialized
                    ? clamp_signal(oscillator->triangle, -1.0f, 1.0f)
                    : raw_triangle(phase);
-    float sample = controls.saw_level * saw_sample(phase, step)
-                 + controls.pulse_level * pulse_sample(
-                     phase, controls.pulse_width, step)
+    float sample = controls.saw_level * saw_sample(phase, blep)
+                 + controls.pulse_level * pulse_sample_with_blep(
+                     phase, controls.pulse_width, step, blep)
                  + controls.triangle_level * triangle;
     if (controls.sine_level > 0.0f)
         sample += controls.sine_level * mamut_sine(phase);
-    return sample / waveform_divisor(controls);
+    return sample / divisor;
+}
+
+static float preview_sparse_oscillator(const ma_oscillator *oscillator,
+                                ma_vco_controls controls, float step,
+                                float divisor, unsigned active) {
+    float phase = phase_turns(oscillator->phase_q48);
+    float saw = 0.0f, pulse = 0.0f, triangle = 0.0f;
+    /* Saw and pulse share this edge; pulse's width-shifted edge is distinct. */
+    float blep = active & (WAVE_SAW | WAVE_PULSE)
+               ? poly_blep(phase, step) : 0.0f;
+    if (active & WAVE_SAW) saw = saw_sample(phase, blep);
+    if (active & WAVE_PULSE)
+        pulse = pulse_sample_with_blep(phase, controls.pulse_width, step, blep);
+    if (active & WAVE_TRIANGLE)
+        triangle = oscillator->triangle_initialized
+                 ? clamp_signal(oscillator->triangle, -1.0f, 1.0f)
+                 : raw_triangle(phase);
+    /* Only preview work is optional. render_oscillator still advances its
+     * triangle integrator even when the triangle contribution is zero. */
+    float sample = controls.saw_level * saw + controls.pulse_level * pulse
+                 + controls.triangle_level * triangle;
+    if (controls.sine_level > 0.0f)
+        sample += controls.sine_level * mamut_sine(phase);
+    return sample / divisor;
 }
 
 static float render_oscillator(ma_oscillator *oscillator,
@@ -1398,7 +1439,15 @@ void ma_synth_note_off(ma_synth *s, uint8_t channel, uint8_t note,
 typedef struct {
     ma_vco_controls vco1;
     ma_vco_controls vco2;
+    unsigned vco1_active;
+    unsigned vco2_active;
+    float vco1_divisor;
+    float vco2_divisor;
+    float mixer_divisor;
     float rate_hz;
+    float vco1_hz;
+    float vco1_step;
+    uint64_t vco1_step_q48;
     float vco2_hz;
     float vco2_step;
     uint64_t vco2_step_q48;
@@ -1413,6 +1462,10 @@ static ma_source_frame prepare_source_frame(const ma_synth *s,
     ma_source_frame source = {
         .vco1 = controls->vco1,
         .vco2 = controls->vco2,
+        .vco1_active = active_waveforms(controls->vco1),
+        .vco2_active = active_waveforms(controls->vco2),
+        .vco1_divisor = waveform_divisor(controls->vco1),
+        .vco2_divisor = waveform_divisor(controls->vco2),
         .rate_hz = 8.0f * s->sample_rate_hz,
         .envelope_ratio = 1.0f,
         .sync = controls->sync_amount
@@ -1430,6 +1483,22 @@ static ma_source_frame prepare_source_frame(const ma_synth *s,
 #else
     (void)filter_modulation;
 #endif
+    float vco1_weight = s->oscillator1.guard_gain > 0.0f ? 1.0f : 0.0f;
+    float vco2_weight = s->oscillator2.guard_gain > 0.0f
+                     ? controls->vco2_level : 0.0f;
+    source.mixer_divisor = vco1_weight + vco2_weight + controls->noise_level;
+    if (source.mixer_divisor < 1.0f) source.mixer_divisor = 1.0f;
+    /* Cross-mod is the only source of pitch changes within these eight
+     * substeps. Character, envelopes and LFO have already advanced. */
+    if (controls->crossmod_amount == 0.0f) {
+        source.vco1_hz = base_hz;
+#if !defined(MA_SOURCE_EVIDENCE)
+        source.vco1_hz *= source.envelope_ratio;
+#endif
+        source.vco1_step_q48 = phase_step_q48(
+            phase_step(source.vco1_hz, source.rate_hz));
+        source.vco1_step = phase_turns(source.vco1_step_q48);
+    }
     float fine_ratio = octave_ratio_small(
         controls->vco2_fine_cents / 1200.0f);
     source.vco2_hz = base_hz * interval_ratio(s->vco2_interval) * fine_ratio;
@@ -1451,23 +1520,29 @@ static float render_source_substep(ma_synth *s,
     ma_vco_controls vco2_controls = source->vco2;
     float vco2_step = source->vco2_step;
     uint64_t vco2_step_q48 = source->vco2_step_q48;
-    float vco2_preview = preview_oscillator(&s->oscillator2, vco2_controls,
-                                            vco2_step);
-    float cross_ratio = clamp_signal(
-        1.0f + vco2_preview * controls->crossmod_amount * 0.25f,
-        0.25f, 4.0f);
-    float vco1_hz = base_hz * cross_ratio;
+    float vco2_preview = source->vco2_active == WAVE_ALL
+        ? preview_oscillator(&s->oscillator2, vco2_controls,
+                              vco2_step, source->vco2_divisor)
+        : preview_sparse_oscillator(&s->oscillator2, vco2_controls,
+                                     vco2_step, source->vco2_divisor,
+                                     source->vco2_active);
+    float vco1_hz = source->vco1_hz;
+    float vco1_step = source->vco1_step;
+    uint64_t vco1_step_q48 = source->vco1_step_q48;
+    if (controls->crossmod_amount != 0.0f) {
+        float cross_ratio = clamp_signal(
+            1.0f + vco2_preview * controls->crossmod_amount * 0.25f,
+            0.25f, 4.0f);
+        vco1_hz = base_hz * cross_ratio;
 #if !defined(MA_SOURCE_EVIDENCE)
-    vco1_hz *= source->envelope_ratio;
+        vco1_hz *= source->envelope_ratio;
 #endif
-    float vco1_step = phase_step(vco1_hz, source->rate_hz);
-    uint64_t vco1_step_q48 = phase_step_q48(vco1_step);
-    vco1_step = phase_turns(vco1_step_q48);
+        vco1_step_q48 = phase_step_q48(phase_step(vco1_hz, source->rate_hz));
+        vco1_step = phase_turns(vco1_step_q48);
+    }
 
     float guard_hz = 0.45f * s->sample_rate_hz;
     set_guard_target(&s->oscillator1, vco1_hz < guard_hz ? 1.0f : 0.0f,
-                     s->sample_rate_hz);
-    set_guard_target(&s->oscillator2, source->vco2_hz < guard_hz ? 1.0f : 0.0f,
                      s->sample_rate_hz);
     bool master_wrap = phase_will_wrap(&s->oscillator1, vco1_step_q48);
     float sync = source->sync;
@@ -1488,16 +1563,22 @@ static float render_source_substep(ma_synth *s,
             & PHASE_MASK_Q48;
         float sync_event_phase = phase_turns(sync_event_phase_q48);
         float sync_reset_phase = phase_turns(sync_reset_phase_q48);
-        float jump = raw_wave_mix(sync_reset_phase, vco2_controls)
-                   - raw_wave_mix(sync_event_phase, vco2_controls);
+        float jump = raw_wave_mix(sync_reset_phase, vco2_controls,
+                                   source->vco2_divisor)
+                   - raw_wave_mix(sync_event_phase, vco2_controls,
+                                   source->vco2_divisor);
         float before = 0.5f * (1.0f - event_fraction);
         float after = 1.0f - 0.5f * event_fraction;
         sync_now = jump * smoothstep5(before);
         sync_next = jump * (smoothstep5(after) - 1.0f);
     }
 
-    float vco1_preview = preview_oscillator(&s->oscillator1, vco1_controls,
-                                            vco1_step);
+    float vco1_preview = source->vco1_active == WAVE_ALL
+        ? preview_oscillator(&s->oscillator1, vco1_controls,
+                              vco1_step, source->vco1_divisor)
+        : preview_sparse_oscillator(&s->oscillator1, vco1_controls,
+                                     vco1_step, source->vco1_divisor,
+                                     source->vco1_active);
     float vco1 = render_oscillator(&s->oscillator1, vco1_preview,
                                    vco1_step, 0.0f);
     /* Cross-mod already read VCO2 at this phase, before sync correction. */
@@ -1524,12 +1605,8 @@ static float render_source_substep(ma_synth *s,
         advance_phase(&s->oscillator2, vco2_step_q48);
     }
 
-    float vco1_weight = guard1 > 0.0f ? 1.0f : 0.0f;
-    float vco2_weight = guard2 > 0.0f ? controls->vco2_level : 0.0f;
-    float weights = vco1_weight + vco2_weight + controls->noise_level;
-    if (weights < 1.0f) weights = 1.0f;
     return (guard1 * vco1 + guard2 * controls->vco2_level * vco2
-            + controls->noise_level * noise) / weights;
+            + controls->noise_level * noise) / source->mixer_divisor;
 }
 
 static void push_oversample_history(float history[31], uint8_t *position,
@@ -1995,6 +2072,9 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     float noise = next_noise(&s->noise_state);
     ma_source_frame source_frame = prepare_source_frame(
         s, &controls, base_hz, filter_modulation);
+    set_guard_target(&s->oscillator2,
+        source_frame.vco2_hz < 0.45f * s->sample_rate_hz ? 1.0f : 0.0f,
+        s->sample_rate_hz);
     for (int at_2x = 0; at_2x < 2; at_2x++) {
         for (int at_4x = 0; at_4x < 2; at_4x++) {
             push_oversample_history(

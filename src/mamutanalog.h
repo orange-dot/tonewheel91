@@ -496,6 +496,39 @@ typedef struct {
 } ma_voice_pool_config;
 extern const ma_voice_pool_config ma_voice_pool_default_config;
 
+/* MA3-2 shared post-output effects. Session controls, outside ma_patch.
+ * Disabled freezes state; false->true clears that stage in the setter.
+ * Enabled mix zero advances history and returns incoming bits exactly.
+ * Call setters on the render thread between frames, never concurrently. */
+enum { MA_CHORUS_CAPACITY = 15360, MA_REVERB_CAPACITY = 65280 };
+typedef struct { bool enabled; float mix, depth, rate_hz; } ma_chorus_controls;
+typedef struct { bool enabled; float mix, size, damping; } ma_reverb_controls;
+typedef struct {
+    float left[MA_CHORUS_CAPACITY], right[MA_CHORUS_CAPACITY];
+    unsigned length, write_index;
+    float phase;
+    ma_chorus_controls controls;
+} ma_chorus;
+typedef struct {
+    float left[MA_REVERB_CAPACITY], right[MA_REVERB_CAPACITY];
+    unsigned length, write_index;
+    float damped_left, damped_right;
+    ma_reverb_controls controls;
+} ma_reverb;
+typedef struct {
+    ma_chorus chorus;
+    ma_reverb reverb;
+    float sample_rate_hz;
+    uint64_t sanitizations, clips;
+    float pre_peak, post_peak;
+} ma_effects;
+void ma_effects_init(ma_effects *fx, float sample_rate_hz);
+/* Clears histories/diagnostics while retaining controls and sample rate. */
+void ma_effects_reset(ma_effects *fx);
+void ma_effects_set_chorus(ma_effects *fx, ma_chorus_controls controls);
+void ma_effects_set_reverb(ma_effects *fx, ma_reverb_controls controls);
+[[nodiscard]] ma_frame ma_effects_tick(ma_effects *fx, ma_frame input);
+
 typedef struct {
     ma_synth voice;
     uint64_t allocation_id;
@@ -529,6 +562,7 @@ typedef struct {
     ma_output_state output;
     ma_voice_pool_config config;
     ma_pool_diagnostics diagnostics;
+    ma_effects effects;
     float bend[16], pressure[16], mod_wheel[16];
     bool sustain[16];
     uint64_t next_allocation;
@@ -559,6 +593,10 @@ void ma_voice_pool_set_poly_pressure(ma_voice_pool *pool, uint8_t channel,
 void ma_voice_pool_set_patch(ma_voice_pool *pool, const ma_patch *patch);
 void ma_voice_pool_set_macro(ma_voice_pool *pool, ma_macro_id macro, float value);
 void ma_voice_pool_set_character(ma_voice_pool *pool, float amount);
+/* Glide follows each physical slot's last pitch; pitch freezes during sleep.
+ * First allocation starts at its target. Reset forgets pitch history. */
+void ma_voice_pool_set_glide(ma_voice_pool *pool, bool enabled, float seconds);
+void ma_voice_pool_set_lfo(ma_voice_pool *pool, float depth, float rate_hz);
 void ma_voice_pool_set_output(ma_voice_pool *pool, float drive, float width,
     float crossfeed, float master);
 [[nodiscard]] ma_frame ma_voice_pool_tick(ma_voice_pool *pool);

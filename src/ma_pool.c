@@ -65,6 +65,7 @@ bool ma_voice_pool_init(ma_voice_pool *p, float rate,
     *p = (ma_voice_pool){ .config = c };
     ma_synth_init_patch(&p->control, rate, patch ? patch : &ma_patch_tepih);
     initialize_slots(p);
+    ma_effects_init(&p->effects, p->control.sample_rate_hz);
     return true;
 }
 
@@ -74,10 +75,15 @@ void ma_voice_pool_reset(ma_voice_pool *p) {
     ma_voice_snap_controls(&control);
     float amount = p->slot[0].voice.character.amount;
     ma_voice_pool_config config = p->config;
+    ma_chorus_controls chorus = p->effects.chorus.controls;
+    ma_reverb_controls reverb = p->effects.reverb.controls;
     *p = (ma_voice_pool){ 0 };
     p->config = config;
     copy_voice(&p->control, &control);
     initialize_slots(p);
+    ma_effects_init(&p->effects, p->control.sample_rate_hz);
+    ma_effects_set_chorus(&p->effects, chorus);
+    ma_effects_set_reverb(&p->effects, reverb);
     ma_voice_pool_set_character(p, amount);
 }
 
@@ -165,8 +171,13 @@ uint64_t ma_voice_pool_note_on(ma_voice_pool *p, uint8_t channel,
         p->cursor = (uint8_t)((i + 1) % p->config.limit);
         ma_pool_slot *s = &p->slot[i];
         ma_character c = s->voice.character;
+        ma_glide glide = s->voice.glide;
         copy_voice(&s->voice, &p->control);
         s->voice.character = c;
+        if (p->control.glide.enabled && glide.initialized) {
+            s->voice.glide.current_note = glide.current_note;
+            s->voice.glide.initialized = true;
+        }
         ma_synth_set_pitch_bend(&s->voice, p->bend[channel]);
         ma_synth_set_channel_pressure(&s->voice, p->pressure[channel]);
         ma_synth_set_mod_wheel(&s->voice, p->mod_wheel[channel]);
@@ -247,6 +258,17 @@ void ma_voice_pool_set_character(ma_voice_pool *p, float x) {
     for (unsigned i = 0; i < MA_POOL_CAPACITY; i++)
         p->slot[i].voice.character.amount = bounded(x, 0, 1);
 }
+void ma_voice_pool_set_glide(ma_voice_pool *p, bool enabled, float seconds) {
+    ma_synth_set_glide(&p->control, enabled, seconds);
+    for (unsigned i = 0; i < p->config.limit; i++)
+        ma_synth_set_glide(&p->slot[i].voice, enabled, seconds);
+}
+void ma_voice_pool_set_lfo(ma_voice_pool *p, float depth, float rate_hz) {
+    ma_synth_set_lfo(&p->control, depth, rate_hz);
+    for (unsigned i = 0; i < p->config.limit; i++)
+        if (p->slot[i].awake)
+            ma_synth_set_lfo(&p->slot[i].voice, depth, rate_hz);
+}
 void ma_voice_pool_set_output(ma_voice_pool *p, float drive, float width,
     float crossfeed, float master) {
     ma_synth_set_output(&p->control, drive, width, crossfeed, master);
@@ -316,9 +338,10 @@ ma_frame ma_voice_pool_tick(ma_voice_pool *p) {
         p->output.dc_lp_left = dc;
         p->output.dc_lp_right = dc;
     }
-    return ma_output_render(&p->output, mid, side,
+    ma_frame dry = ma_output_render(&p->output, mid, side,
         control->smoothers.body_drive.current,
         control->smoothers.body_load_ratio.current, control->master_level);
+    return ma_effects_tick(&p->effects, dry);
 }
 void ma_voice_pool_render(ma_voice_pool *p, ma_frame *frames, size_t count) {
     for (size_t i = 0; i < count; i++) frames[i] = ma_voice_pool_tick(p);

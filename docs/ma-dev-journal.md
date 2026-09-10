@@ -12,16 +12,18 @@ its internal sub-gates already has working code.
 ## Current position
 
 - Active milestone: **MA3 — first playable, stereo and effects**.
-- Active task: none. **MA2-6 — integrated MA2 evidence and closure** is done;
-  evidence is in `docs/ma2-6-evidence.md`.
+- Active task: **new MA3 Blues and all-Mamut Hurt exhibits**. MA3-1 and MA3-2
+  are done; the operator accepted the MA3-2 listening set on 2026-09-08.
+  MA3-PERF is queued before live acceptance.
 - Last green aggregate run: GCC, Clang and ASan/UBSan/
-  float-cast-overflow, 2026-09-08, on MA2-6: core `111378`, hosted `116`,
+  float-cast-overflow, 2026-09-08, on MA3-2: core `111378`, hosted `116`,
   MIDI map `22`, architecture `227`, character `8700`, stereo `2611`;
-  zero failures. Both compiler core-symbol audits pass.
+  zero failures, plus MA2-7 pool, MA3-1/2 MIDI twins, effect tests and seven CLI tests.
+  Both compiler core-symbol audits pass.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
-- Core implementation status: MA0, MA1, MA2-1 through MA2-6, MA2-DIG,
-  MA2-BCS and MA2-PERF are closed.
+- Core implementation status: MA0, MA1, MA2-1 through MA2-7, MA2-DIG,
+  MA2-BCS and MA2-PERF are closed. MA3-1 and MA3-2 are complete; MA3 remains open.
 
 ## MA0 task ledger
 
@@ -712,3 +714,200 @@ one.
 - Operator accepted all four listening cases. MA2-7 is closed; a concrete
   performance task is needed before MA3 live acceptance only if 64-slot density
   is required on this host.
+
+### 2026-09-08 — MA3-1 dry hosted MIDI integration
+
+- Added `render_midi -I mamutanalog` with factory patch, limit, unison,
+  detune, seed and block-size options. The default instrument and organ/EP
+  PCM remain unchanged; legacy fixture hashes were checked against `56eb8fd`.
+- Added one reusable dry MIDI map for the pool and an event-boundary block
+  renderer. Direct pool calls, raw byte parsing and SMF scheduling produce
+  the same PCM. The format-1 tempo/running-status twin is pinned at
+  `fbe7ee8dede78c92` (1,092 frames, 48 kHz, limit 8, unison 2).
+- Implemented dry generic CC controls, channel expression/sustain, group
+  ownership and diagnostic counters. Macro CCs are 109–113; reserved effects,
+  GFM and runtime unison CC114 are ignored and counted. Added pool glide/LFO
+  setters; default MA2-7 PCM signatures remain unchanged.
+- GCC and Clang aggregate tests, core-symbol audits and
+  ASan/UBSan/float-cast-overflow pass. Focused scheduler boundary checks and
+  six executable CLI tests pass under all three builds.
+- MA3-1 is complete. MA3-2 chorus/reverb and MA3-LIVE remain queued.
+  MA3-PERF now explicitly covers default 32-slot throughput, isolated timing
+  and a measured live-limit decision before live acceptance. No new host
+  timing, long listening render or live-capacity claim was made in this slice.
+- Contract, commands and evidence: `docs/ma3-1-hosted.md`.
+
+### 2026-09-08 — MA3-2 shared effects and listening preparation
+
+- Ported the pinned donor `SimpleChorus`/`SimpleReverb` behavior into
+  `src/ma_effects.c`, using fixed caller-owned buffers and the existing sine
+  polynomial. Effects run once after the digital pool's body/DC/safety output;
+  no per-slot FX state or quality change. Full pool size is 766976 bytes.
+- Disabled stages freeze; re-enable clears only that stage. Enabled mix zero
+  preserves exact dry PCM while advancing history. Panic and voice sleep
+  preserve tails; reset clears tails and retains effect controls. Patch edits
+  and macros do not change effects.
+- Added direct effect setters, CC107/108 and strict Mamut-only CLI mix,
+  depth/rate and size/damping options. Default renderer and pool remain dry.
+- GCC and Clang full tests and core symbol audits pass; full ASan/UBSan/
+  float-cast-overflow tests pass. Final focused builds also pass without
+  warnings. The wet direct/MIDI twin is pinned at `2a673b682c7a09a3`, with
+  block splits 1/17/128/512/4096; dry twin and legacy signatures are unchanged.
+  Analytic taps, independent stage reset, bypass bits, panic/sleep tails,
+  hostile controls/input and four sample-rate anchors are checked.
+- Added an opt-in two-patch, four-arm listening exhibit with repeated-render
+  comparison and fixed RMS alignment over 0–4 seconds. Prepared controls are
+  chorus `.30/.35/.25 Hz`, reverb `.25/.65/.55`; operator ballot remains open.
+- Retained donor feedback coefficients and documented the maximum-size
+  nonlinear tail behavior. No host timing, ALSA/live capacity or operator
+  listening acceptance is claimed. MA3-PERF and MA3-LIVE remain queued.
+- Contract and listening evidence: `docs/ma3-2-effects.md`.
+
+### 2026-09-08 — new MA3 Blues/Hurt exhibits, stop before rendering
+
+- Operator accepted MA3-2 (“odlicno je ovo”), retaining its effects settings.
+  Requested new Blues and Hurt exhibits using the pool/effects path, then
+  explicitly selected all-Mamut Hurt. Subsequently requested stopping when
+  implementation was ready, before audio rendering.
+- Added separate new exhibits and a shared hosted render desk. Legacy sources
+  and WAVs remain intact. Blues has five timbre pools, 125 notes, 248 seconds;
+  Hurt has ten pools, 2167 notes, 253 seconds, including all 200 vocal notes
+  and Mamut replacements for the main organ and harmony passage.
+- Each timbre owns its limit, unison, character/seed, body and MA3-2 effects.
+  Macros, LFO and expression shape the arrangements. New outputs include
+  aligned wet stems plus mix; a two-pass hash gate precedes publication.
+- Extended existing listening preparation with new stem names and a Blues
+  form selector. Commands, provisional balance tables and source hashes are
+  in `docs/ma3-musical-exhibits.md`.
+- GCC aggregate tests pass. GCC/Clang/sanitizer score checks and Clang static
+  analysis pass without warnings; invalid CLI/missing-source checks pass.
+  Verified the two local MIDI hashes. No new Blues/Hurt audio was generated.
+- Handoff is ready. Actual DSP peaks, headroom, audio-path sanitizers, stem
+  sums, repeat-render identity and musical balance remain unverified until
+  rendering is resumed. No host measurement or realtime claim was made.
+
+### 2026-09-08 — MA3 exhibits rendered
+
+- Rendered Blues first, then all-Mamut Hurt, sequentially with GCC and no
+  competing job. Both reference/output passes matched every stem and mix hash.
+- Blues mix FNV64 is `4c6348322f14d58e`; listening SHA256 is
+  `917fe5143f9350e92a80bfa091f07502616d357b2905e37c21b3c4558f6e2694`.
+  Hurt mix FNV64 is `2406355f29923b1f`; listening SHA256 is
+  `df9d04a6d270289f868e6a2c7ed86f191255fdca691008dbd32fe109884f2cb1`.
+- Both stem sums are exact. No FX clipping or sanitization occurred. Blues
+  had zero steals; Hurt had only released-group steals, with held and
+  sustained steals at zero. All pools slept by the endpoint.
+- Listening files, previews and level JSON are in ignored `build/`. Musical
+  acceptance remains the next operator gate; deterministic render checks do
+  not substitute for listening.
+
+### 2026-09-09 — MA3-PERF hosted throughput baseline
+
+- Added `driver/bench_ma3_perf.c` and `make bench-ma3-perf`. The benchmark is
+  pinned externally, records CPU and wall percentiles around the pool render,
+  and repeats every case to require identical PCM hashes.
+- The isolated GCC run covered all five MA3 patches, BCS on/off, limits
+  16/32/64, 128/256/512 frames, idle/one/eight/full occupancy,
+  sustain/release, unison 2/4/8, and dry/chorus/reverb/wet arms. It emitted
+  1,920 rows with zero hash mismatches, sanitizations or safety interventions.
+- At full 32-slot wet occupancy the largest CPU means were 9.884 ms for 128
+  frames, 19.753 ms for 256 and 40.265 ms for 512. These are 3.707x, 3.704x
+  and 3.775x of their 48 kHz block budgets on the recorded host. This is a
+  hosted baseline only; MA3-PERF remains open for stage profiling and measured
+  optimization before a live limit is claimed.
+- Evidence and schema are documented in `docs/ma3-perf.md`; generated CSVs
+  remain ignored under `build/`.
+
+### 2026-09-09 — MA3-OPT1, stop for operator listening
+
+- Extended the existing per-sample source preparation with waveform and
+  mixer divisors, one VCO2 guard-target update and a prepared VCO1 Q48 step
+  for exactly zero cross-mod. Nonzero cross-mod retains substep pitch updates.
+  Arithmetic division, oscillator state, FIRs and oversampling are unchanged.
+- Preserved the pre-change source, release objects and executables in
+  `build/ma3-opt1-yHOVSa/`. Eight new baseline PCM/state signatures cover
+  dynamic cross-mod, sync, guards and BCS at all four supported rate anchors.
+  `make check-ma3-opt1` is included in the aggregate tests.
+- GCC/Clang full tests, freestanding symbol audits and Clang sanitizers pass;
+  the oscillator alias/harmonic referee passes in all three builds. The
+  existing pool, MIDI and effects signatures are unchanged.
+- Rendered the existing eight-second Tepih/Granica exhibit before and after,
+  sequentially. Every raw and level-matched WAV pair is byte-identical.
+  Listening links, provenance and timing evidence are in `docs/ma3-opt1.md`.
+- Operator listening is pending. OPT2, FIR and further optimization work are
+  intentionally left for the next decision.
+- Isolated release runs in before/after/after/before order retain identical
+  PCM across all 80 rows. Tepih without BCS uses 8.00% less CPU on average;
+  other patch results are small and uneven, including aggregate regressions.
+  The full table and pair variability are retained in `docs/ma3-opt1.md`.
+  OPT1 does not establish realtime support for 32 voices.
+
+### 2026-09-10 — MA3-OPT2, implementation and functional handoff
+
+- Added per-sample waveform activity masks from smoothed controls. Sparse
+  previews skip zero-level waveform calculations; full mixes retain the
+  previous preview helper. Phase, triangle integration, guards, sync and
+  VCO2 cross-mod state continue even when an oscillator is inaudible.
+- Added `make check-ma3-opt2` to the aggregate tests. Sixteen waveform
+  combinations, signed zero, control ramps, sync/cross-mod, interval and
+  note changes match OPT1 PCM and oscillator-state signatures at
+  44.1/48/96/192 kHz, twice per scenario.
+- GCC/Clang complete tests and freestanding symbol audits pass. Clang
+  ASan/UBSan/float-cast-overflow and all three oscillator numerical referees
+  pass. Existing OPT1, pool, MIDI and effects signatures are unchanged.
+- Preserved baseline, superseded first variant and revised sources/builds in
+  `build/ma3-opt2-1OlEaY/`. Preliminary timing of the first variant showed a
+  Lead regression; the subsequent full/sparse helper split is unmeasured.
+  The earlier CSVs must not be presented as results for the revised code.
+- At the operator's request, stopped before further performance analysis
+  and full renders; another model will handle those. Final benchmark and
+  listening executables are built but unrun. `docs/ma3-opt2.md` records
+  provenance, validation and the remaining measurement/listening work.
+  OPT2 has no accepted speedup or realtime claim yet; FIR work is separate.
+
+### 2026-09-10 — MA3-OPT2, hosted measurements complete
+
+- Measured revised OPT2 against the preserved OPT1 baseline under taskset CPU
+  0, GCC 16.1.1, 48 kHz and wet chorus/reverb. Matched scenarios cover
+  0/1/8 active notes at limits 16/32/64, full 32-slot occupancy, and
+  sustain/release at limits 16/32.
+- CPU mean reductions were 1.76–25.02% in the 0/1/8-note matrix, 7.74% in
+  the repeated full 32-slot matrix, and 4.43–8.34% in sustain/release. Every
+  matched row retained its PCM hash; p50/p99 and wall fields remain in the
+  CSV artifacts under `build/ma3-opt2-measure-20260910/`.
+- One-block buffer probes measured 7.28% at 256 frames and 14.16% at 512;
+  these are directional and do not establish realtime throughput. Full
+  32-slot wet cost remains above the 48 kHz block budget.
+- Full musical renders and operator listening remain intentionally deferred
+  until requested. FIR and later optimization slices remain separate.
+
+### 2026-09-10 — MA3-OPT3, shared BLEP preview; stop before measurement
+
+- Saw and pulse previews share their initial BLEP correction for the same
+  oscillator phase and step. Pulse retains its width-shifted correction;
+  sparse masks avoid the common calculation when neither waveform is active.
+  Triangle integration, sync resets, arithmetic order and DSP quality remain
+  unchanged.
+- Preserved the final OPT2 baseline and new OPT3 source/builds in
+  `build/ma3-opt3-1d3Rwv/`. Reused the pinned OPT1/OPT2 PCM/state fixtures
+  without regenerating expectations.
+- GCC/Clang full tests and freestanding symbol audits pass; Clang
+  ASan/UBSan/float-cast-overflow and all three oscillator numerical referees
+  pass. Pool, MIDI and effects signatures remain unchanged.
+- Stopped before timing/profiling and listening renders as requested.
+  The paired benchmark/exhibit executables are ready for another model.
+  `docs/ma3-opt3.md` records provenance and the measurement handoff;
+  no OPT3 speedup is claimed before that experiment.
+
+### 2026-09-10 — MA3-OPT3, hosted measurement complete
+
+- Measured OPT3 against the preserved OPT2 baseline at 48 kHz, 128 frames,
+  limit 32, scenario 3, wet effects and CPU 0. Each of Tepih, Lead, Raster,
+  Prizma and Granica ran with BCS off/on in both baseline-first and
+  optimization-first order, eight observations per patch.
+- Aggregate CPU mean moved from 8500.0 us to 8319.7 us (2.12%). Tepih,
+  Granica, Prizma and Lead improved 8.35%, 3.22%, 2.04% and 1.43%; Raster
+  regressed 6.40%. All paired PCM hashes remained identical. This is a mixed,
+  host-sensitive result, not a universal speedup claim.
+- Full 32-slot wet cost remains above the 48 kHz budget. Listening renders
+  remain deferred until the operator requests them.

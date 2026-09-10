@@ -17,8 +17,9 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
 # The Mamut Analog line is a sibling core. Keep it out of the organ and EP
 # products; the aggregate core test and symbol audit are its first hosts.
-MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o
+MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o
 MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
+MA_HOST_OBJS := $(BUILD)/ma_midi_map.o $(BUILD)/ma_midi_render.o
 MA1_LONG_LISTENING_SOURCE := driver/exhibit_ma_blues.c
 MA1_LONG_LISTENING_WAV := $(BUILD)/ma_blade_runner_blues_expanded.wav
 
@@ -36,7 +37,7 @@ $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o: $(BUILD)/%.o: src/%.c src/epiano.h src/
 $(BUILD)/ma_voice.o: src/ma_voice.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o: $(BUILD)/%.o: src/%.c src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o: $(BUILD)/%.o: src/%.c src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 
 $(BUILD)/ma_voice_source.o: src/ma_voice.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -DMA_SOURCE_EVIDENCE -c $< -o $@
@@ -63,6 +64,15 @@ $(BUILD)/ma_patch_file.o: driver/ma_patch_file.c driver/ma_patch_file.h driver/h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/smf.o: driver/smf.c driver/smf.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/smf_schedule.o: driver/smf_schedule.c driver/smf_schedule.h driver/smf.h driver/host_parse.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ma_midi_map.o: driver/ma_midi_map.c driver/ma_midi_map.h driver/ma_midi_tables.h src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ma_midi_render.o: driver/ma_midi_render.c driver/ma_midi_render.h driver/ma_midi_map.h driver/smf.h src/mamutanalog.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/live_io.o: driver/live_io.c driver/live_io.h driver/host_parse.h | $(BUILD)
@@ -125,8 +135,8 @@ $(BUILD)/exhibit_viz: driver/exhibit_viz.c $(BUILD)/viz.o $(CORE_OBJS) src/tonew
 $(BUILD)/exhibit_ep_voice: driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) src/epiano.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) src/tonewheel.h src/epiano.h | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) driver/render_midi.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) $(LDFLAGS) -o $@ $(LDLIBS)
+$(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/smf_schedule.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) $(MA_OBJS) $(MA_HOST_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/smf_schedule.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) $(MA_OBJS) $(MA_HOST_OBJS) $(LDFLAGS) -o $@ $(LDLIBS)
 
 $(BUILD)/render_ma_architecture: driver/render_ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/render_ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
@@ -255,6 +265,9 @@ test: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/test_ma
 	$(BUILD)/test_ma_character
 	$(BUILD)/test_ma_stereo
 	$(BUILD)/test_ma_pool
+	$(BUILD)/test_ma3_midi
+	$(BUILD)/test_ma_effects
+	python3 test/ma3_cli.py $(BUILD)/render_midi $(BUILD)/test_ma3_midi
 
 test-clang:
 	$(MAKE) BUILD=build/clang CC=clang test
@@ -397,6 +410,26 @@ $(BUILD)/test_ma_pool: test/ma_pool.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(B
 $(BUILD)/bench_ma_pool: driver/bench_ma_pool.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
+$(BUILD)/bench_ma3_perf: driver/bench_ma3_perf.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: bench-ma3-perf
+bench-ma3-perf: $(BUILD)/bench_ma3_perf
+	$(BUILD)/bench_ma3_perf --run
+
+$(BUILD)/test_ma_source_frame: test/ma_source_frame.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-opt1
+check-ma3-opt1: $(BUILD)/test_ma_source_frame
+	$(BUILD)/test_ma_source_frame
+test: check-ma3-opt1
+
+$(BUILD)/test_ma_waveforms: test/ma_waveforms.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-opt2
+check-ma3-opt2: $(BUILD)/test_ma_waveforms
+	$(BUILD)/test_ma_waveforms
+test: check-ma3-opt2
+
 $(BUILD)/exhibit_ma_pool: driver/exhibit_ma_pool.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
@@ -406,3 +439,41 @@ bench-ma-pool: $(BUILD)/bench_ma_pool
 	$(BUILD)/bench_ma_pool --run
 audition-ma2-7: $(BUILD)/exhibit_ma_pool
 	$(BUILD)/exhibit_ma_pool --render $(BUILD)/ma2-7
+
+$(BUILD)/test_ma3_midi: test/ma3_midi.c $(MA_HOST_OBJS) $(MA_RUNTIME_OBJS) $(BUILD)/midi.o $(BUILD)/smf.o $(BUILD)/smf_schedule.o $(BUILD)/host_parse.o | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_HOST_OBJS) $(MA_RUNTIME_OBJS) $(BUILD)/midi.o $(BUILD)/smf.o $(BUILD)/smf_schedule.o $(BUILD)/host_parse.o $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+test: $(BUILD)/test_ma3_midi $(BUILD)/render_midi
+test: $(BUILD)/test_ma_effects
+$(BUILD)/test_ma_effects: test/ma_effects.c $(MA_HOST_OBJS) $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_HOST_OBJS) $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+.PHONY: check-ma3-2
+check-ma3-2: $(BUILD)/test_ma_effects $(BUILD)/render_midi $(BUILD)/test_ma3_midi
+	$(BUILD)/test_ma_effects
+	python3 test/ma3_cli.py $(BUILD)/render_midi $(BUILD)/test_ma3_midi
+
+$(BUILD)/exhibit_ma_effects: driver/exhibit_ma_effects.c $(MA_RUNTIME_OBJS) $(BUILD)/wav.o | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(BUILD)/wav.o $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: audition-ma3-2
+audition-ma3-2: $(BUILD)/exhibit_ma_effects
+	$(BUILD)/exhibit_ma_effects --render $(BUILD)/ma3-2
+
+$(BUILD)/ma3_show.o: driver/ma3_show.c driver/ma3_show.h src/mamutanalog.h driver/wav.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+$(BUILD)/exhibit_ma3_blues: driver/exhibit_ma3_blues.c driver/ma3_blues_material.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/exhibit_ma3_hurt: driver/exhibit_ma3_hurt.c driver/ma3_hurt_material.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-shows audition-ma3-blues audition-ma3-hurt
+check-ma3-shows: $(BUILD)/exhibit_ma3_blues $(BUILD)/exhibit_ma3_hurt
+	$(BUILD)/exhibit_ma3_blues --check
+	$(BUILD)/exhibit_ma3_hurt --check
+audition-ma3-blues: $(BUILD)/exhibit_ma3_blues
+	$(BUILD)/exhibit_ma3_blues --render $(BUILD)/ma3_blade_runner_blues
+audition-ma3-hurt: $(BUILD)/exhibit_ma3_hurt
+	$(BUILD)/exhibit_ma3_hurt --render $(BUILD)/ma3_hurt
+.PHONY: check-ma3-1
+check-ma3-1: $(BUILD)/test_ma3_midi $(BUILD)/render_midi
+	$(BUILD)/test_ma3_midi
+	python3 test/ma3_cli.py $(BUILD)/render_midi $(BUILD)/test_ma3_midi

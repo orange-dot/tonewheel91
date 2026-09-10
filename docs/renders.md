@@ -1378,3 +1378,75 @@ metrics and operator ballot are in `docs/ma1-5-audition.md`.
 Operator verdict: accepted as an audible MA1-5 handoff — "odličan jeziv
 zvuk". This first reaction records the overall identity finding; it does not
 claim a completed factory/Mozaik A/B ballot or authorize retuning.
+
+## 2026-09-08 — MA3-1 dry hosted SMF/direct twin
+
+Functional fixture, not a listening ballot. `test/ma3_midi.c` owns the complete
+format-1 input: a separate tempo track, running status, same-time repeated
+notes, two MIDI channels and panic. Expected event frames are
+`0,0,48,96,96,120,132`, independently checked against the tempo scheduler.
+
+```sh
+make CC=/usr/bin/gcc check-ma3-1
+build/test_ma3_midi --fixture build/ma3-1-twin
+build/render_midi -I mamutanalog --voice-limit 8 --unison 2 -t .02 \
+  -o build/ma3-1-twin.wav build/ma3-1-twin.mid
+```
+
+Factory Tepih, default seed/character/detune, 48 kHz, 1,092 stereo frames,
+external gain 1. PCM FNV-64 is `fbe7ee8dede78c92`. GCC, Clang and sanitized
+builds agree. CLI block sizes 1/17/128/256/4096 all match the independent direct
+pool PCM; both whole-file render passes match. Existing organ/EP fixture PCM
+is unchanged from `56eb8fd`. Full scope and checks: `docs/ma3-1-hosted.md`.
+
+## 2026-09-08 — MA3-2 shared effects listening pairs
+
+Command: `make CC=/usr/bin/gcc audition-ma3-2`, after GCC/Clang/sanitizer tests
+completed, with no concurrent test/render job. Eight 8-second scenarios,
+48 kHz stereo float32, 384000 frames, limit 16/unison 2/default session seed.
+Tepih and Granica retain their authored patch controls; each has the same
+notes, sustain, overlap and panic-at-4s script. Dry, chorus `.30/.35/.25 Hz`,
+reverb `.25/.65/.55`, and both effects. See `ma3-2-effects.md` for contracts.
+
+Each raw scenario was rendered twice and compared byte-for-byte before file
+output. FNV64 is over raw interleaved PCM. `_listen.wav` applies only the
+listed fixed gain, matching 0–4s stereo RMS to −22 dBFS; all full-file peaks
+remain below −3 dBFS without limiting or fading.
+
+| Raw scenario | FNV64 | Active RMS dBFS | Full peak dBFS | Listen gain dB |
+| --- | --- | ---: | ---: | ---: |
+| Tepih dry | `78bd7e7e4f29bd86` | −49.353098 | −34.788715 | +27.353098 |
+| Tepih chorus | `04e2aaa4153ae306` | −50.856691 | −35.690312 | +28.856691 |
+| Tepih reverb | `378fa702c768a346` | −50.655920 | −35.964967 | +28.655920 |
+| Tepih wet | `055ef55aa877c2b7` | −52.162896 | −36.907928 | +30.162896 |
+| Granica dry | `53aa0387f45b151e` | −35.099472 | −22.878872 | +13.099472 |
+| Granica chorus | `9206859bca3a2d00` | −36.567149 | −24.170820 | +14.567150 |
+| Granica reverb | `9d61581009bda57a` | −36.457666 | −24.327757 | +14.457666 |
+| Granica wet | `5220c14c039e9799` | −37.929326 | −25.474687 | +15.929327 |
+
+Artifacts: `build/ma3-2_{tepih,granica}_{dry,chorus,reverb,wet}_{raw,listen}.wav`;
+log: `build/ma3-2-listening.log`. WAV readback verifies format, duration,
+finite samples and active RMS alignment within .00001 dB. Final 100ms wet
+RMS is below −76 dBFS. No operator verdict or realtime throughput result is
+claimed by the render itself. The operator subsequently accepted this MA3-2
+listening set on 2026-09-08 (“odlicno je ovo”); retain its prepared settings.
+
+Functional wet direct/MIDI twin: `2a673b682c7a09a3`; dry MA3-1 twin remains
+`fbe7ee8dede78c92`. GCC, Clang and sanitized builds agree on both and on all
+eight pinned effect stress hashes. Existing organ/EP/MA2 signatures remain
+unchanged.
+
+## 2026-09-08 — MA3 Blues and all-Mamut Hurt full renders
+
+Commands, run sequentially:
+
+```sh
+make CC=/usr/bin/gcc audition-ma3-blues
+python3 driver/prepare_hurt_listening.py build/ma3_blade_runner_blues --stems pads bass lead --form blues --previews
+make CC=/usr/bin/gcc audition-ma3-hurt
+python3 driver/prepare_hurt_listening.py build/ma3_hurt --stems tonal rhythm melody vocal harmony --previews
+```
+
+Reference and output passes matched every stem and mix hash. Both preparation
+runs report `stem_sum_max_error: 0.0`; listening WAVs use a fixed −3 dBFS peak
+target. No legacy exhibit was overwritten.

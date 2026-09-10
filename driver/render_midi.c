@@ -18,6 +18,8 @@
  */
 #define _DEFAULT_SOURCE 1
 #include <errno.h>
+#include <getopt.h>
+#include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,16 +29,35 @@
 #include "../src/epiano.h"
 #include "host_parse.h"
 #include "midi_map.h"
+#include "ma_midi_render.h"
 #include "smf.h"
+#include "smf_schedule.h"
 #include "wav.h"
 
 static constexpr double RENDER_MAX_SECONDS = 7200.0;
 static midi_map_stats stats;
+static ma_midi_stats ma_stats;
+static ma_pool_diagnostics ma_pool_stats;
+static uint64_t ma_fx_clips, ma_fx_sanitizations;
+static float ma_fx_pre_peak, ma_fx_post_peak;
 
 static void usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [options] in.mid\n"
-            "  -I name  instrument: organ (default) or ep73\n"
+            "  -I name  instrument: organ (default), ep73 or mamutanalog\n"
+            "  --patch name       Mamut factory patch: Tepih (default), Lead,\n"
+            "                     Dubina, Raster, Prizma or Granica\n"
+            "  --voice-limit N    Mamut slots 1..64, including release (default 32)\n"
+            "  --unison N         Mamut slots per note: 1/2/4/8 (default 1)\n"
+            "  --detune cents     Mamut unison +/- range 0..100 (default 7)\n"
+            "  --seed N           Mamut session seed, decimal uint64\n"
+            "  --block-frames N   Mamut render block 1..4096 (default 128)\n"
+            "  --chorus-mix x     enable chorus, mix 0..1 (default disabled)\n"
+            "  --chorus-depth x   0..1 (default .35)\n"
+            "  --chorus-rate hz   .03..20 (default .25)\n"
+            "  --reverb-mix x     enable reverb, mix 0..1 (default disabled)\n"
+            "  --reverb-size x    0..1 (default .65)\n"
+            "  --reverb-damping x 0...99 (default .55)\n"
             "  -c list  MIDI channels to render, e.g. 0,4 (default: all)\n"
             "  -R digits  registration, nine digits (default 888000000)\n"
             "  -v mode  vibrato 0..6 = off,V1..V3,C1..C3 (default 0)\n"
@@ -46,7 +67,7 @@ static void usage(const char *argv0) {
             "  -m mode  rotary 0..3 = bypass,chorale,tremolo,brake (default 0)\n"
             "  -p 0|1   percussion on (2nd/fast/normal; default 0)\n"
             "  -f       octave-fold out-of-compass notes into 36..96\n"
-            "  -g gain  master gain (default 0.125)\n"
+            "  -g gain  WAV gain (default 0.125; Mamut default 1)\n"
             "  -w wear  M7 wear knob 0..1 (default 0 = idealized reference)\n"
             "  -r rate  sample rate 44100..192000 (default 48000)\n"
             "  -t secs  release tail after the last event (default 2)\n"
@@ -54,13 +75,50 @@ static void usage(const char *argv0) {
             argv0);
 }
 
+typedef enum { INSTRUMENT_ORGAN, INSTRUMENT_EP, INSTRUMENT_MAMUT } instrument_id;
 typedef struct {
     const uint8_t *reg;
     int vib, perc, rot;
     float drive, gain, wear, cab, cond;
-    bool fold, ep;
+    bool fold;
+    instrument_id instrument;
+    ma_voice_pool_config pool;
+    const ma_patch *patch;
+    const char *patch_name;
+    unsigned block_frames;
+    ma_chorus_controls chorus;
+    ma_reverb_controls reverb;
     unsigned rate;
 } settings_t;
+
+static double render_ma(const smf_event *events, size_t count, const settings_t *s,
+    float *buf, size_t frames, const size_t *event_frames, uint32_t *out_of_compass) {
+    static ma_midi_renderer renderer;
+    if (!ma_midi_renderer_init(&renderer, s->rate, &s->pool, s->patch,
+        UINT16_MAX, events, event_frames, count)) return NAN;
+    ma_effects_set_chorus(&renderer.midi.pool.effects, s->chorus);
+    ma_effects_set_reverb(&renderer.midi.pool.effects, s->reverb);
+    for (size_t offset = 0; offset < frames;) {
+        size_t n = frames - offset;
+        if (n > s->block_frames) n = s->block_frames;
+        if (!ma_midi_render(&renderer, buf + 2 * offset, n)) return NAN;
+        offset += n;
+    }
+    float peak = 0;
+    for (size_t i = 0; i < 2 * frames; i++) {
+        buf[i] *= s->gain;
+        if (!isfinite(buf[i])) return NAN;
+        if (tw_fabsf(buf[i]) > peak) peak = tw_fabsf(buf[i]);
+    }
+    ma_stats = renderer.midi.stats;
+    ma_pool_stats = renderer.midi.pool.diagnostics;
+    ma_fx_clips = renderer.midi.pool.effects.clips;
+    ma_fx_sanitizations = renderer.midi.pool.effects.sanitizations;
+    ma_fx_pre_peak = renderer.midi.pool.effects.pre_peak;
+    ma_fx_post_peak = renderer.midi.pool.effects.post_peak;
+    *out_of_compass = 0;
+    return peak;
+}
 
 /* The ep73 twin of render(). Stereo from the tremolo on; with it off the
  * two channels are identical, so the buffer, the WAV and the two-run FNV
@@ -186,63 +244,6 @@ static bool read_file(const char *path, uint8_t **out, size_t *out_size) {
     return true;
 }
 
-static bool make_event_frames(const smf_file *midi, unsigned rate,
-                              double tail_seconds, size_t **out,
-                              size_t *out_frames) {
-    *out = 0;
-    *out_frames = 0;
-    size_t *frames = 0;
-    if (midi->event_count) {
-        size_t bytes = 0;
-        if (!host_size_mul(midi->event_count, sizeof *frames, &bytes))
-            return false;
-        frames = malloc(bytes);
-        if (!frames) return false;
-    }
-
-    double seconds = 0.0;
-    uint64_t segment_tick = 0;
-    uint32_t us_per_quarter = 500000;
-    size_t tempo = 0;
-    size_t last = 0;
-    double max_frame = RENDER_MAX_SECONDS * rate;
-    for (size_t event = 0; event < midi->event_count; event++) {
-        while (tempo < midi->tempo_count
-               && midi->tempos[tempo].tick <= midi->events[event].tick) {
-            seconds += (double)(midi->tempos[tempo].tick - segment_tick)
-                     * us_per_quarter * 1e-6 / midi->division;
-            segment_tick = midi->tempos[tempo].tick;
-            us_per_quarter = midi->tempos[tempo].us_per_quarter;
-            tempo++;
-        }
-        double at = seconds
-                  + (double)(midi->events[event].tick - segment_tick)
-                  * us_per_quarter * 1e-6 / midi->division;
-        double frame = at * rate + 0.5;
-        if (!isfinite(frame) || frame < 0.0 || frame > max_frame
-            || frame > SIZE_MAX) {
-            free(frames);
-            return false;
-        }
-        frames[event] = (size_t)frame;
-        last = frames[event];
-    }
-
-    double tail_frame_value = tail_seconds * rate;
-    if (!isfinite(tail_frame_value) || tail_frame_value > SIZE_MAX) {
-        free(frames);
-        return false;
-    }
-    size_t total = 0;
-    if (!host_size_add(last, (size_t)tail_frame_value, &total)
-        || (double)total > max_frame) {
-        free(frames);
-        return false;
-    }
-    *out = frames;
-    *out_frames = total;
-    return true;
-}
 
 int main(int argc, char **argv) {
     uint8_t reg[TW_DRAWBARS] = { 8, 8, 8, 0, 0, 0, 0, 0, 0 };
@@ -251,18 +252,91 @@ int main(int argc, char **argv) {
         .gain = 0.125f,
         .cond = EP_CONDITION_DEFAULT,
         .rate = 48000,
+        .pool = ma_voice_pool_default_config,
+        .patch = &ma_patch_tepih,
+        .patch_name = "Tepih",
+        .block_frames = 128,
+        .chorus = {.depth = .35f, .rate_hz = .25f},
+        .reverb = {.size = .65f, .damping = .55f},
     };
+    bool gain_set = false, ma_options = false, legacy_options = false;
     const char *out_path = "render.wav";
     double tail_s = 2.0;
     uint16_t chan_mask = UINT16_MAX;
 
+    enum { OPT_PATCH = 256, OPT_LIMIT, OPT_UNISON, OPT_DETUNE, OPT_SEED, OPT_BLOCK,
+        OPT_CHORUS_MIX, OPT_CHORUS_DEPTH, OPT_CHORUS_RATE,
+        OPT_REVERB_MIX, OPT_REVERB_SIZE, OPT_REVERB_DAMPING };
+    static const struct option options[] = {
+        {"patch", required_argument, NULL, OPT_PATCH},
+        {"voice-limit", required_argument, NULL, OPT_LIMIT},
+        {"unison", required_argument, NULL, OPT_UNISON},
+        {"detune", required_argument, NULL, OPT_DETUNE},
+        {"seed", required_argument, NULL, OPT_SEED},
+        {"block-frames", required_argument, NULL, OPT_BLOCK},
+        {"chorus-mix", required_argument, NULL, OPT_CHORUS_MIX},
+        {"chorus-depth", required_argument, NULL, OPT_CHORUS_DEPTH},
+        {"chorus-rate", required_argument, NULL, OPT_CHORUS_RATE},
+        {"reverb-mix", required_argument, NULL, OPT_REVERB_MIX},
+        {"reverb-size", required_argument, NULL, OPT_REVERB_SIZE},
+        {"reverb-damping", required_argument, NULL, OPT_REVERB_DAMPING},
+        {"help", no_argument, NULL, 'h'},
+        {0},
+    };
     int c;
-    while ((c = getopt(argc, argv, "I:c:R:v:D:C:N:m:p:fg:w:r:t:o:h")) != -1) {
+    while ((c = getopt_long(argc, argv, "I:c:R:v:D:C:N:m:p:fg:w:r:t:o:h", options, NULL)) != -1) {
+        if (c >= OPT_PATCH && c <= OPT_REVERB_DAMPING) ma_options = true;
+        if (c > 0 && c < 256 && strchr("RvDCNmpfw", c)) legacy_options = true;
         switch (c) {
         case 'I':
-            if (!strcmp(optarg, "ep73")) st.ep = true;
-            else if (strcmp(optarg, "organ")) { usage(argv[0]); return 2; }
+            if (!strcmp(optarg, "ep73")) st.instrument = INSTRUMENT_EP;
+            else if (!strcmp(optarg, "organ")) st.instrument = INSTRUMENT_ORGAN;
+            else if (!strcmp(optarg, "mamutanalog")) st.instrument = INSTRUMENT_MAMUT;
+            else { usage(argv[0]); return 2; }
             break;
+        case OPT_PATCH: {
+            const char *names[] = {"Tepih", "Lead", "Dubina", "Raster", "Prizma", "Granica"};
+            const ma_patch *patches[] = {&ma_patch_tepih, &ma_patch_lead, &ma_patch_dubina,
+                &ma_patch_raster, &ma_patch_prizma, &ma_patch_granica};
+            unsigned i = 0;
+            while (i < 6 && strcmp(optarg, names[i])) i++;
+            if (i == 6) { usage(argv[0]); return 2; }
+            st.patch = patches[i]; st.patch_name = names[i];
+            break;
+        }
+        case OPT_LIMIT: case OPT_UNISON: case OPT_SEED: case OPT_BLOCK: {
+            uint64_t value = 0;
+            uint64_t max = c == OPT_LIMIT ? 64 : c == OPT_UNISON ? 8
+                : c == OPT_BLOCK ? 4096 : UINT64_MAX;
+            if (!host_parse_u64(optarg, c == OPT_SEED ? 0 : 1, max, &value)) {
+                usage(argv[0]); return 2;
+            }
+            if (c == OPT_UNISON && value != 1 && value != 2 && value != 4 && value != 8) {
+                usage(argv[0]); return 2;
+            }
+            if (c == OPT_LIMIT) st.pool.limit = (uint8_t)value;
+            else if (c == OPT_UNISON) st.pool.unison_count = (uint8_t)value;
+            else if (c == OPT_BLOCK) st.block_frames = (unsigned)value;
+            else st.pool.session_seed = value;
+            break;
+        }
+        case OPT_DETUNE:
+            if (!parse_float(optarg, 0, 100, &st.pool.detune_cents)) { usage(argv[0]); return 2; }
+            break;
+        case OPT_CHORUS_MIX: case OPT_CHORUS_DEPTH: case OPT_CHORUS_RATE:
+        case OPT_REVERB_MIX: case OPT_REVERB_SIZE: case OPT_REVERB_DAMPING: {
+            float value = 0;
+            double lo = c == OPT_CHORUS_RATE ? .03 : 0;
+            double hi = c == OPT_CHORUS_RATE ? 20 : c == OPT_REVERB_DAMPING ? .99 : 1;
+            if (!parse_float(optarg, lo, hi, &value)) { usage(argv[0]); return 2; }
+            if (c == OPT_CHORUS_MIX) { st.chorus.mix = value; st.chorus.enabled = true; }
+            else if (c == OPT_CHORUS_DEPTH) st.chorus.depth = value;
+            else if (c == OPT_CHORUS_RATE) st.chorus.rate_hz = value;
+            else if (c == OPT_REVERB_MIX) { st.reverb.mix = value; st.reverb.enabled = true; }
+            else if (c == OPT_REVERB_SIZE) st.reverb.size = value;
+            else st.reverb.damping = value;
+            break;
+        }
         case 'c':
             if (!parse_channels(optarg, &chan_mask)) { usage(argv[0]); return 2; }
             break;
@@ -297,6 +371,7 @@ int main(int argc, char **argv) {
         case 'f': st.fold = true; break;
         case 'g':
             if (!parse_float(optarg, 0.0, 16.0, &st.gain)) { usage(argv[0]); return 2; }
+            gain_set = true;
             break;
         case 'w':
             if (!parse_float(optarg, 0.0, 1.0, &st.wear)) { usage(argv[0]); return 2; }
@@ -325,6 +400,13 @@ int main(int argc, char **argv) {
         }
     }
     if (optind + 1 != argc) { usage(argv[0]); return 2; }
+    if ((ma_options && st.instrument != INSTRUMENT_MAMUT)
+        || (legacy_options && st.instrument == INSTRUMENT_MAMUT)
+        || st.pool.limit % st.pool.unison_count) {
+        fprintf(stderr, "render_midi: incompatible instrument options or pool limit/unison\n");
+        return 2;
+    }
+    if (st.instrument == INSTRUMENT_MAMUT && !gain_set) st.gain = 1;
 
     uint8_t *data = 0;
     size_t data_size = 0;
@@ -344,12 +426,16 @@ int main(int argc, char **argv) {
 
     size_t *event_frame = 0;
     size_t frames = 0;
-    if (!make_event_frames(&midi, st.rate, tail_s, &event_frame, &frames)) {
+    if (!smf_make_event_frames(&midi, st.rate, tail_s, &event_frame, &frames)) {
         fprintf(stderr, "render_midi: render exceeds the checked duration"
                         " or allocation limits\n");
         smf_dispose(&midi);
         return 1;
     }
+    /* A zero-tail Mamut render still dispatches/samples the last event.
+     * Preserve the legacy organ/EP duration convention. */
+    if (st.instrument == INSTRUMENT_MAMUT && midi.event_count
+        && frames == event_frame[midi.event_count-1]) frames++;
     size_t wav_limit = (UINT32_MAX - 48u) / (2u * sizeof(float));
     if (frames > wav_limit) {
         fprintf(stderr, "render_midi: render exceeds the RIFF/WAVE size limit\n");
@@ -367,7 +453,13 @@ int main(int argc, char **argv) {
            / st.rate,
            tail_s, (double)st.rate);
     static const char *rot_name[4] = { "bypass", "chorale", "tremolo", "brake" };
-    if (st.ep)
+    if (st.instrument == INSTRUMENT_MAMUT)
+        printf("  instrument mamutanalog, patch %s, limit %u, unison %u, "
+               "detune +/-%.2f cents, seed %" PRIu64 ", block %u, gain %g\n",
+               st.patch_name, st.pool.limit, st.pool.unison_count,
+               (double)st.pool.detune_cents, st.pool.session_seed,
+               st.block_frames, (double)st.gain);
+    else if (st.instrument == INSTRUMENT_EP)
         printf("  instrument ep73, compass 28..100, drive %.2f, cabinet %.2f,"
                " condition %.2f, gain %g%s\n", (double)st.drive, (double)st.cab,
                (double)st.cond, (double)st.gain, st.fold ? ", octave-fold" : "");
@@ -399,22 +491,45 @@ int main(int argc, char **argv) {
      * hashed over the interleaved stereo buffer since M6 */
     uint32_t ooc = 0;
     double (*paint)(const smf_event *, size_t, const settings_t *, float *, size_t,
-                    const size_t *, uint32_t *) = st.ep ? render_ep : render;
+                    const size_t *, uint32_t *) = st.instrument == INSTRUMENT_MAMUT
+                        ? render_ma : st.instrument == INSTRUMENT_EP ? render_ep : render;
     double peak = paint(midi.events, midi.event_count, &st, buf, frames,
                         event_frame, &ooc);
+    if (!isfinite(peak)) {
+        free(buf); free(event_frame); smf_dispose(&midi);
+        fprintf(stderr, "render_midi: Mamut render failed\n"); return 1;
+    }
     uint64_t h1 = tw_fnv1a64(buf, buffer_bytes, 0);
     peak = paint(midi.events, midi.event_count, &st, buf, frames,
                  event_frame, &ooc);
     uint64_t h2 = tw_fnv1a64(buf, buffer_bytes, 0);
-    printf("  applied: %lu notes, %lu %s, %lu ccs, %lu folded,"
+    if (st.instrument == INSTRUMENT_MAMUT) {
+        printf("  applied: %" PRIu64 " note-ons, %" PRIu64 " note-offs, %" PRIu64
+               " bends, %" PRIu64 " channel pressures, %" PRIu64 " poly pressures, %" PRIu64 " ccs\n",
+               ma_stats.note_ons, ma_stats.note_offs, ma_stats.bends,
+               ma_stats.channel_pressures, ma_stats.poly_pressures, ma_stats.ccs);
+        printf("  ignored: %" PRIu64 " ccs, %" PRIu64 " messages, %" PRIu64
+               " invalid, %" PRIu64 " unmatched releases; allocation failures %" PRIu64 "\n",
+               ma_stats.ignored_ccs, ma_stats.unsupported_messages, ma_stats.invalid_messages,
+               ma_stats.unmatched_note_offs, ma_stats.allocation_failures);
+        printf("  pool: active %u, peak %u, steals released/sustained/held %" PRIu64
+               "/%" PRIu64 "/%" PRIu64 ", sleeps %" PRIu64 ", wakes %" PRIu64 "\n",
+               ma_pool_stats.active_slots, ma_pool_stats.peak_slots, ma_pool_stats.steals_released,
+               ma_pool_stats.steals_sustained, ma_pool_stats.steals_held,
+               ma_pool_stats.sleeps, ma_pool_stats.wakes);
+        printf("  effects (including feedback writes): pre/post peak %.6f/%.6f, "
+               "clips %" PRIu64 ", sanitizations %" PRIu64 "; pool %zu bytes\n",
+               (double)ma_fx_pre_peak, (double)ma_fx_post_peak,
+               ma_fx_clips, ma_fx_sanitizations, sizeof(ma_voice_pool));
+    } else printf("  applied: %lu notes, %lu %s, %lu ccs, %lu folded,"
            " %u out-of-compass\n",
-           stats.notes, st.ep ? stats.pressures : stats.depths,
-           st.ep ? "key pressures" : "depths",
+           stats.notes, st.instrument == INSTRUMENT_EP ? stats.pressures : stats.depths,
+           st.instrument == INSTRUMENT_EP ? "key pressures" : "depths",
            stats.ccs, stats.folded, ooc);
     printf("  peak %.3f, FNV64 %016llx %s\n", peak, (unsigned long long)h1,
            h1 == h2 ? "(two runs identical)" : "MISMATCH");
 
-    int rc = wav_write_f32(out_path, buf, frames, st.rate, 2);
+    int rc = !isfinite(peak) || h1 != h2 ? -1 : wav_write_f32(out_path, buf, frames, st.rate, 2);
     printf("  wav: %s%s\n", out_path, rc ? " (WRITE FAILED)" : "");
     free(buf);
     free(event_frame);

@@ -578,8 +578,9 @@ The first playable chain ports the behavior of the donor's
 
 ## Generic MIDI contract
 
-MIDI is single-timbre. The driver's existing selected-channel policy and
-owner bookkeeping apply; the core receives normalized instrument events.
+MIDI is single-timbre. The selected-channel policy applies; Mamut ownership
+belongs to pool groups, including repeated notes. Organ/EP boolean owner
+bookkeeping is not used for the pool. The core receives normalized events.
 All 128 notes are valid. NoteOn velocity zero is NoteOff for MIDI 1.0.
 
 | Input | Assignment |
@@ -614,7 +615,7 @@ All 128 notes are valid. NoteOn velocity zero is NoteOff for MIDI 1.0.
 | CC105 / CC106 | mixer pressure / filter drive |
 | CC107 / CC108 | chorus mix / reverb mix |
 | CC109..113 | Gravitacija, Bloom, Heat, Ruin, Swarm |
-| CC114 | unison, value >=64 is on |
+| CC114 | historical bank unison; ignored/counted by the fixed-configuration pool; use session `--unison` |
 | CC115 | GFM amount after MA4; ignored and counted before MA4 |
 | CC120 / CC123 | panic |
 
@@ -865,6 +866,9 @@ quality reduction was applied. MA2-7 is closed.
 
 ### MA3 — first playable, stereo and effects
 
+MA3-1 dry hosted MIDI integration is complete; implementation and verification
+are in `docs/ma3-1-hosted.md`. MA3 remains open for effects and live integration.
+
 Use `ma_voice_pool` as the instrument foundation. Effects, cost gates and future
 GFM operate over its configured limit and awake/group ownership; none may assume
 five cards. Preserve historical bank tests and Hurt/Chopin arrangements.
@@ -898,6 +902,18 @@ Gate: live play on the reference rig, twin signatures logged in
 `docs/renders.md`, no xrun during the listening session, effects judged as
 support rather than source identity, and all pre-existing test signatures
 unchanged.
+
+#### MA3 execution slices
+
+| Slice | Status | Deliverable / gate |
+| --- | --- | --- |
+| MA3-1 | done | Pool-backed generic dry MIDI map and `render_midi -I mamutanalog`; direct/raw-parser/SMF PCM twins and legacy regression checks. |
+| MA3-2 | done | Shared chorus/reverb, exact bypass/rejoin, MIDI/CLI controls and deterministic wet twins; operator accepted the level-matched listening set on 2026-09-08. |
+| MA3-PERF | measurement complete; optimization pending | Hosted matrix recorded for limits 16/32/64, 128/256/512 frames, BCS, sustain/release, unison and dry/chorus/reverb/wet arms. The current 32-slot full-pool wet path is above the 48 kHz realtime budget; profile stages and implement measured optimizations before MA3 live acceptance, with no automatic quality/polyphony reduction. |
+| MA3-OPT1 | implemented; operator listening pending | Prepare waveform/mixer divisors and VCO2 guard once per sample; prepare VCO1 pitch once when cross-mod is zero. Baseline PCM/state checks, compiler/sanitizer verification and before/after listening pairs: `docs/ma3-opt1.md`. OPT2 and FIR are separate decisions. |
+| MA3-OPT2 | measurement complete; listening pending | Skip inactive waveform previews using smoothed controls while preserving oscillator state. GCC/Clang/sanitizer checks and matched hosted measurements pass with identical PCM hashes; full renders and operator listening remain. Evidence and caveats: `docs/ma3-opt2.md`. |
+| MA3-OPT3 | measured; listening pending | Share the initial BLEP correction between saw/pulse previews, preserving state and arithmetic order. Aggregate hosted result is 2.12% lower CPU with a Raster regression; PCM twins match. Full renders and operator listening remain. Evidence: `docs/ma3-opt3.md`. |
+| MA3-LIVE | queued | ALSA driver using the shared MIDI map and pool; event/twin checks, explicit limit configuration and no-xrun listening gate on the reference rig. |
 
 ### MA4 — hidden GFM card field
 

@@ -97,10 +97,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("prefix", type=Path)
     parser.add_argument("--reference", type=Path)
-    parser.add_argument("--stems", nargs="+", choices=("tonal", "rhythm", "ep", "organ", "vocal", "harmony", "right", "left", "pedals"),
+    parser.add_argument("--stems", nargs="+", choices=("tonal", "rhythm", "ep", "organ", "vocal", "harmony", "right", "left", "pedals", "melody", "pads", "bass", "lead"),
                         default=["tonal", "rhythm"], help="list every source stem; default is the historical dark take")
     parser.add_argument("--previews", action="store_true",
                         help="extract full-render sections and melody excerpts")
+    parser.add_argument("--form", choices=("hurt", "blues"), default="hurt",
+                        help="section/excerpt timing; existing Hurt timing is the default")
     args = parser.parse_args()
 
     def output(name: str, suffix: str = ".wav") -> Path:
@@ -133,13 +135,14 @@ def main() -> None:
     report["listening"]["gain_db"] = db(gain)
     report["listening"]["sha256"] = sha256(output("listening"))
     report["sections"] = []
-    bars = (0, 8, 24, 40, 48, 64, 68, 80, 85)
+    bars = (0, 8, 24, 40, 48, 64, 68, 80, 85) if args.form == "hurt" else tuple(range(14))
     for first, last in zip(bars, bars[1:]):
-        begin = round(first * 4 * .714285 * RATE)
-        end = min(round(last * 4 * .714285 * RATE), len(mix))
+        unit = 4 * .714285 if args.form == "hurt" else 18
+        begin = round(first * unit * RATE)
+        end = min(round(last * unit * RATE), len(mix))
         if begin >= end:
             continue
-        report["sections"].append({"bars_zero_based": [first, last],
+        report["sections"].append({"bars_zero_based" if args.form == "hurt" else "phrases_zero_based": [first, last],
                                     **{name: measure(x[begin:end]) for name, x in audio.items()}})
     if args.reference:
         reference = read_wav(args.reference)
@@ -159,10 +162,13 @@ def main() -> None:
                                  "new_gain": new_gain, "noir_gain": old_gain,
                                  "reference": str(args.reference), "reference_sha256": sha256(args.reference)}
     if args.previews:
-        for name, start, duration in (("intro", 0, 18), ("answer", 31, 12),
+        excerpts = (("intro", 0, 18), ("answer", 31, 12),
                                       ("groove", 69, 18), ("melody", 91, 24),
                                       ("breakdown", 115, 18), ("climax", 194, 18),
-                                      ("outro", 229, 24)):
+                                      ("outro", 229, 24)) if args.form == "hurt" else (
+            ("intro", 0, 24), ("lead", 28, 24), ("overlap", 102, 24),
+            ("climax", 144, 30), ("outro", 218, 30))
+        for name, start, duration in excerpts:
             if (start + duration) * RATE <= len(mix):
                 write_scaled(output(f"preview_{name}"), mix[start * RATE:(start + duration) * RATE], gain)
     report["raw_sha256"] = {name: sha256(output(name)) for name in audio}
