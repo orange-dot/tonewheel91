@@ -905,14 +905,21 @@ unchanged.
 
 #### MA3 execution slices
 
+The [2026-10-02 MA3-PERF plan](ma3-perf-plan.md) expands the remaining
+performance work into P0–P6 with model/agent ownership and evidence gates.
+Its readiness/headroom targets are proposed engineering criteria. The first
+[P0–P2 evidence batch](ma3-perf-20261002.md) is complete; noisy host conditions
+limit precision, and no live acceptance is claimed.
+
 | Slice | Status | Deliverable / gate |
 | --- | --- | --- |
 | MA3-1 | done | Pool-backed generic dry MIDI map and `render_midi -I mamutanalog`; direct/raw-parser/SMF PCM twins and legacy regression checks. |
 | MA3-2 | done | Shared chorus/reverb, exact bypass/rejoin, MIDI/CLI controls and deterministic wet twins; operator accepted the level-matched listening set on 2026-09-08. |
-| MA3-PERF | measurement complete; optimization pending | Hosted matrix recorded for limits 16/32/64, 128/256/512 frames, BCS, sustain/release, unison and dry/chorus/reverb/wet arms. The current 32-slot full-pool wet path is above the 48 kHz realtime budget; profile stages and implement measured optimizations before MA3 live acceptance, with no automatic quality/polyphony reduction. |
+| MA3-PERF | fresh baseline complete; OPT4 screen mixed | Historical broad matrix retained. The GCC 16.2.1 baseline missed CPU and wall deadlines for all 10,240 full-32/wet/128-frame blocks (`docs/ma3-perf-20261002.md`). The later OPT4 A/B screen is mixed and does not support retaining the change yet (`docs/ma3-opt4-measure-20261003.md`). Matched Raster regression investigation remains pending. |
 | MA3-OPT1 | implemented; operator listening pending | Prepare waveform/mixer divisors and VCO2 guard once per sample; prepare VCO1 pitch once when cross-mod is zero. Baseline PCM/state checks, compiler/sanitizer verification and before/after listening pairs: `docs/ma3-opt1.md`. OPT2 and FIR are separate decisions. |
 | MA3-OPT2 | measurement complete; listening pending | Skip inactive waveform previews using smoothed controls while preserving oscillator state. GCC/Clang/sanitizer checks and matched hosted measurements pass with identical PCM hashes; full renders and operator listening remain. Evidence and caveats: `docs/ma3-opt2.md`. |
 | MA3-OPT3 | measured; listening pending | Share the initial BLEP correction between saw/pulse previews, preserving state and arithmetic order. Aggregate hosted result is 2.12% lower CPU with a Raster regression; PCM twins match. Full renders and operator listening remain. Evidence: `docs/ma3-opt3.md`. |
+| MA3-OPT4 | implemented; first matched screen inconclusive | Split 31-tap FIR history traversal into two spans, preserving every tap and accumulation order. Exact-bit correctness evidence: [ma3-opt4.md](ma3-opt4.md). A/B screen: [ma3-opt4-measure-20261003.md](ma3-opt4-measure-20261003.md); mixed gains/regressions and variable host frequency prevent a general speedup claim. |
 | MA3-LIVE | queued | ALSA driver using the shared MIDI map and pool; event/twin checks, explicit limit configuration and no-xrun listening gate on the reference rig. |
 
 ### MA4 — hidden GFM card field

@@ -1618,11 +1618,11 @@ static void push_oversample_history(float history[31], uint8_t *position,
 
 static float decimate_oversample(const float history[31], uint8_t position) {
     float output = 0.0f;
-    int index = position;
-    for (int tap = 0; tap < 31; tap++) {
-        if (--index < 0) index = 30;
-        output += OSC_HALFBAND_31[tap] * history[index];
-    }
+    int tap = 0;
+    for (int index = position - 1; index >= 0; index--)
+        output += OSC_HALFBAND_31[tap++] * history[index];
+    for (int index = 30; index >= position; index--)
+        output += OSC_HALFBAND_31[tap++] * history[index];
     return output;
 }
 

@@ -1,5 +1,11 @@
 # MA3-PERF hosted throughput
 
+Resumption plan (2026-10-02): [MA3-PERF execution plan](ma3-perf-plan.md)
+defines agent/model assignments, fresh baseline and harness audit, profiling,
+candidate gates, and the handoff to live acceptance. The
+[first execution batch](ma3-perf-20261002.md) now has fresh results and explicit
+host-noise limits. The results below remain the historical measurement cohort.
+
 MA3-PERF is a hosted timing slice for the pool and MA3-2 effects. It is a
 measurement artifact, not a realtime acceptance claim. The benchmark pins the
 process with `taskset`, records thread CPU time and monotonic wall time around

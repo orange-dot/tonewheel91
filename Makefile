@@ -412,9 +412,13 @@ $(BUILD)/bench_ma_pool: driver/bench_ma_pool.c $(MA_RUNTIME_OBJS) src/mamutanalo
 
 $(BUILD)/bench_ma3_perf: driver/bench_ma3_perf.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
-.PHONY: bench-ma3-perf
+.PHONY: bench-ma3-perf check-ma3-perf
 bench-ma3-perf: $(BUILD)/bench_ma3_perf
 	$(BUILD)/bench_ma3_perf --run
+
+check-ma3-perf: $(BUILD)/bench_ma3_perf
+	python3 test/ma3_perf_cli.py $(BUILD)/bench_ma3_perf
+test: check-ma3-perf
 
 $(BUILD)/test_ma_source_frame: test/ma_source_frame.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
@@ -429,6 +433,13 @@ $(BUILD)/test_ma_waveforms: test/ma_waveforms.c $(MA_RUNTIME_OBJS) src/mamutanal
 check-ma3-opt2: $(BUILD)/test_ma_waveforms
 	$(BUILD)/test_ma_waveforms
 test: check-ma3-opt2
+
+$(BUILD)/test_ma_fir: test/ma_fir.c src/ma_voice.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-opt4
+check-ma3-opt4: $(BUILD)/test_ma_fir
+	$(BUILD)/test_ma_fir
+test: check-ma3-opt4
 
 $(BUILD)/exhibit_ma_pool: driver/exhibit_ma_pool.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)

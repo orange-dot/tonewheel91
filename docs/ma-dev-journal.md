@@ -12,14 +12,24 @@ its internal sub-gates already has working code.
 ## Current position
 
 - Active milestone: **MA3 — first playable, stereo and effects**.
-- Active task: **new MA3 Blues and all-Mamut Hurt exhibits**. MA3-1 and MA3-2
-  are done; the operator accepted the MA3-2 listening set on 2026-09-08.
-  MA3-PERF is queued before live acceptance.
-- Last green aggregate run: GCC, Clang and ASan/UBSan/
+- Active task: **MA3-OPT4 measured screen; keep/reject pending**.
+  The operator approved starting the model/agent plan on 2026-10-02;
+  `docs/ma3-perf-plan.md` defines P0–P6. Fresh evidence is recorded in
+  `docs/ma3-perf-20261002.md`; run `build/ma3-perf-20261002-01/`.
+  The first FIR traversal candidate is implemented; `docs/ma3-opt4.md` records
+  correctness. The operator later authorized performance measurement;
+  `docs/ma3-opt4-measure-20261003.md` records a mixed A/B screen. P3 Raster
+  investigation and a supported OPT4 keep/reject decision remain pending.
+  MA3-1/2 are done and the MA3-2 listening set was accepted on 2026-09-08.
+  Blues/Hurt renders are complete. OPT1–3 have implementation/measurement
+  evidence; listening remains pending and 32-slot wet cost exceeds the budget.
+- Earlier recorded green aggregate run: GCC, Clang and ASan/UBSan/
   float-cast-overflow, 2026-09-08, on MA3-2: core `111378`, hosted `116`,
   MIDI map `22`, architecture `227`, character `8700`, stereo `2611`;
   zero failures, plus MA2-7 pool, MA3-1/2 MIDI twins, effect tests and seven CLI tests.
   Both compiler core-symbol audits pass.
+- Later OPT3 entries (2026-09-10) record GCC/Clang/sanitizer and numerical
+  referee passes; see `docs/ma3-opt3.md` for that source-bound evidence.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
 - Core implementation status: MA0, MA1, MA2-1 through MA2-7, MA2-DIG,
@@ -911,3 +921,86 @@ one.
   host-sensitive result, not a universal speedup claim.
 - Full 32-slot wet cost remains above the 48 kHz budget. Listening renders
   remain deferred until the operator requests them.
+
+### 2026-10-02 — MA3-PERF resumption plan
+
+- Added `docs/ma3-perf-plan.md`: P0–P6, agent/model/effort recommendations,
+  explicit file ownership, serialized measurement windows, and candidate gates.
+- Verified current voice source matches the recorded OPT3 hash. Historical
+  artifact directories exist; their reuse still requires manifest verification.
+- Current GCC is 16.2.1 rather than the historical 16.1.1. The plan requires
+  matched rebuilds and a fresh baseline. Gprof is available; perf/Valgrind are
+  absent from PATH. These are planning observations, not profiling results.
+- Recorded benchmark limitations: small p99 samples, permissive filters,
+  release timing dependent on run length, and render-only timing boundaries.
+- Performance execution and DSP changes have not started. Proposed 32-slot
+  readiness/headroom criteria do not close MA3-PERF or MA3-LIVE.
+- Planning validation: GCC 16.2.1
+  `make CC=/usr/bin/gcc BUILD=build/ma3-perf-plan-check-20261002 test`
+  passed, including the release core-symbol audit and seven CLI tests.
+  This is a fresh functional check, not a performance baseline. Local links
+  in the four affected documents and `git diff --check` also passed.
+
+### 2026-10-02 — MA3-PERF first execution batch
+
+- The operator authorized starting P0–P2. Run
+  `build/ma3-perf-20261002-01/` freezes current sources, build identities,
+  host context and historical artifact audit; DSP/organ/EP source is unchanged.
+- Strengthened the hosted harness: strict filters/nonzero case counts,
+  chronological raw samples, endpoint occupancy and release phase, nearest-rank
+  quantiles, deadline/safety counters, output-error handling and empty-bracket
+  measurements. Added `check-ma3-perf` to the native test target.
+- Full GCC suite passed. The final harness passed seven focused CLI checks
+  under GCC, Clang and sanitizers; its PCM/effect fingerprints match the
+  original harness in all 160 short comparison rows. Independent review
+  recomputed the measured summaries and checked matching source/binary hashes.
+- Two release epochs produced 80 summaries / 20,480 measured blocks. All
+  10,240 full-32/wet blocks missed CPU and wall deadlines; pass CPU means
+  range 7.610–14.699 ms against 2.667 ms. One-slot cases had no CPU misses
+  but 241 wall misses. A 5.511 ms empty wall-clock bracket and process variation
+  prevent precise small-speedup or live-readiness claims.
+- Eight Gprof cases and release assembly support an initial candidate:
+  split FIR circular traversal while preserving every tap and accumulation
+  order. Gprof clone-symbol misnaming requires address-based interpretation;
+  inlined FIR cost remains inseparable from the broader `synth_tick` bucket.
+- Evidence, reproduction commands and remaining limits:
+  `docs/ma3-perf-20261002.md`. P3 Raster regression and P4 DSP optimization
+  remain pending, as do long release/tail/control coverage and listening.
+
+### 2026-10-03 — MA3-OPT4 implemented; stopped before measurement
+
+- Completed the first candidate started on 2026-10-02: two descending spans
+  replace per-tap wrap checks in the 31-tap FIR. The original coefficient,
+  multiplication and accumulation order is preserved. No seven-tap filter,
+  state-layout, oscillator, organ or EP change is included.
+- New `test/ma_fir.c` checks 664 histories at all 31 positions: 20,584 exact-bit
+  comparisons with the original loop and input immutability checks. Independent
+  source review passed. `check-ma3-opt4` is part of native `make test`.
+- GCC/Clang native suites, release symbol audits, pinned PCM/state fixtures,
+  seven renderer CLI checks and all 16 numerical oscillator cases passed.
+  The initial sanitizer run was interrupted; its separate completion run
+  passed the full functional suite and numerical referee with exit 0.
+- Every validation command excludes `check-ma3-perf`, including short timed
+  benchmark CLI checks. Baseline/candidate benchmark executables were built
+  only and preserved in `build/ma3-opt4-fir-20261002-01/`.
+- The operator explicitly requested stopping before performance measurement.
+  No benchmark, profiler or overhead run was executed for OPT4. Speedup and
+  keep/reject decisions remain pending. See `docs/ma3-opt4.md`.
+
+### 2026-10-03 — MA3-OPT4 matched performance screen
+
+- The operator subsequently authorized the OPT4 A/B measurements. A fresh
+  `build/ma3-opt4-measure-20261003-01/` run compares frozen OPT3 baseline and
+  OPT4 binaries with the same GCC 16.2.1 benchmark harness and flags.
+- Two epochs with reversed ABBA/BAAB process order covered ten full-pool wet
+  patch/BCS cases and two sparse cases: 96 processes, 192 pass rows, 49,152
+  measured blocks. Per-process raw samples, summaries, PCM/effect signatures,
+  active slots and diagnostics were checked before aggregation.
+- Full-pool CPU changes varied in sign and size; four of ten cases reversed
+  direction between epochs. Lead/BCS-off improved in both epochs; Lead/BCS-on
+  regressed in both. Both variants missed CPU and wall deadlines in every
+  20,480 full-pool block per variant. Frequency snapshots varied markedly.
+- OPT4 does not pass the plan's retention screen. No general speedup or
+  realtime claim is supported. The source candidate and all evidence remain
+  preserved; a later keep/reject decision needs more stable conditions and
+  balanced confirmation. See `docs/ma3-opt4-measure-20261003.md`.
