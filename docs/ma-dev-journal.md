@@ -1089,3 +1089,27 @@ one.
   See `docs/ma3-simd-spike-20261106.md`.
 - Open: integrate these two stages and measure, or first run an oscillator
   SIMD feasibility spike (q48 phases, u64↔float, sync/BLEP branches).
+
+### 2026-11-06 — MA3-PERF oscillator SIMD spike
+
+- New `driver/spike_ma_osc_simd.c` (`make spike-ma-osc-simd`, not part of
+  `test`). It runs the whole per-sample oscillator block (VCO2 guard target,
+  8 × `render_source_substep`, both `next_guard_gain` calls) as 8 AVX2 lanes.
+  Every path is masked. Exact helpers replace the u32→float, u48→float and
+  float→u64 conversions that AVX2 lacks. No shipping code changed.
+- Bit-exact: 200 k samples × 8 lanes × 8 substeps, with randomized sanitized
+  controls over all five patches. Outputs and the full state of both
+  oscillators match after every sample on GCC, Clang and Clang ASan/UBSan.
+  Coverage: 1.2 M cross-mod, 43.5 k sync-on wraps, 14.2 k guard moves, 971 k
+  sparse previews and 1.3 M sine lane-samples. Five of six deliberate
+  mutations were caught; the sixth is an equivalent mutant (0 × finite).
+- Cycles per voice-sample, as 3-epoch medians: Tepih 2,246 → 394 (5.70x),
+  Lead 2,691 → 501 (5.38x), Raster 1,566 → 412 (3.81x), Prizma 2,956 → 612
+  (4.83x), Granica 2,957 → 615 (4.81x).
+- Estimated with the ladder/FIR spike: the whole chain gains 1.86–2.72x, and
+  the worst 8-voice block falls to about 3.35 M cycles, under 80% of the
+  base-clock deadline (4.48 M). That is an estimate from isolated kernels;
+  integration cost is not included. See `docs/ma3-simd-osc-spike-20261106.md`.
+- Next decision: integrate the stage-major 8-lane voice pipeline (oscillator
+  block, FIR cascade, ladder) behind an AVX2 requirement, with the scalar voice
+  kept as reference. The pinned `make test` signatures are the gate.
