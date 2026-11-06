@@ -1069,3 +1069,23 @@ one.
   environment, not the DSP workload.
 - Next: the SIMD-across-voices spike, screened on median cycles. Tail control
   (isolation, SMT sibling, priority) belongs with MA3-LIVE.
+
+### 2026-11-06 — MA3-PERF SIMD spike: ladder and 31-tap FIR as 8 AVX2 lanes
+
+- New `driver/spike_ma_simd.c` (`make spike-ma-simd`, not part of `test`). It
+  includes `src/ma_voice.c` white-box. Only the AVX2 functions are
+  target-attributed, with no FMA, so the scalar reference keeps production
+  flags. No shipping code changed.
+- Bit-exact: 2 M calls × 8 lanes per kernel, with edge values in every input,
+  match the scalar voice on GCC, Clang and Clang ASan/UBSan. For the ladder that
+  covers output, states, `y4_guess` and reset counts, with 172,130 resets
+  exercised.
+- Cycles per voice-call (three epochs, CPU 2, within 0.3%): ladder 420 → 70.6
+  (5.95x), FIR push+decimate 104 → 11.6 (9.0x).
+- Estimate against the 8-slot baseline: these stages are 21–34% of per-voice
+  cost, so the whole chain would gain about 1.22–1.41x. The worst case needs
+  about 1.5x at base clock. Integration needs a stage-major pipeline, SoA
+  ladder and ring state, ring rotation on wake, and masking of sleeping lanes.
+  See `docs/ma3-simd-spike-20261106.md`.
+- Open: integrate these two stages and measure, or first run an oscillator
+  SIMD feasibility spike (q48 phases, u64↔float, sync/BLEP branches).
