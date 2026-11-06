@@ -1141,3 +1141,22 @@ one.
   owns isolation, priority and the no-xrun gate. Next DSP candidates are
   BCS (0.9–1.1 M cycles of the remaining BCS-on cost), mozaik/raster and the
   front end.
+
+### 2026-11-06 — MA3-PERF PMU probe: cache, branches, denormals, divider
+
+- New `driver/probe_ma3_pmu.c` (Makefile target `$(BUILD)/probe_ma3_pmu`,
+  not part of `test`) counts user-space Haswell raw events per render block
+  for the ten 8-slot wet cases on both engines, one event group at a time.
+  `--calibrate` checks every event against a known trigger. Because it was
+  unstable, `MEM_LOAD_UOPS_RETIRED.L3_MISS` was replaced by
+  `LONGEST_LAT_CACHE.MISS`.
+- The first runs were contaminated: browser media playback ran on the same
+  physical core and moved cycles by up to 66%. The quiet runs, with all
+  browsers closed, agree to 0.47% in cycles and match the integrated A/B.
+- Floating-point assists were zero in every case, so there are no denormals
+  and FTZ/DAZ is not needed. Memory and branch mispredictions are each at
+  most a few percent of vector time. The divider is roughly 8–15% of vector
+  time, and bit-exactness keeps it from being converted to multiplies. BCS
+  adds about 1.1 M cycles per BCS-on block. See `docs/ma3-pmu-20261106.md`.
+- Next: per-stage cycle attribution, then BCS in the lanes, then exact
+  any-lane division skips.

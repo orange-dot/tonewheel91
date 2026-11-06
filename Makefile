@@ -452,6 +452,9 @@ spike-ma-simd: $(BUILD)/spike_ma_simd
 # MA3-PERF oscillator SIMD spike: the per-sample source block as 8 AVX2 lanes.
 $(BUILD)/spike_ma_osc_simd: driver/spike_ma_osc_simd.c src/ma_voice.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+# MA3-PERF PMU probe: cache, branch and FP-assist counts per render block.
+$(BUILD)/probe_ma3_pmu: driver/probe_ma3_pmu.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: spike-ma-osc-simd
 spike-ma-osc-simd: $(BUILD)/spike_ma_osc_simd
 	$(BUILD)/spike_ma_osc_simd --check
