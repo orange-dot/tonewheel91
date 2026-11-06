@@ -1455,10 +1455,9 @@ typedef struct {
     float sync;
 } ma_source_frame;
 
-static ma_source_frame prepare_source_frame(const ma_synth *s,
-                                             const ma_render_controls *controls,
-                                             float base_hz,
-                                             float filter_modulation) {
+static ma_source_frame prepare_source_frame_guarded(
+    const ma_synth *s, const ma_render_controls *controls, float base_hz,
+    float filter_modulation, float guard1_gain, float guard2_gain) {
     ma_source_frame source = {
         .vco1 = controls->vco1,
         .vco2 = controls->vco2,
@@ -1483,9 +1482,8 @@ static ma_source_frame prepare_source_frame(const ma_synth *s,
 #else
     (void)filter_modulation;
 #endif
-    float vco1_weight = s->oscillator1.guard_gain > 0.0f ? 1.0f : 0.0f;
-    float vco2_weight = s->oscillator2.guard_gain > 0.0f
-                     ? controls->vco2_level : 0.0f;
+    float vco1_weight = guard1_gain > 0.0f ? 1.0f : 0.0f;
+    float vco2_weight = guard2_gain > 0.0f ? controls->vco2_level : 0.0f;
     source.mixer_divisor = vco1_weight + vco2_weight + controls->noise_level;
     if (source.mixer_divisor < 1.0f) source.mixer_divisor = 1.0f;
     /* Cross-mod is the only source of pitch changes within these eight
@@ -1509,6 +1507,16 @@ static ma_source_frame prepare_source_frame(const ma_synth *s,
     source.vco2_step_q48 = phase_step_q48(step);
     source.vco2_step = phase_turns(source.vco2_step_q48);
     return source;
+}
+
+/* Used by the MA_SOURCE_EVIDENCE tick and by white-box spikes. */
+[[maybe_unused]] static ma_source_frame prepare_source_frame(const ma_synth *s,
+                                            const ma_render_controls *controls,
+                                            float base_hz,
+                                            float filter_modulation) {
+    return prepare_source_frame_guarded(s, controls, base_hz, filter_modulation,
+                                        s->oscillator1.guard_gain,
+                                        s->oscillator2.guard_gain);
 }
 
 static float render_source_substep(ma_synth *s,
@@ -2022,6 +2030,7 @@ static ma_adsr character_adsr(ma_adsr authored, ma_envelope_time_bias bias,
 }
 #endif
 
+#if defined(MA_SOURCE_EVIDENCE)
 static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     ma_render_controls controls = next_render_controls(s);
     float character = next_character(s);
@@ -2150,6 +2159,172 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     return render_output(s, &controls, output);
 #endif
 }
+#else
+/* Staged voice tick (2026-11-06). Every voice performs the same float
+ * operations, in the same order, as the former single-pass tick. Only the
+ * interleaving of stages with disjoint state moved: all eight oscillator
+ * substeps (oscillators, guards) run before the decimators, and mozaik and
+ * raster (their own state) run before the 2x mix and ladder. Grouping the
+ * stages this way lets several voices run each stage together. */
+typedef struct {
+    ma_render_controls controls;
+    ma_source_frame source;
+    float character;
+    float base_hz;
+    float filter_g;
+    float guard1;
+    float guard2;
+    float noise;
+    float mozaik_gain[2];
+    float mozaik[2];
+    float raster[2];
+} ma_voice_front;
+
+/* Controls, pitch, BCS, envelopes, filter prewarp, noise, the source frame,
+ * and both 2x mozaik/raster steps. The ladder's previous y4 and the guard
+ * gains are inputs because a lane bank may hold them. */
+static void voice_front_end(ma_synth *s, float detune_cents, float ladder_y4,
+                            float guard1, float guard2, ma_voice_front *f) {
+    /* Written in place: a freestanding core must not emit memcpy. */
+    f->controls = next_render_controls(s);
+    ma_render_controls *controls = &f->controls;
+    float character = next_character(s);
+    float note_position = next_glide_note(s);
+    float pitch_delta = controls->pitch_bend_semitones + next_lfo(s, controls);
+    float base_hz = note_position_hz(note_position);
+    if (detune_cents != 0.0f)
+        base_hz *= octave_ratio_small(detune_cents / 1200.0f);
+    if (pitch_delta != 0.0f)
+        base_hz *= octave_ratio_small(pitch_delta / 12.0f);
+    if (character > 0.0f)
+        base_hz *= octave_ratio_small(character
+            * (s->character.vco1_cents + s->character.walk_cents) / 1200.0f);
+    if (controls->bcs_amount > 0.0f) {
+        float bcs = render_bcs(s, base_hz, controls->bcs_amount,
+                               controls->bcs_regime, ladder_y4);
+        float crossmod_depth = 0.10f + 0.20f * controls->bcs_regime;
+        float resonance_depth = 0.08f + 0.08f * controls->bcs_regime;
+        controls->crossmod_amount = clamp_signal(
+            controls->crossmod_amount
+                + controls->bcs_amount * crossmod_depth * bcs,
+            0.0f, 1.0f);
+        controls->filter_resonance = clamp_signal(
+            controls->filter_resonance
+                + controls->bcs_amount * resonance_depth * bcs,
+            0.0f, 1.0f);
+    }
+    ma_adsr filter_adsr = character_adsr(s->filter_adsr,
+        s->character.filter_time_bias, character);
+    ma_adsr amp_adsr = character_adsr(s->amp_adsr,
+        s->character.amp_time_bias, character);
+    (void)render_envelope(&s->filter_envelope, filter_adsr,
+                          s->sample_rate_hz);
+    (void)render_envelope(&s->amp_envelope, amp_adsr,
+                          s->sample_rate_hz);
+    float envelope_amount = filter_envelope_amount(s, controls);
+    float filter_modulation = s->filter_envelope.level * envelope_amount;
+    s->filter_cutoff_effective_hz = effective_filter_cutoff(
+        s, controls, envelope_amount, note_position);
+    f->filter_g = filter_prewarp(s->filter_cutoff_effective_hz,
+                                 s->sample_rate_hz);
+    f->guard1 = guard1;
+    f->guard2 = guard2;
+    f->noise = next_noise(&s->noise_state);
+    f->source = prepare_source_frame_guarded(s, controls, base_hz,
+                                             filter_modulation,
+                                             guard1, guard2);
+    for (int at_2x = 0; at_2x < 2; at_2x++) {
+        f->mozaik_gain[at_2x] = s->mozaik.guard_gain;
+        f->mozaik[at_2x] = render_mozaik(s, controls, base_hz,
+                                         2.0f * s->sample_rate_hz);
+        (void)next_mozaik_guard_gain(&s->mozaik);
+        f->raster[at_2x] = controls->raster_mix > 0.0f
+                         ? render_raster(s, controls, base_hz,
+                                         2.0f * s->sample_rate_hz)
+                         : 0.0f;
+    }
+    f->character = character;
+    f->base_hz = base_hz;
+}
+
+/* The VCO2 guard target, eight 8x source substeps, and both guard steps. */
+static void voice_oscillator_block(ma_synth *s, const ma_voice_front *f,
+                                   float source[8]) {
+    set_guard_target(&s->oscillator2,
+        f->source.vco2_hz < 0.45f * s->sample_rate_hz ? 1.0f : 0.0f,
+        s->sample_rate_hz);
+    for (int substep = 0; substep < 8; substep++)
+        source[substep] = render_source_substep(s, &f->controls, &f->source,
+                                                f->base_hz, f->noise,
+                                                f->guard1, f->guard2);
+    (void)next_guard_gain(&s->oscillator1);
+    (void)next_guard_gain(&s->oscillator2);
+}
+
+/* 8x -> 4x -> 2x, in the former push/decimate order. */
+static void voice_decimate(ma_synth *s, const float source[8],
+                           float at_2x[2]) {
+    int substep = 0;
+    for (int step_2x = 0; step_2x < 2; step_2x++) {
+        for (int step_4x = 0; step_4x < 2; step_4x++) {
+            push_oversample_history(s->oversample_history[0],
+                                    &s->oversample_history_pos[0],
+                                    source[substep++]);
+            push_oversample_history(s->oversample_history[0],
+                                    &s->oversample_history_pos[0],
+                                    source[substep++]);
+            float sample_4x = decimate_oversample(
+                s->oversample_history[0], s->oversample_history_pos[0]);
+            push_oversample_history(s->oversample_history[1],
+                                    &s->oversample_history_pos[1],
+                                    sample_4x);
+        }
+        at_2x[step_2x] = decimate_oversample(s->oversample_history[1],
+                                             s->oversample_history_pos[1]);
+    }
+}
+
+/* Two 2x mix/pressure/ladder steps and the 7-tap output decimator. */
+static float voice_filter(ma_synth *s, const ma_voice_front *f,
+                          const float at_2x[2]) {
+    for (int step = 0; step < 2; step++) {
+        float source = mix_source_2x(&f->controls, at_2x[step], f->guard1,
+                                     f->guard2, f->mozaik_gain[step],
+                                     f->mozaik[step], f->raster[step]);
+        float pressured = apply_mixer_pressure(source,
+                                                f->controls.mixer_pressure);
+        s->ladder.pressure_input = source;
+        s->ladder.pressure_output = pressured;
+        push_filter_history(&s->ladder,
+                            render_ladder_2x(s, &f->controls, pressured,
+                                             f->filter_g));
+    }
+    return decimate_filter(&s->ladder);
+}
+
+static float voice_back_end(const ma_synth *s, const ma_voice_front *f,
+                            float filtered) {
+    float velocity_gain = 0.25f + 0.75f * ma_velocity_level(s->velocity);
+    float output = filtered * s->amp_envelope.level * velocity_gain;
+    if (f->controls.poly_pressure > 0.0f)
+        output *= 1.0f + 0.10f * f->controls.poly_pressure;
+    if (f->character > 0.0f)
+        output *= 1.0f + f->character * s->character.vca_bias;
+    return output;
+}
+
+static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
+    ma_voice_front f;
+    float source[8], at_2x[2];
+    voice_front_end(s, detune_cents, s->ladder.y4_guess,
+                    s->oscillator1.guard_gain, s->oscillator2.guard_gain, &f);
+    voice_oscillator_block(s, &f, source);
+    voice_decimate(s, source, at_2x);
+    float output = voice_back_end(s, &f, voice_filter(s, &f, at_2x));
+    if (raw) return (ma_frame){ .left = output, .right = output };
+    return render_output(s, &f.controls, output);
+}
+#endif
 
 ma_frame ma_synth_tick(ma_synth *s) {
     return synth_tick(s, false, 0.0f);
