@@ -1160,3 +1160,20 @@ one.
   adds about 1.1 M cycles per BCS-on block. See `docs/ma3-pmu-20261106.md`.
 - Next: per-stage cycle attribution, then BCS in the lanes, then exact
   any-lane division skips.
+
+### 2026-11-06 — MA3-PERF stage attribution of the vector engine
+
+- New `driver/probe_ma3_stages.c` (target `$(BUILD)/probe_ma3_stages`, not
+  part of `test`) re-runs the vector render path white-box with TSC reads
+  between stages. Its frames and slot state are bit-identical to a twin
+  pool rendered through the real API.
+- With BCS off, the scalar front end takes 35–47% of a block, the
+  oscillator block 25–33%, filter + FIR7 9–11%, the decimators 5–7%, output
+  and effects 5–6%, and the lane fill 4–5%; everything else is about 1%.
+  With BCS on, the front end rises to 58–64%, because BCS adds about 1.3 M
+  ticks per block.
+- Chrome ran on the core's SMT sibling during both runs. The absolute ticks
+  are inflated, but the shares agree to within 1–3 points between runs.
+  See `docs/ma3-stages-20261106.md`.
+- Next: BCS in lanes, then the front-end controls and envelopes in lanes,
+  writing lane inputs directly.
