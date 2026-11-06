@@ -1004,3 +1004,68 @@ one.
   realtime claim is supported. The source candidate and all evidence remain
   preserved; a later keep/reject decision needs more stable conditions and
   balanced confirmation. See `docs/ma3-opt4-measure-20261003.md`.
+
+### 2026-11-06 — MA3-PERF: interim 8-slot target and hardware counters
+
+- Operator decision: the MA3-PERF working target is **8 slots for now**, to
+  stabilize first. The core default (`ma_voice_pool_default_config.limit =
+  32`), the exhibits and every pinned signature are unchanged. The 32-slot
+  objective in `docs/ma3-perf-plan.md` is recorded as the original target, and
+  32 slots stay measurable as a scaling point.
+- `driver/bench_ma3_perf.c` accepts limit 8. The full matrix is now 3,840
+  cases / 7,680 rows; any single limit is 960 cases / 1,920 rows.
+- Optional user-space hardware counters, `MA3_PERF_PMU=auto|required|off`
+  (default `auto`), via `perf_event_open`. Cycles and instructions of the
+  measuring thread are read as one group immediately around
+  `ma_voice_pool_render`, inside the clock brackets
+  (`clock_order=wall_cpu_pmu_render_pmu_cpu_wall`). Two counter reads are
+  therefore inside the CPU/wall times when counters are on.
+- New summary columns: `cycles_mean/p50/p99/max`,
+  `instructions_mean/min/max`, `pmu_multiplexed_blocks`. New raw columns:
+  `cycles`, `instructions`, `pmu_multiplexed`. Multiplexing is detected per
+  block from enabled/running time and counted, never scaled. A `# pmu=` header
+  states availability. With counters off or unavailable the fields are empty,
+  and `required` exits 2. `--overhead` reports the empty counter bracket too.
+- Cycles do not depend on clock frequency, so they are the screening metric for
+  A/B candidates on this host. The time-based deadline checks are unchanged.
+- Verification: GCC, Clang and Clang ASan/UBSan/float-cast-overflow builds pass
+  all 10 CLI checks. Three checks are new: 8-slot occupancy, empty fields with
+  counters off, and counter summaries recomputed from raw samples with
+  pass-to-pass instruction agreement within 0.01%. Every parsed CSV row now
+  must match its header's field count, and that check caught one missing raw
+  field during development. A full GCC `make test` in a scratch build directory
+  passed with exit 0 (111,378 core checks, 0 failures).
+- Harness equivalence: the measured October harness (SHA256 `aeba7d67…`) and
+  this one, linked to the same current objects, give identical non-timing
+  output. That covers 160 rows (five patches, BCS off/on, eight scenarios, wet,
+  limit 32, 128 frames, two passes) and 30 fields each, including PCM hash,
+  effect fingerprints, occupancy and diagnostics: zero differences.
+- Smoke observation, not evidence: Tepih / BCS off / 8 slots / wet / 128
+  frames ran at about 5.05 M cycles and 9.37 M user instructions per block. The
+  empty bracket is 61 instructions and about 120 cycles.
+- Identities: `driver/bench_ma3_perf.c` SHA256 `18bb8001…`,
+  `test/ma3_perf_cli.py` `69895450…`. The voice source in the tree is still
+  the unretained OPT4 candidate (`src/ma_voice.c` `aea2d365…`), so a new
+  baseline must state which voice source it measures.
+- Next: a fresh matched baseline at 8 slots with counters on (all ten
+  patch/BCS cases, wet, 128 frames), then candidate screening on cycles.
+
+### 2026-11-06 — MA3-PERF: 8-slot baseline with counters
+
+- At the operator's request, the unretained OPT4 candidate was reverted, so
+  `src/ma_voice.c` is OPT3 again (`3f99f5d7…`, identical to HEAD). The OPT4
+  diff is saved in the run directory, and its full source stays in the
+  October runs.
+- Functional gate on OPT3: 10/10 CLI checks on the release binary, and a full
+  GCC `make test` (111,378 core checks, 0 failures).
+- Run `build/ma3-perf-20261106-01/`: ten patch/BCS cases, limit 8, all slots
+  held, wet, 128 frames, counters required. One process per case, 256 + 2,048
+  blocks × 2 passes, three epochs, CPU 2, sleep inhibited, no suspend in the
+  run window. Results and reading are in `docs/ma3-perf-20261106.md`.
+- Medians are 4.39–7.00 M cycles per block, stable to 0.55% between epochs,
+  and all within the 80% target at the observed ~3.28 GHz. CPU p99 exceeds
+  that target in nine of ten cases and the deadline in four. The cycle tail is
+  uncorrelated with block index across passes, so it comes from the
+  environment, not the DSP workload.
+- Next: the SIMD-across-voices spike, screened on median cycles. Tail control
+  (isolation, SMT sibling, priority) belongs with MA3-LIVE.

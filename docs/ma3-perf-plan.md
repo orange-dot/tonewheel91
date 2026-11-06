@@ -8,6 +8,16 @@ authorized its [matched screen](ma3-opt4-measure-20261003.md); the mixed result
 does not yet justify retaining OPT4. Full release/tail/control-stress coverage
 and final acceptance remain later work.
 
+2026-11-06: the operator set an **interim working target of 8 slots**, to
+stabilize first. This is an explicit target decision, not a silent reduction.
+The objective section below still describes the original 32-slot target.
+32 slots stay measurable as a scaling point, and the core default
+(`ma_voice_pool_default_config.limit = 32`) and pinned signatures are
+unchanged. The benchmark now accepts limit 8 and can record per-block hardware
+cycle and instruction counters (see the 2026-11-06 journal entry). Because the
+harness changed, any new comparison needs a fresh matched baseline first.
+That baseline exists: [8-slot baseline with counters](ma3-perf-20261106.md),
+measured on the OPT3 voice source after OPT4 was reverted.
 
 Owner: the tonewheel91 project. This plan expands MA3-PERF in
 [analog-backlog.md](analog-backlog.md). Task progress and decisions belong in

@@ -5,6 +5,13 @@ Status: candidate implemented and functionally validated. The operator later
 authorized a [matched performance screen](ma3-opt4-measure-20261003.md);
 the mixed result does not establish a speedup or realtime readiness.
 
+2026-11-06: **reverted.** At the operator's request, `src/ma_voice.c` went
+back to OPT3 (`3f99f5d7…`) before the
+[8-slot baseline](ma3-perf-20261106.md). The description below records the
+candidate, which survives in commit `3881094` and in
+`build/ma3-opt4-fir-20261002-01/`. `test/ma_fir.c` (`check-ma3-opt4`) stays in
+`make test` as an exact-bit guard for any later change to the FIR traversal.
+
 `src/ma_voice.c:decimate_oversample` now visits the circular history in two
 descending spans instead of checking for wrap at every tap. For a position
 `p` in 0–30, the spans are `p-1..0` and `30..p`. Together they visit exactly
