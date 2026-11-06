@@ -73,7 +73,7 @@ Each gate ran in a scratch build directory, with the vector lanes active:
 
 Run: `build/ma3-perf-20261106-02/`. The voice source SHA256 is `f8a90082…`,
 the pool `902e5dd6…`, the bench `38febbc5…` and the release binary
-`346aa3ea…`. HEAD is `38ab516`, plus `working-tree.diff`. GCC 16.2.1,
+`346aa3ea…`. HEAD is `38ab516` (now `a48baa7` after a history rewrite), plus `working-tree.diff`. GCC 16.2.1,
 `-O2 -ffp-contract=off`. CPU 2, `schedutil`, AC power, sleep inhibited from the
 start, and no suspend in the run window.
 

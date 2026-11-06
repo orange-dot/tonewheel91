@@ -8,7 +8,7 @@ the mixed result does not establish a speedup or realtime readiness.
 2026-11-06: **reverted.** At the operator's request, `src/ma_voice.c` went
 back to OPT3 (`3f99f5d7…`) before the
 [8-slot baseline](ma3-perf-20261106.md). The description below records the
-candidate, which survives in commit `3881094` and in
+candidate, which survives in commit `bb0ec9a` and in
 `build/ma3-opt4-fir-20261002-01/`. `test/ma_fir.c` (`check-ma3-opt4`) stays in
 `make test` as an exact-bit guard for any later change to the FIR traversal.
 
