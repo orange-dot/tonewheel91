@@ -170,9 +170,11 @@ static void config(void) {
     init(32, 1, 48000);
     b = a;
     const ma_voice_pool_config bad[] = {
-        {0, 1, 7, 1}, {65, 1, 7, 1}, {32, 3, 7, 1},
-        {31, 2, 7, 1}, {32, 0, 7, 1}, {32, 1, NAN, 1},
-        {32, 1, INFINITY, 1}, {32, 1, -1, 1}, {32, 1, 101, 1},
+        {0, 1, 7, 1, MA_POOL_ENGINE_AUTO}, {65, 1, 7, 1, MA_POOL_ENGINE_AUTO},
+        {32, 3, 7, 1, MA_POOL_ENGINE_AUTO}, {31, 2, 7, 1, MA_POOL_ENGINE_AUTO},
+        {32, 0, 7, 1, MA_POOL_ENGINE_AUTO}, {32, 1, NAN, 1, MA_POOL_ENGINE_AUTO},
+        {32, 1, INFINITY, 1, MA_POOL_ENGINE_AUTO}, {32, 1, -1, 1, MA_POOL_ENGINE_AUTO},
+        {32, 1, 101, 1, MA_POOL_ENGINE_AUTO}, {32, 1, 7, 1, (ma_pool_engine)2},
     };
     for (unsigned i = 0; i < sizeof bad / sizeof *bad; i++) {
         assert(!ma_voice_pool_init(&a, 48000, &bad[i], NULL));
@@ -320,8 +322,65 @@ static void hostile(void) {
         assert(a.diagnostics.active_slots == 0);
     }
 }
+/* The vector (AUTO) and scalar engines must agree bit-for-bit: every rendered
+ * frame, every slot's full ma_synth state after each render call, and the
+ * diagnostics. Short envelopes put sleeps inside render blocks; limit 12 leaves
+ * a partial bank. */
+static ma_voice_pool scalar_pool;
+static void engine_twin(void) {
+    static const unsigned limits[] = { 8, 12, 32 };
+    static const ma_patch *const patches[] = {
+        &ma_patch_tepih, &ma_patch_lead, &ma_patch_raster, &ma_patch_prizma, &ma_patch_granica };
+    static ma_frame lane_frames[257], scalar_frames[257];
+    uint64_t sleeps = 0, frames_total = 0;
+    for (unsigned li = 0; li < 3; li++)
+        for (unsigned unison = 1; unison <= 4; unison *= 2) {
+            ma_voice_pool_config c = ma_voice_pool_default_config;
+            c.limit = (uint8_t)limits[li];
+            c.unison_count = (uint8_t)unison;
+            ma_patch patch = *patches[(li * 3 + unison) % 5];
+            patch.amp_adsr = (ma_adsr){ 0.004f, 0.03f, 0.6f, 0.012f };
+            c.engine = MA_POOL_ENGINE_AUTO;
+            assert(ma_voice_pool_init(&a, 48000, &c, &patch));
+            c.engine = MA_POOL_ENGINE_SCALAR;
+            assert(ma_voice_pool_init(&scalar_pool, 48000, &c, &patch));
+            assert(!scalar_pool.lanes_enabled);
+            uint32_t seed = UINT32_C(0x6c616e65) ^ li ^ (unison << 8);
+            uint8_t held[16] = { 0 };
+            for (unsigned step = 0; step < 64; step++) {
+                seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+                uint8_t channel = (uint8_t)(seed >> 28 & 1);
+                if (seed % 3) {
+                    uint8_t note = (uint8_t)(36 + seed % 48);
+                    held[step % 16] = note;
+                    (void)ma_voice_pool_note_on(&a, channel, note, (uint8_t)(1 + (seed >> 9) % 127));
+                    (void)ma_voice_pool_note_on(&scalar_pool, channel, note, (uint8_t)(1 + (seed >> 9) % 127));
+                } else {
+                    uint8_t note = held[(seed >> 4) % 16];
+                    (void)ma_voice_pool_note_off(&a, channel, note, 0);
+                    (void)ma_voice_pool_note_off(&scalar_pool, channel, note, 0);
+                }
+                if (step % 17 == 5) {
+                    ma_voice_pool_set_sustain(&a, channel, seed & 2);
+                    ma_voice_pool_set_sustain(&scalar_pool, channel, seed & 2);
+                }
+                unsigned n = 1 + (seed >> 12) % 257;
+                ma_voice_pool_render(&a, lane_frames, n);
+                ma_voice_pool_render(&scalar_pool, scalar_frames, n);
+                frames_total += n;
+                assert(memcmp(lane_frames, scalar_frames, n * sizeof *lane_frames) == 0);
+                assert(memcmp(a.slot, scalar_pool.slot, sizeof a.slot) == 0);
+                assert(memcmp(&a.diagnostics, &scalar_pool.diagnostics, sizeof a.diagnostics) == 0);
+            }
+            sleeps += a.diagnostics.sleeps;
+        }
+    assert(sleeps > 0);
+    printf("ma_pool: vector and scalar engines bit-identical over %" PRIu64 " frames, %" PRIu64
+           " sleeps (vector lanes %s)\n", frames_total, sleeps,
+           a.lanes_enabled ? "active" : "unavailable on this CPU");
+}
 int main(void) {
-    config(); allocation(); group_priority(); event_stress(); sleep_wake(); stereo_gain(); hostile();
+    config(); allocation(); group_priority(); event_stress(); sleep_wake(); stereo_gain(); hostile(); engine_twin();
     const uint64_t expected[] = {
         UINT64_C(0x330b2b6d9f8f30a5), UINT64_C(0x71d5cec193f3ee93),
         UINT64_C(0xac05ed8c196f0d3b), UINT64_C(0x8bc31ab3650c18f1),

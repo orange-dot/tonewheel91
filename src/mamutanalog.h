@@ -488,11 +488,15 @@ void ma_card_bank_set_output(ma_card_bank *bank, float body_drive,
  * Exhausted uint64_t IDs fail without changing ownership until reset. */
 enum { MA_POOL_CAPACITY = 64 };
 #define MA_POOL_DEFAULT_SEED UINT64_C(0x4d41504f4f4c3031)
+/* Render engine. AUTO renders eight voices per AVX2 vector when the CPU and
+ * OS support AVX2 on x86-64, else scalar; both produce identical bits. */
+typedef enum : uint8_t { MA_POOL_ENGINE_AUTO = 0, MA_POOL_ENGINE_SCALAR = 1 } ma_pool_engine;
 typedef struct {
     uint8_t limit;                 /* 1..64, divisible by unison_count */
     uint8_t unison_count;          /* 1, 2, 4, 8 */
     float detune_cents;            /* finite 0..100, symmetric +/- range */
     uint64_t session_seed;
+    ma_pool_engine engine;         /* zero (AUTO) when left unset */
 } ma_voice_pool_config;
 extern const ma_voice_pool_config ma_voice_pool_default_config;
 
@@ -553,6 +557,35 @@ typedef struct {
     unsigned active_slots, peak_slots;
 } ma_pool_diagnostics;
 
+/* Lane-major oscillator, decimator and ladder state of eight pool slots for
+ * the vector render path. ma_voice_pool_render gathers awake slots here and
+ * scatters them back, in the scalar representation, when it returns or when
+ * a slot falls asleep; outside a render call the slots' ma_synth state is
+ * authoritative. Ring index j holds the slot's ring entry (own position + j);
+ * the shared positions restart at zero on every gather. No over-alignment:
+ * pools may come from malloc, so the vector path uses unaligned loads. */
+enum { MA_LANES = 8 };
+typedef struct {
+    uint64_t phase_q48[2][MA_LANES];
+    float triangle[2][MA_LANES];
+    float sync_residual[2][MA_LANES];
+    float guard_gain[2][MA_LANES];
+    float guard_target[2][MA_LANES];
+    float guard_step[2][MA_LANES];
+    int32_t guard_frames[2][MA_LANES];
+    int32_t triangle_initialized[2][MA_LANES];   /* 0 or -1 */
+    float history[2][31][MA_LANES];
+    float output_history[7][MA_LANES];
+    float ladder_state[4][MA_LANES];
+    float y4_guess[MA_LANES];
+    float pressure_input[MA_LANES];
+    float pressure_output[MA_LANES];
+    uint32_t reset_count[MA_LANES];
+    uint8_t history_pos[2], output_pos;          /* shared by all lanes */
+    uint8_t own_history_pos[2][MA_LANES], own_output_pos[MA_LANES];
+    uint8_t active;                              /* gathered, still awake */
+} ma_voice_lanes;
+
 typedef struct {
     ma_pool_slot slot[MA_POOL_CAPACITY];
     ma_pool_group group[MA_POOL_CAPACITY];
@@ -569,6 +602,8 @@ typedef struct {
     uint32_t transition_frames;
     float group_gain, pan_width, pan_dispersion;
     uint8_t cursor;
+    bool lanes_enabled;            /* resolved from config.engine at init */
+    ma_voice_lanes lanes[MA_POOL_CAPACITY / MA_LANES];
 } ma_voice_pool;
 static_assert(sizeof(ma_voice_pool) < 1024u * 1024u);
 

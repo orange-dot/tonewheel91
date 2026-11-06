@@ -41,7 +41,8 @@ class PerfCLI(unittest.TestCase):
                    "LIMIT": ["0", "4", "32x", " 32", "+32"], "FRAMES": ["129", "0"],
                    "SCENARIO": ["8", "3.0"], "ARM": ["4"],
                    "BLOCKS": ["0", "-1", "32x", "4097", "999999999999999999999"],
-                   "WARMUP": ["", "-1", "8x", "4097"], "PMU": ["", "on", "AUTO"]}
+                   "WARMUP": ["", "-1", "8x", "4097"], "PMU": ["", "on", "AUTO"],
+                   "ENGINE": ["", "vector", "SCALAR"]}
         with tempfile.TemporaryDirectory() as temp:
             raw = Path(temp) / "raw.csv"
             raw.write_text("preserve")
@@ -168,6 +169,16 @@ class PerfCLI(unittest.TestCase):
                                      [s for s in samples if s["pass"] == "2"]):
                 a, b = int(first["instructions"]), int(second["instructions"])
                 self.assertLessEqual(abs(a - b), max(a, b) // 10000)
+
+    def test_engines_render_identical_pcm(self):
+        hashes = {}
+        for engine in ("auto", "scalar"):
+            result = self.invoke({"PATCH": "Granica", "BCS": 1, "LIMIT": 8, "FRAMES": 128,
+                "SCENARIO": 4, "ARM": 3, "WARMUP": 2, "BLOCKS": 4, "ENGINE": engine}, "--run")
+            self.assertIn("# engine=%s;" % engine, result.stdout)
+            hashes[engine] = [(r["pcm_hash"], r["effect_post_fingerprint"], r["sleeps"],
+                               r["ladder_resets"]) for r in rows(result.stdout)]
+        self.assertEqual(hashes["auto"], hashes["scalar"])
 
     def test_empty_bracket_shape(self):
         result = self.invoke({"BLOCKS": 3}, "--overhead")

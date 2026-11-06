@@ -61,8 +61,11 @@ bool ma_voice_pool_init(ma_voice_pool *p, float rate,
         || (c.unison_count != 1 && c.unison_count != 2
             && c.unison_count != 4 && c.unison_count != 8)
         || c.limit % c.unison_count
-        || !(c.detune_cents >= 0 && c.detune_cents <= 100)) return false;
+        || !(c.detune_cents >= 0 && c.detune_cents <= 100)
+        || (c.engine != MA_POOL_ENGINE_AUTO
+            && c.engine != MA_POOL_ENGINE_SCALAR)) return false;
     *p = (ma_voice_pool){ .config = c };
+    p->lanes_enabled = c.engine == MA_POOL_ENGINE_AUTO && ma_lanes_supported();
     ma_synth_init_patch(&p->control, rate, patch ? patch : &ma_patch_tepih);
     initialize_slots(p);
     ma_effects_init(&p->effects, p->control.sample_rate_hz);
@@ -75,10 +78,12 @@ void ma_voice_pool_reset(ma_voice_pool *p) {
     ma_voice_snap_controls(&control);
     float amount = p->slot[0].voice.character.amount;
     ma_voice_pool_config config = p->config;
+    bool lanes_enabled = p->lanes_enabled;
     ma_chorus_controls chorus = p->effects.chorus.controls;
     ma_reverb_controls reverb = p->effects.reverb.controls;
     *p = (ma_voice_pool){ 0 };
     p->config = config;
+    p->lanes_enabled = lanes_enabled;
     copy_voice(&p->control, &control);
     initialize_slots(p);
     ma_effects_init(&p->effects, p->control.sample_rate_hz);
@@ -301,17 +306,39 @@ static void update_pan(ma_voice_pool *p, float width, float dispersion) {
     }
 }
 
-ma_frame ma_voice_pool_tick(ma_voice_pool *p) {
+/* One output frame. With lanes, every gathered voice is computed first, eight
+ * per vector; the per-slot transition, pan, sum and sleep logic then runs in
+ * slot order exactly as in the scalar path. Voices share no state, so
+ * computing them ahead of that loop changes no result. A slot that falls
+ * asleep is scattered at once, keeping its state frozen as in the scalar path. */
+static ma_frame pool_tick(ma_voice_pool *p, bool lanes) {
     ma_voice_tick_controls(&p->control);
     ma_synth *control = &p->control;
     float width = control->width == 0 ? 0 : control->smoothers.width.current;
     update_pan(p, width, control->smoothers.spatial_dispersion.current);
     float left = 0, right = 0;
     bool live_group[MA_POOL_CAPACITY] = { false };
+    float voice_out[MA_POOL_CAPACITY];
+    if (lanes) {
+        for (unsigned b = 0; b * MA_LANES < p->config.limit; b++) {
+            if (!p->lanes[b].active) continue;
+            ma_synth *voice[MA_LANES];
+            float detune[MA_LANES];
+            for (unsigned l = 0; l < MA_LANES; l++) {
+                unsigned i = b * MA_LANES + l;
+                bool here = i < p->config.limit;
+                voice[l] = &p->slot[here ? i : 0].voice;
+                detune[l] = here ? p->slot[i].detune_cents : 0.0f;
+            }
+            ma_lanes_tick(&p->lanes[b], voice, detune, &voice_out[b * MA_LANES]);
+        }
+    }
     for (unsigned i = 0; i < p->config.limit; i++) {
         ma_pool_slot *s = &p->slot[i];
-        float raw = s->awake ? ma_voice_tick_detuned(&s->voice, s->detune_cents)
-            * p->group_gain : 0;
+        float raw = s->awake
+            ? (lanes ? voice_out[i] : ma_voice_tick_detuned(&s->voice, s->detune_cents))
+                * p->group_gain
+            : 0;
         if (s->transition_remaining) {
             float old = (float)s->transition_remaining / (float)p->transition_frames;
             raw = s->transition_from * old + raw * (1 - old);
@@ -325,6 +352,11 @@ ma_frame ma_voice_pool_tick(ma_voice_pool *p) {
             s->awake = false;
             p->diagnostics.active_slots--;
             p->diagnostics.sleeps++;
+            if (lanes) {
+                ma_voice_lanes *bank = &p->lanes[i / MA_LANES];
+                ma_lanes_scatter(bank, i % MA_LANES, &s->voice);
+                bank->active &= (uint8_t)~(1u << (i % MA_LANES));
+            }
         }
         if (s->awake) live_group[s->group] = true;
     }
@@ -343,6 +375,27 @@ ma_frame ma_voice_pool_tick(ma_voice_pool *p) {
         control->smoothers.body_load_ratio.current, control->master_level);
     return ma_effects_tick(&p->effects, dry);
 }
+ma_frame ma_voice_pool_tick(ma_voice_pool *p) {
+    return pool_tick(p, false);
+}
+
 void ma_voice_pool_render(ma_voice_pool *p, ma_frame *frames, size_t count) {
-    for (size_t i = 0; i < count; i++) frames[i] = ma_voice_pool_tick(p);
+    if (!p->lanes_enabled || !count) {
+        for (size_t i = 0; i < count; i++) frames[i] = ma_voice_pool_tick(p);
+        return;
+    }
+    unsigned banks = (p->config.limit + MA_LANES - 1u) / MA_LANES;
+    for (unsigned b = 0; b < banks; b++) {
+        ma_lanes_begin(&p->lanes[b]);
+        for (unsigned l = 0; l < MA_LANES; l++) {
+            unsigned i = b * MA_LANES + l;
+            if (i < p->config.limit && p->slot[i].awake)
+                ma_lanes_gather(&p->lanes[b], l, &p->slot[i].voice);
+        }
+    }
+    for (size_t i = 0; i < count; i++) frames[i] = pool_tick(p, true);
+    for (unsigned b = 0; b < banks; b++)
+        for (unsigned l = 0; l < MA_LANES; l++)
+            if (p->lanes[b].active >> l & 1u)
+                ma_lanes_scatter(&p->lanes[b], l, &p->slot[b * MA_LANES + l].voice);
 }

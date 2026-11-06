@@ -979,44 +979,49 @@ static void update_control_targets(ma_synth *s) {
                         s->identity.spatial_dispersion, s->sample_rate_hz);
 }
 
-static ma_render_controls next_render_controls(ma_synth *s) {
+/* Fills in place, field by field: the fields read distinct smoothers, so
+ * order does not matter (a compound literal's initializers are
+ * indeterminately sequenced anyway), and no struct copy reaches memcpy. */
+static void fill_render_controls(ma_synth *s, ma_render_controls *c) {
     (void)next_smoother(&s->smoothers.spatial_dispersion);
     float slope = next_smoother(&s->smoothers.mozaik_slope);
-    return (ma_render_controls){
-        .vco1 = next_vco_controls(&s->smoothers.vco1),
-        .vco2 = next_vco_controls(&s->smoothers.vco2),
-        .vco2_level = next_smoother(&s->smoothers.vco2_level),
-        .vco2_fine_cents = next_smoother(&s->smoothers.vco2_fine_cents),
-        .sync_amount = next_smoother(&s->smoothers.sync_amount),
-        .sync_softness = next_smoother(&s->smoothers.sync_softness),
-        .crossmod_amount = next_smoother(&s->smoothers.crossmod_amount),
-        .noise_level = next_smoother(&s->smoothers.noise_level),
-        .raster_mix = next_smoother(&s->smoothers.raster_mix),
-        .raster_position = next_smoother(&s->smoothers.raster_position),
-        .raster_warp = next_smoother(&s->smoothers.raster_warp),
-        .bcs_amount = next_smoother(&s->smoothers.bcs_amount),
-        .bcs_regime = next_smoother(&s->smoothers.bcs_regime),
-        .mozaik_mix = next_smoother(&s->smoothers.mozaik_mix),
-        .mozaik_slope_q32 = mozaik_slope_q32(slope),
-        .mozaik_contrast = next_smoother(&s->smoothers.mozaik_contrast),
-        .mozaik_drift = next_smoother(&s->smoothers.mozaik_drift),
-        .mixer_pressure = next_smoother(&s->smoothers.mixer_pressure),
-        .filter_cutoff_hz = next_smoother(&s->smoothers.filter_cutoff_hz),
-        .filter_resonance = next_smoother(&s->smoothers.filter_resonance),
-        .filter_drive = next_smoother(&s->smoothers.filter_drive),
-        .filter_env_amount = next_smoother(
-            &s->smoothers.filter_env_amount),
-        .filter_keytrack = next_smoother(&s->smoothers.filter_keytrack),
-        .pitch_bend_semitones = next_smoother(
-            &s->smoothers.pitch_bend_semitones),
-        .poly_pressure = next_smoother(&s->smoothers.poly_pressure),
-        .lfo_depth = next_smoother(&s->smoothers.lfo_depth),
-        .lfo_rate_hz = next_smoother(&s->smoothers.lfo_rate_hz),
-        .body_drive = next_smoother(&s->smoothers.body_drive),
-        .body_load_ratio = next_smoother(&s->smoothers.body_load_ratio),
-        .width = next_smoother(&s->smoothers.width),
-        .crossfeed = next_smoother(&s->smoothers.crossfeed),
-    };
+    c->vco1 = next_vco_controls(&s->smoothers.vco1);
+    c->vco2 = next_vco_controls(&s->smoothers.vco2);
+    c->vco2_level = next_smoother(&s->smoothers.vco2_level);
+    c->vco2_fine_cents = next_smoother(&s->smoothers.vco2_fine_cents);
+    c->sync_amount = next_smoother(&s->smoothers.sync_amount);
+    c->sync_softness = next_smoother(&s->smoothers.sync_softness);
+    c->crossmod_amount = next_smoother(&s->smoothers.crossmod_amount);
+    c->noise_level = next_smoother(&s->smoothers.noise_level);
+    c->raster_mix = next_smoother(&s->smoothers.raster_mix);
+    c->raster_position = next_smoother(&s->smoothers.raster_position);
+    c->raster_warp = next_smoother(&s->smoothers.raster_warp);
+    c->bcs_amount = next_smoother(&s->smoothers.bcs_amount);
+    c->bcs_regime = next_smoother(&s->smoothers.bcs_regime);
+    c->mozaik_mix = next_smoother(&s->smoothers.mozaik_mix);
+    c->mozaik_slope_q32 = mozaik_slope_q32(slope);
+    c->mozaik_contrast = next_smoother(&s->smoothers.mozaik_contrast);
+    c->mozaik_drift = next_smoother(&s->smoothers.mozaik_drift);
+    c->mixer_pressure = next_smoother(&s->smoothers.mixer_pressure);
+    c->filter_cutoff_hz = next_smoother(&s->smoothers.filter_cutoff_hz);
+    c->filter_resonance = next_smoother(&s->smoothers.filter_resonance);
+    c->filter_drive = next_smoother(&s->smoothers.filter_drive);
+    c->filter_env_amount = next_smoother( &s->smoothers.filter_env_amount);
+    c->filter_keytrack = next_smoother(&s->smoothers.filter_keytrack);
+    c->pitch_bend_semitones = next_smoother( &s->smoothers.pitch_bend_semitones);
+    c->poly_pressure = next_smoother(&s->smoothers.poly_pressure);
+    c->lfo_depth = next_smoother(&s->smoothers.lfo_depth);
+    c->lfo_rate_hz = next_smoother(&s->smoothers.lfo_rate_hz);
+    c->body_drive = next_smoother(&s->smoothers.body_drive);
+    c->body_load_ratio = next_smoother(&s->smoothers.body_load_ratio);
+    c->width = next_smoother(&s->smoothers.width);
+    c->crossfeed = next_smoother(&s->smoothers.crossfeed);
+}
+
+static ma_render_controls next_render_controls(ma_synth *s) {
+    ma_render_controls c;
+    fill_render_controls(s, &c);
+    return c;
 }
 
 static uint32_t effective_phason_q32(const ma_synth *s) {
@@ -2183,11 +2188,13 @@ typedef struct {
 /* Controls, pitch, BCS, envelopes, filter prewarp, noise, the source frame,
  * and both 2x mozaik/raster steps. The ladder's previous y4 and the guard
  * gains are inputs because a lane bank may hold them. */
-static void voice_front_end(ma_synth *s, float detune_cents, float ladder_y4,
-                            float guard1, float guard2, ma_voice_front *f) {
-    /* Written in place: a freestanding core must not emit memcpy. */
-    f->controls = next_render_controls(s);
+static void voice_front_end(ma_synth *restrict s, float detune_cents,
+                            float ladder_y4, float guard1, float guard2,
+                            ma_voice_front *restrict f) {
+    /* Written in place (f never aliases s): a freestanding core must not
+     * emit memcpy. */
     ma_render_controls *controls = &f->controls;
+    fill_render_controls(s, controls);
     float character = next_character(s);
     float note_position = next_glide_note(s);
     float pitch_delta = controls->pitch_bend_semitones + next_lfo(s, controls);
@@ -2323,6 +2330,657 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     float output = voice_back_end(s, &f, voice_filter(s, &f, at_2x));
     if (raw) return (ma_frame){ .left = output, .right = output };
     return render_output(s, &f.controls, output);
+}
+#endif
+
+/* ---------------------------------------------------------------------------
+ * Vector lanes (2026-11-06): eight pool voices per AVX2 vector, bit-exact.
+ * The scalar front and back ends still run per voice. Four stages run eight
+ * lanes wide: the oscillator block, the 8x->4x->2x decimators, the 2x
+ * mix/pressure/ladder steps, and the 7-tap output decimator. Every lane
+ * performs its voice's scalar float operations in the scalar order, with no
+ * FMA and an exact replacement for each integer/float conversion AVX2 lacks
+ * (see docs/ma3-simd-osc-spike-20261106.md). Only these functions are
+ * target("avx2"); the pool calls them after runtime detection.
+ * ------------------------------------------------------------------------ */
+#if !defined(MA_SOURCE_EVIDENCE) && defined(__x86_64__)
+#include <cpuid.h>
+#include <immintrin.h>
+
+bool ma_lanes_supported(void) {
+    unsigned a = 0, b = 0, c = 0, d = 0;
+    if (!__get_cpuid(1, &a, &b, &c, &d)) return false;
+    if (!(c & bit_OSXSAVE) || !(c & bit_AVX)) return false;
+    unsigned xcr0 = 0, xcr0_high = 0;
+    __asm__ volatile("xgetbv" : "=a"(xcr0), "=d"(xcr0_high) : "c"(0));
+    (void)xcr0_high;
+    if ((xcr0 & 6u) != 6u) return false;          /* OS saves XMM and YMM */
+    if (!__get_cpuid_count(7, 0, &a, &b, &c, &d)) return false;
+    return (b & bit_AVX2) != 0;
+}
+
+void ma_lanes_begin(ma_voice_lanes *b) {
+    *b = (ma_voice_lanes){};
+}
+
+void ma_lanes_gather(ma_voice_lanes *b, unsigned lane, const ma_synth *s) {
+    const ma_oscillator *osc[2] = { &s->oscillator1, &s->oscillator2 };
+    for (int k = 0; k < 2; k++) {
+        b->phase_q48[k][lane] = osc[k]->phase_q48;
+        b->triangle[k][lane] = osc[k]->triangle;
+        b->sync_residual[k][lane] = osc[k]->sync_residual;
+        b->guard_gain[k][lane] = osc[k]->guard_gain;
+        b->guard_target[k][lane] = osc[k]->guard_target;
+        b->guard_step[k][lane] = osc[k]->guard_step;
+        b->guard_frames[k][lane] = osc[k]->guard_frames;
+        b->triangle_initialized[k][lane] = osc[k]->triangle_initialized ? -1 : 0;
+        uint8_t own = s->oversample_history_pos[k];
+        b->own_history_pos[k][lane] = own;
+        for (int j = 0; j < 31; j++)
+            b->history[k][j][lane] = s->oversample_history[k][(own + j) % 31];
+    }
+    uint8_t own = s->ladder.output_pos;
+    b->own_output_pos[lane] = own;
+    for (int j = 0; j < 7; j++)
+        b->output_history[j][lane] = s->ladder.output_history[(own + j) % 7];
+    for (int k = 0; k < 4; k++) b->ladder_state[k][lane] = s->ladder.state[k];
+    b->y4_guess[lane] = s->ladder.y4_guess;
+    b->pressure_input[lane] = s->ladder.pressure_input;
+    b->pressure_output[lane] = s->ladder.pressure_output;
+    b->reset_count[lane] = s->ladder.reset_count;
+    b->active |= (uint8_t)(1u << lane);
+}
+
+void ma_lanes_scatter(const ma_voice_lanes *b, unsigned lane, ma_synth *s) {
+    ma_oscillator *osc[2] = { &s->oscillator1, &s->oscillator2 };
+    for (int k = 0; k < 2; k++) {
+        osc[k]->phase_q48 = b->phase_q48[k][lane];
+        osc[k]->triangle = b->triangle[k][lane];
+        osc[k]->sync_residual = b->sync_residual[k][lane];
+        osc[k]->guard_gain = b->guard_gain[k][lane];
+        osc[k]->guard_target = b->guard_target[k][lane];
+        osc[k]->guard_step = b->guard_step[k][lane];
+        osc[k]->guard_frames = (uint16_t)b->guard_frames[k][lane];
+        osc[k]->triangle_initialized = b->triangle_initialized[k][lane] != 0;
+        uint8_t own = b->own_history_pos[k][lane];
+        for (int j = 0; j < 31; j++)
+            s->oversample_history[k][(own + j) % 31] = b->history[k][j][lane];
+        s->oversample_history_pos[k] = (uint8_t)((own + b->history_pos[k]) % 31);
+    }
+    uint8_t own = b->own_output_pos[lane];
+    for (int j = 0; j < 7; j++)
+        s->ladder.output_history[(own + j) % 7] = b->output_history[j][lane];
+    s->ladder.output_pos = (uint8_t)((own + b->output_pos) % 7);
+    for (int k = 0; k < 4; k++) s->ladder.state[k] = b->ladder_state[k][lane];
+    s->ladder.y4_guess = b->y4_guess[lane];
+    s->ladder.pressure_input = b->pressure_input[lane];
+    s->ladder.pressure_output = b->pressure_output[lane];
+    s->ladder.reset_count = b->reset_count[lane];
+}
+
+#define ML_TARGET __attribute__((target("avx2")))
+#define ML_F(x) _mm256_set1_ps(x)
+typedef __m256 ml_f;
+typedef __m256i ml_i;
+typedef struct { ml_i lo, hi; } ml_u64;          /* lanes 0-3, 4-7 */
+
+/* Per-sample lane inputs: the front end's products for each lane. */
+typedef struct {
+    alignas(32) float c1[5][MA_LANES], c2[5][MA_LANES];   /* saw pulse tri sine pw */
+    alignas(32) float div1[MA_LANES], div2[MA_LANES], mixdiv[MA_LANES], rate[MA_LANES];
+    alignas(32) float v1hz[MA_LANES], v1step[MA_LANES], v2hz[MA_LANES], v2step[MA_LANES];
+    alignas(32) float envr[MA_LANES], sync[MA_LANES], base[MA_LANES], noise[MA_LANES];
+    alignas(32) float g1[MA_LANES], g2[MA_LANES], crossmod[MA_LANES], v2level[MA_LANES];
+    alignas(32) float noiselevel[MA_LANES], guard_hz[MA_LANES], guard_frames_f[MA_LANES];
+    alignas(32) float raster_mix[MA_LANES], mozaik_mix[MA_LANES], pressure[MA_LANES];
+    alignas(32) float drive[MA_LANES], resonance[MA_LANES], filter_g[MA_LANES];
+    alignas(32) float mozaik_gain[2][MA_LANES], mozaik[2][MA_LANES], raster[2][MA_LANES];
+    alignas(32) uint64_t v1q[MA_LANES], v2q[MA_LANES];
+    alignas(32) int32_t act1[MA_LANES], act2[MA_LANES], guard_frames_i[MA_LANES];
+} ml_in;
+
+static void ml_benign(ml_in *in) {
+    *in = (ml_in){};
+    for (int l = 0; l < MA_LANES; l++) {
+        in->div1[l] = in->div2[l] = in->mixdiv[l] = in->rate[l] = 1.0f;
+        in->guard_frames_f[l] = 1.0f;
+        in->guard_frames_i[l] = 1;
+    }
+}
+
+static void ml_fill(ml_in *in, unsigned l, const ma_voice_front *f,
+                    const ma_synth *s) {
+    const ma_vco_controls *v[2] = { &f->source.vco1, &f->source.vco2 };
+    float (*c[2])[MA_LANES] = { in->c1, in->c2 };
+    for (int k = 0; k < 2; k++) {
+        c[k][0][l] = v[k]->saw_level;
+        c[k][1][l] = v[k]->pulse_level;
+        c[k][2][l] = v[k]->triangle_level;
+        c[k][3][l] = v[k]->sine_level;
+        c[k][4][l] = v[k]->pulse_width;
+    }
+    in->div1[l] = f->source.vco1_divisor;
+    in->div2[l] = f->source.vco2_divisor;
+    in->mixdiv[l] = f->source.mixer_divisor;
+    in->rate[l] = f->source.rate_hz;
+    in->v1hz[l] = f->source.vco1_hz;
+    in->v1step[l] = f->source.vco1_step;
+    in->v1q[l] = f->source.vco1_step_q48;
+    in->v2hz[l] = f->source.vco2_hz;
+    in->v2step[l] = f->source.vco2_step;
+    in->v2q[l] = f->source.vco2_step_q48;
+    in->envr[l] = f->source.envelope_ratio;
+    in->sync[l] = f->source.sync;
+    in->act1[l] = (int32_t)f->source.vco1_active;
+    in->act2[l] = (int32_t)f->source.vco2_active;
+    in->base[l] = f->base_hz;
+    in->noise[l] = f->noise;
+    in->g1[l] = f->guard1;
+    in->g2[l] = f->guard2;
+    in->crossmod[l] = f->controls.crossmod_amount;
+    in->v2level[l] = f->controls.vco2_level;
+    in->noiselevel[l] = f->controls.noise_level;
+    in->guard_hz[l] = 0.45f * s->sample_rate_hz;
+    uint16_t frames = smoothing_frames(s->sample_rate_hz);
+    in->guard_frames_i[l] = frames;
+    in->guard_frames_f[l] = (float)frames;
+    in->raster_mix[l] = f->controls.raster_mix;
+    in->mozaik_mix[l] = f->controls.mozaik_mix;
+    in->pressure[l] = f->controls.mixer_pressure;
+    in->drive[l] = f->controls.filter_drive;
+    in->resonance[l] = f->controls.filter_resonance;
+    in->filter_g[l] = f->filter_g;
+    for (int k = 0; k < 2; k++) {
+        in->mozaik_gain[k][l] = f->mozaik_gain[k];
+        in->mozaik[k][l] = f->mozaik[k];
+        in->raster[k][l] = f->raster[k];
+    }
+}
+
+/* ---- lane primitives ---- */
+ML_TARGET static inline ml_f ml_ld(const float *a) { return _mm256_loadu_ps(a); }
+ML_TARGET static inline bool ml_any(ml_f m) { return !_mm256_testz_ps(m, m); }
+ML_TARGET static inline ml_f ml_sel(ml_f a, ml_f b, ml_f m) { return _mm256_blendv_ps(a, b, m); }
+ML_TARGET static inline ml_f ml_lt(ml_f a, ml_f b) { return _mm256_cmp_ps(a, b, _CMP_LT_OQ); }
+ML_TARGET static inline ml_f ml_gt(ml_f a, ml_f b) { return _mm256_cmp_ps(a, b, _CMP_GT_OQ); }
+ML_TARGET static inline ml_f ml_ge(ml_f a, ml_f b) { return _mm256_cmp_ps(a, b, _CMP_GE_OQ); }
+ML_TARGET static inline ml_f ml_le(ml_f a, ml_f b) { return _mm256_cmp_ps(a, b, _CMP_LE_OQ); }
+ML_TARGET static inline ml_f ml_add(ml_f a, ml_f b) { return _mm256_add_ps(a, b); }
+ML_TARGET static inline ml_f ml_sub(ml_f a, ml_f b) { return _mm256_sub_ps(a, b); }
+ML_TARGET static inline ml_f ml_mul(ml_f a, ml_f b) { return _mm256_mul_ps(a, b); }
+ML_TARGET static inline ml_f ml_div(ml_f a, ml_f b) { return _mm256_div_ps(a, b); }
+ML_TARGET static inline ml_f ml_and(ml_f a, ml_f b) { return _mm256_and_ps(a, b); }
+
+ML_TARGET static inline ml_u64 ml_u64_set(uint64_t x) {
+    return (ml_u64){ _mm256_set1_epi64x((long long)x), _mm256_set1_epi64x((long long)x) };
+}
+ML_TARGET static inline ml_u64 ml_u64_ld(const uint64_t a[MA_LANES]) {
+    return (ml_u64){ _mm256_loadu_si256((const ml_i *)a), _mm256_loadu_si256((const ml_i *)(a + 4)) };
+}
+ML_TARGET static inline void ml_u64_st(uint64_t a[MA_LANES], ml_u64 v) {
+    _mm256_storeu_si256((ml_i *)a, v.lo);
+    _mm256_storeu_si256((ml_i *)(a + 4), v.hi);
+}
+ML_TARGET static inline ml_u64 ml_u64_add(ml_u64 a, ml_u64 b) {
+    return (ml_u64){ _mm256_add_epi64(a.lo, b.lo), _mm256_add_epi64(a.hi, b.hi) };
+}
+ML_TARGET static inline ml_u64 ml_u64_sub(ml_u64 a, ml_u64 b) {
+    return (ml_u64){ _mm256_sub_epi64(a.lo, b.lo), _mm256_sub_epi64(a.hi, b.hi) };
+}
+ML_TARGET static inline ml_u64 ml_u64_and(ml_u64 a, ml_u64 b) {
+    return (ml_u64){ _mm256_and_si256(a.lo, b.lo), _mm256_and_si256(a.hi, b.hi) };
+}
+ML_TARGET static inline ml_u64 ml_u64_srl(ml_u64 a, int n) {
+    return (ml_u64){ _mm256_srli_epi64(a.lo, n), _mm256_srli_epi64(a.hi, n) };
+}
+/* low 32 bits of each 64-bit lane, as 8 x i32 in lane order */
+ML_TARGET static inline ml_i ml_u64_low32(ml_u64 v) {
+    const ml_i idx = _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7);
+    return _mm256_permute2x128_si256(_mm256_permutevar8x32_epi32(v.lo, idx),
+                                     _mm256_permutevar8x32_epi32(v.hi, idx), 0x20);
+}
+ML_TARGET static inline ml_u64 ml_mask64(ml_f m) {
+    ml_i i = _mm256_castps_si256(m);
+    return (ml_u64){ _mm256_cvtepi32_epi64(_mm256_castsi256_si128(i)),
+                     _mm256_cvtepi32_epi64(_mm256_extracti128_si256(i, 1)) };
+}
+ML_TARGET static inline ml_u64 ml_u64_sel(ml_u64 a, ml_u64 b, ml_f m) {
+    ml_u64 m64 = ml_mask64(m);
+    return (ml_u64){ _mm256_blendv_epi8(a.lo, b.lo, m64.lo), _mm256_blendv_epi8(a.hi, b.hi, m64.hi) };
+}
+ML_TARGET static inline ml_f ml_u64_ge(ml_u64 a, uint64_t bound) {   /* both < 2^62 */
+    ml_u64 b = ml_u64_set(bound - 1);
+    return _mm256_castsi256_ps(ml_u64_low32((ml_u64){
+        _mm256_cmpgt_epi64(a.lo, b.lo), _mm256_cmpgt_epi64(a.hi, b.hi) }));
+}
+/* (float)(uint32_t)u exactly: two exact 16-bit halves, one rounding */
+ML_TARGET static inline ml_f ml_u32_to_f(ml_i u) {
+    ml_f hi = _mm256_cvtepi32_ps(_mm256_srli_epi32(u, 16));
+    ml_f lo = _mm256_cvtepi32_ps(_mm256_and_si256(u, _mm256_set1_epi32(0xffff)));
+    return ml_add(ml_mul(hi, ML_F(65536.0f)), lo);
+}
+ML_TARGET static inline ml_f ml_turns(ml_u64 q) {          /* phase_turns */
+    return ml_mul(ml_u32_to_f(ml_u64_low32(ml_u64_srl(q, 16))), ML_F(0x1p-32f));
+}
+/* (float)x exactly for x <= 2^48: two exact 24-bit halves, one rounding */
+ML_TARGET static inline ml_f ml_u48_to_f(ml_u64 x) {
+    ml_f hi = _mm256_cvtepi32_ps(ml_u64_low32(ml_u64_srl(x, 24)));
+    ml_f lo = _mm256_cvtepi32_ps(ml_u64_low32(ml_u64_and(x, ml_u64_set(0xffffffu))));
+    return ml_add(ml_mul(hi, ML_F(16777216.0f)), lo);
+}
+/* (uint64_t)f for +-0 <= f < 2^63: truncated mantissa * 2^(e - 150) */
+ML_TARGET static inline ml_i ml_f_to_u64_half(ml_i bits) {
+    ml_i e = _mm256_and_si256(_mm256_srli_epi64(bits, 23), _mm256_set1_epi64x(0xff));
+    ml_i m = _mm256_or_si256(_mm256_and_si256(bits, _mm256_set1_epi64x(0x7fffff)),
+                             _mm256_set1_epi64x(0x800000));
+    return _mm256_or_si256(
+        _mm256_sllv_epi64(m, _mm256_sub_epi64(e, _mm256_set1_epi64x(150))),
+        _mm256_srlv_epi64(m, _mm256_sub_epi64(_mm256_set1_epi64x(150), e)));
+}
+ML_TARGET static inline ml_u64 ml_f_to_u64(ml_f f) {
+    ml_i bits = _mm256_castps_si256(f);
+    return (ml_u64){
+        ml_f_to_u64_half(_mm256_cvtepu32_epi64(_mm256_castsi256_si128(bits))),
+        ml_f_to_u64_half(_mm256_cvtepu32_epi64(_mm256_extracti128_si256(bits, 1))) };
+}
+
+/* ---- the scalar helpers, lane by lane ---- */
+ML_TARGET static inline ml_f ml_clamp(ml_f v, float lo, float hi) {
+    return ml_sel(ml_sel(v, ML_F(hi), ml_gt(v, ML_F(hi))), ML_F(lo), ml_lt(v, ML_F(lo)));
+}
+ML_TARGET static inline ml_f ml_abs(ml_f x) {
+    return ml_and(x, _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff)));
+}
+ML_TARGET static inline ml_f ml_smooth5(ml_f x) {
+    return ml_mul(ml_mul(ml_mul(x, x), x),
+                  ml_add(ML_F(10.0f), ml_mul(x, ml_add(ML_F(-15.0f), ml_mul(ML_F(6.0f), x)))));
+}
+ML_TARGET static inline ml_f ml_wrap(ml_f p) {
+    p = ml_sel(p, ml_sub(p, ML_F(1.0f)), ml_ge(p, ML_F(1.0f)));
+    return ml_sel(p, ml_add(p, ML_F(1.0f)), ml_lt(p, ML_F(0.0f)));
+}
+ML_TARGET static inline ml_f ml_poly_blep(ml_f phase, ml_f step) {
+    ml_f valid = ml_gt(step, ML_F(FLT_EPSILON));
+    ml_f edge = ml_mul(ML_F(8.0f), step);
+    edge = ml_sel(edge, ML_F(0.49f), ml_gt(edge, ML_F(0.49f)));
+    ml_f low = ml_and(ml_lt(phase, edge), valid);
+    ml_f high = _mm256_andnot_ps(low, ml_and(ml_gt(phase, ml_sub(ML_F(1.0f), edge)), valid));
+    if (!ml_any(_mm256_or_ps(low, high))) return _mm256_setzero_ps();
+    ml_f xl = ml_mul(ML_F(0.5f), ml_add(ml_div(phase, edge), ML_F(1.0f)));
+    ml_f xh = ml_mul(ML_F(0.5f), ml_add(ml_div(ml_sub(phase, ML_F(1.0f)), edge), ML_F(1.0f)));
+    return _mm256_or_ps(ml_and(low, ml_mul(ML_F(2.0f), ml_sub(ml_smooth5(xl), ML_F(1.0f)))),
+                        ml_and(high, ml_mul(ML_F(2.0f), ml_smooth5(xh))));
+}
+ML_TARGET static inline ml_f ml_saw(ml_f phase, ml_f blep) {
+    return ml_clamp(ml_sub(ml_sub(ml_mul(ML_F(2.0f), phase), ML_F(1.0f)), blep), -1.25f, 1.25f);
+}
+ML_TARGET static inline ml_f ml_pulse_with_blep(ml_f phase, ml_f width, ml_f step, ml_f blep) {
+    ml_f sample = ml_sel(ML_F(-1.0f), ML_F(1.0f), ml_lt(phase, width));
+    sample = ml_add(sample, blep);
+    sample = ml_sub(sample, ml_poly_blep(ml_wrap(ml_sub(phase, width)), step));
+    return ml_clamp(sample, -1.25f, 1.25f);
+}
+ML_TARGET static inline ml_f ml_pulse(ml_f phase, ml_f width, ml_f step) {
+    return ml_pulse_with_blep(phase, width, step, ml_poly_blep(phase, step));
+}
+ML_TARGET static inline ml_f ml_raw_triangle(ml_f p) {
+    return ml_sub(ML_F(1.0f), ml_mul(ML_F(4.0f), ml_abs(ml_sub(p, ML_F(0.5f)))));
+}
+ML_TARGET static inline ml_f ml_sin_turns(ml_f p) {
+    ml_f t = ml_sel(ml_sel(ml_sub(p, ML_F(1.0f)), ml_sub(ML_F(0.5f), p), ml_lt(p, ML_F(0.75f))),
+                    p, ml_lt(p, ML_F(0.25f)));
+    ml_f q = ml_mul(t, t);
+    return ml_mul(t, ml_add(ML_F(6.28318531f), ml_mul(q, ml_add(ML_F(-41.3417022f),
+        ml_mul(q, ml_add(ML_F(81.6052493f), ml_mul(q, ml_add(ML_F(-76.7058597f),
+        ml_mul(q, ML_F(42.0586939f))))))))));
+}
+ML_TARGET static inline ml_f ml_sat(ml_f x) {               /* tw_sat */
+    x = ml_sel(ml_sel(x, ML_F(-3.0f), ml_lt(x, ML_F(-3.0f))), ML_F(3.0f), ml_gt(x, ML_F(3.0f)));
+    return ml_div(ml_mul(x, ml_add(ML_F(27.0f), ml_mul(x, x))),
+                  ml_add(ML_F(27.0f), ml_mul(ml_mul(ML_F(9.0f), x), x)));
+}
+ML_TARGET static inline ml_f ml_mamut_sine(ml_f phase) {
+    ml_f warm = ml_div(ml_sat(ml_mul(ML_F(1.45f), ml_sin_turns(phase))), ML_F(tw_sat(1.45f)));
+    ml_f second = ml_sin_turns(ml_wrap(ml_add(ml_mul(ML_F(2.0f), phase), ML_F(0.07f))));
+    return ml_mul(ML_F(0.95591217f), ml_add(warm, ml_mul(ML_F(0.07f), second)));
+}
+
+typedef struct { ml_f saw, pulse, tri, sine, pw; } ml_vco;
+ML_TARGET static inline ml_vco ml_vco_ld(const float c[5][MA_LANES]) {
+    return (ml_vco){ ml_ld(c[0]), ml_ld(c[1]), ml_ld(c[2]), ml_ld(c[3]), ml_ld(c[4]) };
+}
+ML_TARGET static inline ml_f ml_raw_wave_mix(ml_f phase, const ml_vco *c, ml_f divisor) {
+    ml_f saw = ml_sub(ml_mul(ML_F(2.0f), phase), ML_F(1.0f));
+    ml_f pulse = ml_sel(ML_F(-1.0f), ML_F(1.0f), ml_lt(phase, c->pw));
+    ml_f sample = ml_add(ml_add(ml_mul(c->saw, saw), ml_mul(c->pulse, pulse)),
+                         ml_mul(c->tri, ml_raw_triangle(phase)));
+    ml_f sine = ml_gt(c->sine, _mm256_setzero_ps());
+    if (ml_any(sine))
+        sample = ml_sel(sample, ml_add(sample, ml_mul(c->sine, ml_mamut_sine(phase))), sine);
+    return ml_div(sample, divisor);
+}
+
+typedef struct {
+    ml_u64 phase;
+    ml_f triangle, residual, gain, target, step, init;
+    ml_i frames;
+} ml_osc;
+ML_TARGET static inline ml_osc ml_osc_ld(const ma_voice_lanes *b, int k) {
+    return (ml_osc){ ml_u64_ld(b->phase_q48[k]), ml_ld(b->triangle[k]), ml_ld(b->sync_residual[k]),
+                     ml_ld(b->guard_gain[k]), ml_ld(b->guard_target[k]), ml_ld(b->guard_step[k]),
+                     _mm256_castsi256_ps(_mm256_loadu_si256((const ml_i *)b->triangle_initialized[k])),
+                     _mm256_loadu_si256((const ml_i *)b->guard_frames[k]) };
+}
+ML_TARGET static inline void ml_osc_st(ma_voice_lanes *b, int k, const ml_osc *o) {
+    ml_u64_st(b->phase_q48[k], o->phase);
+    _mm256_storeu_ps(b->triangle[k], o->triangle);
+    _mm256_storeu_ps(b->sync_residual[k], o->residual);
+    _mm256_storeu_ps(b->guard_gain[k], o->gain);
+    _mm256_storeu_ps(b->guard_target[k], o->target);
+    _mm256_storeu_ps(b->guard_step[k], o->step);
+    _mm256_storeu_si256((ml_i *)b->triangle_initialized[k], _mm256_castps_si256(o->init));
+    _mm256_storeu_si256((ml_i *)b->guard_frames[k], o->frames);
+}
+
+ML_TARGET static inline ml_f ml_preview(const ml_osc *o, const ml_vco *c, ml_f step,
+                                        ml_f divisor, const int32_t active[MA_LANES]) {
+    ml_i act = _mm256_loadu_si256((const ml_i *)active);
+    ml_f phase = ml_turns(o->phase);
+    ml_f blep = ml_poly_blep(phase, step);
+    ml_f saw_on = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
+        _mm256_and_si256(act, _mm256_set1_epi32(WAVE_SAW)), _mm256_set1_epi32(WAVE_SAW)));
+    ml_f pulse_on = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
+        _mm256_and_si256(act, _mm256_set1_epi32(WAVE_PULSE)), _mm256_set1_epi32(WAVE_PULSE)));
+    ml_f tri_on = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
+        _mm256_and_si256(act, _mm256_set1_epi32(WAVE_TRIANGLE)), _mm256_set1_epi32(WAVE_TRIANGLE)));
+    ml_f saw = ml_and(saw_on, ml_saw(phase, blep));
+    ml_f pulse = ml_and(pulse_on, ml_pulse_with_blep(phase, c->pw, step, blep));
+    ml_f tri = ml_and(tri_on, ml_sel(ml_raw_triangle(phase),
+                                     ml_clamp(o->triangle, -1.0f, 1.0f), o->init));
+    ml_f sample = ml_add(ml_add(ml_mul(c->saw, saw), ml_mul(c->pulse, pulse)), ml_mul(c->tri, tri));
+    ml_f sine = ml_gt(c->sine, _mm256_setzero_ps());
+    if (ml_any(sine))
+        sample = ml_sel(sample, ml_add(sample, ml_mul(c->sine, ml_mamut_sine(phase))), sine);
+    return ml_div(sample, divisor);
+}
+
+ML_TARGET static inline ml_f ml_render_oscillator(ml_osc *o, ml_f preview, ml_f step,
+                                                  ml_f sync_correction) {
+    ml_f phase = ml_turns(o->phase);
+    const ml_f all = _mm256_castsi256_ps(_mm256_set1_epi32(-1));
+    if (!_mm256_testc_ps(o->init, all)) {
+        o->triangle = ml_sel(ml_raw_triangle(phase), o->triangle, o->init);
+        o->init = all;
+    }
+    ml_f sample = ml_add(ml_add(preview, o->residual), sync_correction);
+    o->residual = _mm256_setzero_ps();
+    o->triangle = ml_clamp(ml_add(o->triangle, ml_mul(ml_mul(ml_pulse(phase, ML_F(0.5f), step),
+                                                              ML_F(4.0f)), step)), -1.25f, 1.25f);
+    return ml_clamp(sample, -1.25f, 1.25f);
+}
+
+ML_TARGET static inline void ml_set_guard_target(ml_osc *o, ml_f target, const ml_in *in) {
+    ml_f changed = _mm256_cmp_ps(target, o->target, _CMP_NEQ_UQ);
+    if (!ml_any(changed)) return;
+    o->target = ml_sel(o->target, target, changed);
+    o->frames = _mm256_blendv_epi8(o->frames, _mm256_loadu_si256((const ml_i *)in->guard_frames_i),
+                                   _mm256_castps_si256(changed));
+    o->step = ml_sel(o->step, ml_div(ml_sub(target, o->gain), ml_ld(in->guard_frames_f)), changed);
+}
+ML_TARGET static inline void ml_next_guard_gain(ml_osc *o) {
+    ml_i zero = _mm256_setzero_si256();
+    ml_i active = _mm256_xor_si256(_mm256_cmpeq_epi32(o->frames, zero), _mm256_set1_epi32(-1));
+    ml_f act = _mm256_castsi256_ps(active);
+    o->gain = ml_sel(o->gain, ml_add(o->gain, o->step), act);
+    o->frames = _mm256_sub_epi32(o->frames, _mm256_and_si256(active, _mm256_set1_epi32(1)));
+    ml_f done = ml_and(act, _mm256_castsi256_ps(_mm256_cmpeq_epi32(o->frames, zero)));
+    o->gain = ml_sel(o->gain, o->target, done);
+}
+
+/* render_source_substep, eight lanes */
+ML_TARGET static inline ml_f ml_substep(ml_osc *o1, ml_osc *o2, const ml_in *in,
+                                        const ml_vco *c1, const ml_vco *c2, ml_f guard_hz) {
+    const ml_f zero = _mm256_setzero_ps(), one = ML_F(1.0f);
+    const ml_u64 mask48 = ml_u64_set(PHASE_MASK_Q48);
+    ml_f div2 = ml_ld(in->div2), v2step = ml_ld(in->v2step), sync = ml_ld(in->sync);
+    ml_u64 v2q = ml_u64_ld(in->v2q);
+    ml_f v2preview = ml_preview(o2, c2, v2step, div2, in->act2);
+
+    ml_f v1hz = ml_ld(in->v1hz), v1step = ml_ld(in->v1step);
+    ml_u64 v1q = ml_u64_ld(in->v1q);
+    ml_f crossmod = ml_ld(in->crossmod);
+    ml_f cm = _mm256_cmp_ps(crossmod, zero, _CMP_NEQ_UQ);
+    if (ml_any(cm)) {
+        ml_f ratio = ml_clamp(ml_add(one, ml_mul(ml_mul(v2preview, crossmod), ML_F(0.25f))),
+                              0.25f, 4.0f);
+        ml_f hz = ml_mul(ml_mul(ml_ld(in->base), ratio), ml_ld(in->envr));
+        ml_f step = ml_clamp(ml_div(hz, ml_ld(in->rate)), 0.0f, 0.45f);
+        ml_u64 q = ml_f_to_u64(ml_mul(step, ML_F(0x1p48f)));
+        v1hz = ml_sel(v1hz, hz, cm);
+        v1q = ml_u64_sel(v1q, q, cm);
+        v1step = ml_sel(v1step, ml_turns(q), cm);
+    }
+    ml_set_guard_target(o1, ml_sel(zero, one, ml_lt(v1hz, guard_hz)), in);
+
+    ml_u64 sum1 = ml_u64_add(o1->phase, v1q);
+    ml_f wrap = ml_u64_ge(sum1, PHASE_ONE_Q48);
+    ml_f sync_on = ml_gt(sync, zero);
+    ml_f event = ml_and(ml_and(wrap, sync_on), ml_gt(v1step, ML_F(FLT_EPSILON)));
+    ml_f event_fraction = one, sync_now = zero, sync_next = zero;
+    ml_u64 reset_q = ml_u64_set(0);
+    if (ml_any(event)) {
+        ml_f fraction = ml_clamp(ml_div(ml_u48_to_f(ml_u64_sub(ml_u64_set(PHASE_ONE_Q48), o1->phase)),
+                                        ml_u48_to_f(v1q)), 0.0f, 1.0f);
+        ml_u64 advance = ml_f_to_u64(ml_mul(ml_u48_to_f(v2q), fraction));
+        ml_u64 event_q = ml_u64_and(ml_u64_add(o2->phase, advance), mask48);
+        ml_u64 reset = ml_u64_and(ml_f_to_u64(ml_mul(ml_u48_to_f(event_q), ml_sub(one, sync))), mask48);
+        ml_f jump = ml_sub(ml_raw_wave_mix(ml_turns(reset), c2, div2),
+                           ml_raw_wave_mix(ml_turns(event_q), c2, div2));
+        ml_f before = ml_mul(ML_F(0.5f), ml_sub(one, fraction));
+        ml_f after = ml_sub(one, ml_mul(ML_F(0.5f), fraction));
+        event_fraction = ml_sel(one, fraction, event);
+        sync_now = ml_and(event, ml_mul(jump, ml_smooth5(before)));
+        sync_next = ml_and(event, ml_mul(jump, ml_sub(ml_smooth5(after), one)));
+        reset_q = ml_u64_sel(reset_q, reset, event);
+    }
+
+    ml_f v1preview = ml_preview(o1, c1, v1step, ml_ld(in->div1), in->act1);
+    ml_f vco1 = ml_render_oscillator(o1, v1preview, v1step, zero);
+    ml_f vco2 = ml_render_oscillator(o2, v2preview, v2step, sync_now);
+    o2->residual = ml_add(o2->residual, sync_next);
+    o1->phase = ml_u64_and(sum1, mask48);
+
+    ml_u64 advanced = ml_u64_and(ml_u64_add(o2->phase, v2q), mask48);
+    ml_f restart = ml_and(wrap, sync_on);
+    if (ml_any(restart)) {
+        ml_f remaining = ml_sub(one, event_fraction);
+        ml_u64 rest = ml_f_to_u64(ml_mul(ml_u48_to_f(v2q), remaining));
+        ml_u64 restarted = ml_u64_and(ml_u64_add(reset_q, rest), mask48);
+        ml_f reset_phase = ml_turns(reset_q);
+        ml_f tri = ml_clamp(ml_add(ml_raw_triangle(reset_phase),
+            ml_mul(ml_mul(ml_mul(ml_pulse(reset_phase, ML_F(0.5f), ml_mul(v2step, remaining)),
+                                 ML_F(4.0f)), v2step), remaining)), -1.25f, 1.25f);
+        o2->phase = ml_u64_sel(advanced, restarted, restart);
+        o2->triangle = ml_sel(o2->triangle, tri, restart);
+        o2->init = _mm256_or_ps(o2->init, restart);
+    } else {
+        o2->phase = advanced;
+    }
+    ml_f mix = ml_add(ml_add(ml_mul(ml_ld(in->g1), vco1),
+                             ml_mul(ml_mul(ml_ld(in->g2), ml_ld(in->v2level)), vco2)),
+                      ml_mul(ml_ld(in->noiselevel), ml_ld(in->noise)));
+    return ml_div(mix, ml_ld(in->mixdiv));
+}
+
+ML_TARGET static inline void ml_push31(float history[31][MA_LANES], uint8_t *position, ml_f x) {
+    _mm256_storeu_ps(history[*position], x);
+    if (++*position == 31) *position = 0;
+}
+ML_TARGET static inline ml_f ml_decimate31(const float history[31][MA_LANES], uint8_t position) {
+    ml_f output = _mm256_setzero_ps();
+    int index = position;
+    for (int tap = 0; tap < 31; tap++) {
+        if (--index < 0) index = 30;
+        output = ml_add(output, ml_mul(ML_F(OSC_HALFBAND_31[tap]), ml_ld(history[index])));
+    }
+    return output;
+}
+ML_TARGET static inline void ml_push7(float history[7][MA_LANES], uint8_t *position, ml_f x) {
+    _mm256_storeu_ps(history[*position], x);
+    if (++*position == 7) *position = 0;
+}
+ML_TARGET static inline ml_f ml_decimate7(const float history[7][MA_LANES], uint8_t position) {
+    ml_f output = _mm256_setzero_ps();
+    int index = position;
+    for (int tap = 0; tap < 7; tap++) {
+        if (--index < 0) index = 6;
+        output = ml_add(output, ml_mul(ML_F(FILTER_HALFBAND_7[tap]), ml_ld(history[index])));
+    }
+    return output;
+}
+
+/* mix_source_2x, eight lanes */
+ML_TARGET static inline ml_f ml_mix(const ml_in *in, ml_f analog, int step) {
+    const ml_f zero = _mm256_setzero_ps(), one = ML_F(1.0f);
+    ml_f raster_mix = ml_ld(in->raster_mix), mozaik_mix = ml_ld(in->mozaik_mix);
+    ml_f mozaik_gain = ml_ld(in->mozaik_gain[step]);
+    ml_f vco1_weight = ml_sel(zero, one, ml_gt(ml_ld(in->g1), zero));
+    ml_f vco2_weight = ml_sel(zero, ml_ld(in->v2level), ml_gt(ml_ld(in->g2), zero));
+    ml_f weight_a = ml_add(ml_add(vco1_weight, vco2_weight), ml_ld(in->noiselevel));
+    weight_a = ml_sel(weight_a, one, ml_lt(weight_a, one));
+    ml_f mozaik_on = ml_and(ml_gt(mozaik_mix, zero), ml_gt(mozaik_gain, zero));
+    ml_f mozaik = ml_mul(ml_mul(mozaik_mix, mozaik_gain), ml_ld(in->mozaik[step]));
+    ml_f no_raster = ml_sel(analog, ml_div(ml_add(ml_mul(weight_a, analog), mozaik),
+                                           ml_add(weight_a, mozaik_mix)), mozaik_on);
+    ml_f weighted = ml_add(ml_mul(weight_a, analog), ml_mul(raster_mix, ml_ld(in->raster[step])));
+    ml_f weight = ml_add(weight_a, raster_mix);
+    weighted = ml_sel(weighted, ml_add(weighted, mozaik), mozaik_on);
+    weight = ml_sel(weight, ml_add(weight, mozaik_mix), mozaik_on);
+    return ml_sel(ml_div(weighted, weight), no_raster,
+                  _mm256_cmp_ps(raster_mix, zero, _CMP_EQ_OQ));
+}
+
+/* apply_mixer_pressure, eight lanes */
+ML_TARGET static inline ml_f ml_pressure(ml_f source, ml_f pressure) {
+    ml_f off = _mm256_cmp_ps(pressure, _mm256_setzero_ps(), _CMP_EQ_OQ);
+    if (_mm256_testc_ps(off, _mm256_castsi256_ps(_mm256_set1_epi32(-1)))) return source;
+    ml_f gain = ml_add(ML_F(1.0f), ml_mul(ML_F(5.0f), pressure));
+    ml_f shaped = ml_div(ml_sat(ml_mul(gain, source)), ml_sat(gain));
+    return ml_sel(ml_add(source, ml_mul(pressure, ml_sub(shaped, source))), source, off);
+}
+
+ML_TARGET static inline ml_f ml_in_range(ml_f a) {
+    return ml_and(ml_ge(a, ML_F(-FLT_MAX)), ml_le(a, ML_F(FLT_MAX)));
+}
+/* render_ladder_2x, eight lanes */
+ML_TARGET static inline ml_f ml_ladder(ma_voice_lanes *b, ml_f state[4], ml_f *y4_guess,
+                                       ml_f input, ml_f g, ml_f drive, ml_f resonance) {
+    ml_f input_gain = ml_add(ML_F(1.0f), ml_mul(ml_mul(ML_F(3.0f), drive), drive));
+    ml_f feedback = ml_mul(ML_F(4.65f), resonance);
+    ml_f y[4], v[4], next[4], y4 = *y4_guess;
+    for (int iteration = 0; iteration < 2; iteration++) {
+        ml_f u = ml_sat(ml_sub(ml_mul(input_gain, input), ml_mul(feedback, y4)));
+        for (int stage = 0; stage < 4; stage++) {
+            v[stage] = ml_mul(ml_sub(ml_sat(u), state[stage]), g);
+            y[stage] = ml_add(v[stage], state[stage]);
+            u = y[stage];
+        }
+        y4 = y[3];
+    }
+    ml_f finite = ml_in_range(y4);
+    for (int stage = 0; stage < 4; stage++) {
+        next[stage] = ml_add(y[stage], v[stage]);
+        finite = ml_and(finite, ml_and(ml_in_range(y[stage]),
+                                       ml_and(ml_in_range(v[stage]), ml_in_range(next[stage]))));
+    }
+    const ml_f zero = _mm256_setzero_ps();
+    for (int stage = 0; stage < 4; stage++) state[stage] = ml_sel(zero, next[stage], finite);
+    *y4_guess = ml_sel(zero, y4, finite);
+    unsigned reset = ~(unsigned)_mm256_movemask_ps(finite) & 0xffu;
+    while (reset) {
+        b->reset_count[__builtin_ctz(reset)]++;
+        reset &= reset - 1;
+    }
+    return ml_sel(zero, y[3], finite);
+}
+
+/* Oscillator block, decimators, filter steps and output decimator. */
+ML_TARGET static void ml_kernel(ma_voice_lanes *b, const ml_in *in, float filtered[MA_LANES]) {
+    ml_osc o1 = ml_osc_ld(b, 0), o2 = ml_osc_ld(b, 1);
+    ml_vco c1 = ml_vco_ld(in->c1), c2 = ml_vco_ld(in->c2);
+    ml_f guard_hz = ml_ld(in->guard_hz);
+    ml_set_guard_target(&o2, ml_sel(_mm256_setzero_ps(), ML_F(1.0f),
+                                    ml_lt(ml_ld(in->v2hz), guard_hz)), in);
+    ml_f source[8];
+    for (int substep = 0; substep < 8; substep++)
+        source[substep] = ml_substep(&o1, &o2, in, &c1, &c2, guard_hz);
+    ml_next_guard_gain(&o1);
+    ml_next_guard_gain(&o2);
+    ml_osc_st(b, 0, &o1);
+    ml_osc_st(b, 1, &o2);
+
+    ml_f at_2x[2];
+    int substep = 0;
+    for (int step_2x = 0; step_2x < 2; step_2x++) {
+        for (int step_4x = 0; step_4x < 2; step_4x++) {
+            ml_push31(b->history[0], &b->history_pos[0], source[substep++]);
+            ml_push31(b->history[0], &b->history_pos[0], source[substep++]);
+            ml_push31(b->history[1], &b->history_pos[1],
+                      ml_decimate31(b->history[0], b->history_pos[0]));
+        }
+        at_2x[step_2x] = ml_decimate31(b->history[1], b->history_pos[1]);
+    }
+
+    ml_f state[4] = { ml_ld(b->ladder_state[0]), ml_ld(b->ladder_state[1]),
+                      ml_ld(b->ladder_state[2]), ml_ld(b->ladder_state[3]) };
+    ml_f y4 = ml_ld(b->y4_guess);
+    ml_f pressure = ml_ld(in->pressure), g = ml_ld(in->filter_g);
+    ml_f drive = ml_ld(in->drive), resonance = ml_ld(in->resonance);
+    for (int step = 0; step < 2; step++) {
+        ml_f mixed = ml_mix(in, at_2x[step], step);
+        ml_f pressured = ml_pressure(mixed, pressure);
+        _mm256_storeu_ps(b->pressure_input, mixed);
+        _mm256_storeu_ps(b->pressure_output, pressured);
+        ml_push7(b->output_history, &b->output_pos,
+                 ml_ladder(b, state, &y4, pressured, g, drive, resonance));
+    }
+    for (int stage = 0; stage < 4; stage++) _mm256_storeu_ps(b->ladder_state[stage], state[stage]);
+    _mm256_storeu_ps(b->y4_guess, y4);
+    _mm256_storeu_ps(filtered, ml_decimate7(b->output_history, b->output_pos));
+}
+
+void ma_lanes_tick(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
+                   const float detune_cents[MA_LANES], float out[MA_LANES]) {
+    ma_voice_front front[MA_LANES];
+    ml_in in;
+    ml_benign(&in);
+    for (unsigned lane = 0; lane < MA_LANES; lane++) {
+        if (!(b->active >> lane & 1u)) continue;
+        voice_front_end(voice[lane], detune_cents[lane], b->y4_guess[lane],
+                        b->guard_gain[0][lane], b->guard_gain[1][lane], &front[lane]);
+        ml_fill(&in, lane, &front[lane], voice[lane]);
+    }
+    float filtered[MA_LANES];
+    ml_kernel(b, &in, filtered);
+    for (unsigned lane = 0; lane < MA_LANES; lane++)
+        out[lane] = b->active >> lane & 1u
+                  ? voice_back_end(voice[lane], &front[lane], filtered[lane]) : 0.0f;
+}
+#undef ML_TARGET
+#undef ML_F
+#else
+bool ma_lanes_supported(void) { return false; }
+void ma_lanes_begin(ma_voice_lanes *b) { b->active = 0; }
+void ma_lanes_gather(ma_voice_lanes *b, unsigned lane, const ma_synth *s) {
+    (void)b; (void)lane; (void)s;
+}
+void ma_lanes_scatter(const ma_voice_lanes *b, unsigned lane, ma_synth *s) {
+    (void)b; (void)lane; (void)s;
+}
+void ma_lanes_tick(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
+                   const float detune_cents[MA_LANES], float out[MA_LANES]) {
+    (void)b; (void)voice; (void)detune_cents;
+    for (unsigned lane = 0; lane < MA_LANES; lane++) out[lane] = 0.0f;
 }
 #endif
 

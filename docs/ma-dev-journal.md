@@ -1113,3 +1113,31 @@ one.
 - Next decision: integrate the stage-major 8-lane voice pipeline (oscillator
   block, FIR cascade, ladder) behind an AVX2 requirement, with the scalar voice
   kept as reference. The pinned `make test` signatures are the gate.
+
+### 2026-11-06 — MA3-PERF vector lanes integrated
+
+- First, the voice tick was staged (`synth_tick` split into front end,
+  oscillator block, decimators, filter and back end). Per-voice float
+  operations are unchanged. GCC and Clang `make test`, the freestanding
+  audit and ASan/UBSan passed before any vector code was added.
+- Then the vector lanes went in: `ma_voice_lanes` and `ma_lanes_*` in
+  `src/ma_voice.c`, plus the new `ma_voice_pool_config.engine` field
+  (AUTO = AVX2 when CPUID/XGETBV allow it, or SCALAR).
+  `ma_voice_pool_render` gathers awake slots into banks of eight and
+  scatters them back in the exact scalar representation, at the end of the
+  call or when a slot sleeps. The core stays freestanding; only `memset`
+  is unresolved.
+- Gates, with lanes active: GCC/Clang `make test` (111,378 checks, every
+  pinned signature, 0 warnings), the core symbol audit and ASan/UBSan.
+  The new `engine_twin` compares AUTO and SCALAR bit-for-bit over 73,354
+  frames, including slot state after every render and 59 sleeps. Both
+  deliberate faults were caught.
+- A/B on one binary, 8 slots, 3 epochs, counters: 1.79–3.17x faster than
+  the scalar engine, and the worst case runs 2.95 M cycles per block
+  (Prizma, BCS on). Across 122,880 vector blocks there were 0 deadline
+  misses and 0 blocks over the 80% target; the largest block took 1.59 ms.
+  See `docs/ma3-vector-lanes-20261106.md`.
+- The interim 8-slot target is met in hosted measurement. MA3-LIVE still
+  owns isolation, priority and the no-xrun gate. Next DSP candidates are
+  BCS (0.9–1.1 M cycles of the remaining BCS-on cost), mozaik/raster and the
+  front end.

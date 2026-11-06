@@ -18,6 +18,9 @@ cycle and instruction counters (see the 2026-11-06 journal entry). Because the
 harness changed, any new comparison needs a fresh matched baseline first.
 That baseline exists: [8-slot baseline with counters](ma3-perf-20261106.md),
 measured on the OPT3 voice source after OPT4 was reverted.
+The [vector lanes](ma3-vector-lanes-20261106.md) (2026-11-06) meet the interim
+target in hosted measurement. The worst median is 2.95 M cycles per 8-slot
+block, with no deadline miss and no block over the 80% target.
 
 Owner: the tonewheel91 project. This plan expands MA3-PERF in
 [analog-backlog.md](analog-backlog.md). Task progress and decisions belong in

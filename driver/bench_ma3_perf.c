@@ -35,6 +35,14 @@ static int pmu_mode(void) {
     if(!strcmp(s,"required")) return 2;
     fputs("Invalid MA3_PERF_PMU\n",stderr); exit(2);
 }
+/* MA3_PERF_ENGINE=auto|scalar (default auto): the pool's render engine. */
+static ma_pool_engine engine_mode(void) {
+    const char *s=getenv("MA3_PERF_ENGINE");
+    if(!s||!strcmp(s,"auto")) return MA_POOL_ENGINE_AUTO;
+    if(!strcmp(s,"scalar")) return MA_POOL_ENGINE_SCALAR;
+    fputs("Invalid MA3_PERF_ENGINE\n",stderr); exit(2);
+}
+static ma_pool_engine bench_engine=MA_POOL_ENGINE_AUTO;
 static int pmu_event(uint64_t config,int group) {
     struct perf_event_attr a; memset(&a,0,sizeof a);
     a.type=PERF_TYPE_HARDWARE; a.size=sizeof a; a.config=config;
@@ -144,7 +152,7 @@ static uint64_t run_case(const char *patch_name,const ma_patch *patch,unsigned b
     unsigned unison=scenario>=5?1u<<(scenario-4):1u;
     if(limit%unison) return 0;
     ma_voice_pool_config c=ma_voice_pool_default_config;
-    c.limit=(uint8_t)limit;c.unison_count=(uint8_t)unison;
+    c.limit=(uint8_t)limit;c.unison_count=(uint8_t)unison;c.engine=bench_engine;
     ma_patch p=*patch;
     p.bcs_amount=bcs?ma_patch_granica.bcs_amount:0;
     p.bcs_regime=ma_patch_granica.bcs_regime;
@@ -230,12 +238,13 @@ static uint64_t run_case(const char *patch_name,const ma_patch *patch,unsigned b
 }
 int main(int argc,char **argv) {
     if(argc!=2||(strcmp(argv[1],"--run")&&strcmp(argv[1],"--list")&&strcmp(argv[1],"--overhead"))) {
-        puts("Usage: bench_ma3_perf --run|--list|--overhead\nRun alone under taskset -c N. Filters: MA3_PERF_PATCH, _BCS, _LIMIT, _FRAMES, _SCENARIO, _ARM.\nOptional measured block CSV: MA3_PERF_RAW. Run label: MA3_PERF_RUN_ID.\nHardware counters: MA3_PERF_PMU=auto|required|off (default auto).");
+        puts("Usage: bench_ma3_perf --run|--list|--overhead\nRun alone under taskset -c N. Filters: MA3_PERF_PATCH, _BCS, _LIMIT, _FRAMES, _SCENARIO, _ARM.\nOptional measured block CSV: MA3_PERF_RAW. Run label: MA3_PERF_RUN_ID.\nHardware counters: MA3_PERF_PMU=auto|required|off (default auto).\nPool engine: MA3_PERF_ENGINE=auto|scalar (default auto).");
         return argc==1?0:1;
     }
     unsigned warmup=env_u("MA3_PERF_WARMUP",DEFAULT_WARMUP),blocks=env_u("MA3_PERF_BLOCKS",DEFAULT_BLOCKS);
     if(!blocks) { fputs("MA3_PERF_BLOCKS must be nonzero\n",stderr);return 2; }
     int pmu=pmu_mode();
+    bench_engine=engine_mode();
     const ma_patch *patches[]={&ma_patch_tepih,&ma_patch_lead,&ma_patch_raster,&ma_patch_prizma,&ma_patch_granica};
     const char *names[]={"Tepih","Lead","Raster","Prizma","Granica"};
     const char *pf=getenv("MA3_PERF_PATCH");
@@ -259,6 +268,12 @@ int main(int argc,char **argv) {
     puts("");
     pmu_open(pmu);
     printf("# pmu=%s; clock_order=wall_cpu_pmu_render_pmu_cpu_wall\n",pmu_note);
+    {
+        ma_voice_pool_config probe=ma_voice_pool_default_config;probe.engine=bench_engine;
+        if(!ma_voice_pool_init(&pool,RATE,&probe,&ma_patch_tepih)) return 1;
+        printf("# engine=%s; vector_lanes=%s\n",bench_engine==MA_POOL_ENGINE_AUTO?"auto":"scalar",
+            pool.lanes_enabled?"active":"off");
+    }
     if(strcmp(argv[1],"--overhead")) puts("# boundary=render_only; hash_includes_warmup; quantile=nearest_rank; occupancy=block_endpoints; diagnostics=cumulative_including_warmup; passes=in_process_determinism_repeats");
     if(!strcmp(argv[1],"--overhead")) {
         puts("# boundary=empty_bracket; warmup_ignored=true; clock_order=wall_cpu_pmu_pmu_cpu_wall; no_overhead_subtraction");
