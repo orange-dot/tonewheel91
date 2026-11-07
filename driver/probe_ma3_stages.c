@@ -11,6 +11,7 @@
  * Not shipping code; not part of `make test`. */
 #define _GNU_SOURCE
 #include "../src/ma_voice.c"
+#include "../src/ma_lanes.c"
 #include "../src/ma_pool.c"
 #include <inttypes.h>
 #include <stdio.h>

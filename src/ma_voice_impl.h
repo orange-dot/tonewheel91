@@ -201,6 +201,9 @@ static constexpr ma_bcs_parameters BCS_LANDMARK[4] = {
     },
 };
 
+enum { WAVE_SAW = 1, WAVE_PULSE = 2, WAVE_TRIANGLE = 4,
+       WAVE_ALL = WAVE_SAW | WAVE_PULSE | WAVE_TRIANGLE };
+
 #if !defined(MA_SOURCE_EVIDENCE)
 typedef struct {
     ma_render_controls controls;
@@ -276,5 +279,198 @@ static inline float next_noise(uint64_t *state) {
     uint32_t top = (uint32_t)(tw_splitmix64(state) >> 40);
     return (float)top * (1.0f / 8388608.0f) - 1.0f;
 }
+
+static inline float interval_ratio(int interval) {
+    if (interval < -24) interval = -24;
+    if (interval > 24) interval = 24;
+    int octave = interval / 12;
+    int semitone = interval % 12;
+    if (semitone < 0) {
+        semitone += 12;
+        octave--;
+    }
+    float ratio = SEMITONE_RATIO[semitone];
+    while (octave < 0) {
+        ratio *= 0.5f;
+        octave++;
+    }
+    while (octave > 0) {
+        ratio *= 2.0f;
+        octave--;
+    }
+    return ratio;
+}
+
+static inline void start_envelope_stage(ma_envelope *envelope,
+                                        ma_envelope_stage stage, float target) {
+    float error = 0.001f * tw_fabsf(target - envelope->level);
+    envelope->completion_error = error > 1.0e-9f ? error : 1.0e-9f;
+    envelope->stage = stage;
+}
+
+static inline float next_mozaik_guard_gain(ma_mozaik *mozaik) {
+    if (mozaik->guard_frames == 0) return mozaik->guard_gain;
+    mozaik->guard_gain += mozaik->guard_step;
+    mozaik->guard_frames--;
+    if (mozaik->guard_frames == 0)
+        mozaik->guard_gain = mozaik->guard_target;
+    return mozaik->guard_gain;
+}
+
+static inline void reset_bcs(ma_bcs *bcs) {
+    bcs->hopf_re = 0.025f;
+    bcs->hopf_im = 0.0f;
+    bcs->duffing_x = 0.001f;
+    bcs->duffing_v = 0.0f;
+    bcs->output = 0.0f;
+    bcs->reset_count++;
+}
+
+static inline void set_mozaik_guard_target(ma_mozaik *mozaik, float target,
+                                           float sample_rate_hz) {
+    if (target == mozaik->guard_target) return;
+    mozaik->guard_target = target;
+    mozaik->guard_frames = smoothing_frames(sample_rate_hz);
+    mozaik->guard_step = (target - mozaik->guard_gain)
+                       / (float)mozaik->guard_frames;
+}
+
+static inline void shift_mozaik_phason(ma_mozaik *mozaik, uint32_t delta_q32) {
+    uint32_t base = mozaik->has_pending_phason
+                  ? mozaik->pending_phason_q32
+                  : mozaik->applied_phason_q32;
+    mozaik->pending_phason_q32 = base + delta_q32;
+    mozaik->has_pending_phason = true;
+}
+
+static inline void start_mozaik_tile(ma_synth *s,
+                                     const ma_render_controls *controls,
+                                     float f0_hz, float render_rate_hz) {
+    ma_mozaik *mozaik = &s->mozaik;
+    float leftover = mozaik->tile_pos > mozaik->tile_len
+                   ? mozaik->tile_pos - mozaik->tile_len : 0.0f;
+    if (mozaik->has_pending_phason) {
+        mozaik->frac_q32 += mozaik->pending_phason_q32
+                          - mozaik->applied_phason_q32;
+        mozaik->applied_phason_q32 = mozaik->pending_phason_q32;
+        mozaik->has_pending_phason = false;
+    }
+    uint32_t previous = mozaik->frac_q32;
+    mozaik->frac_q32 += controls->mozaik_slope_q32;
+    bool is_long = mozaik->frac_q32 < previous;
+    float sigma = (float)controls->mozaik_slope_q32 / Q32_ONE_F;
+    float mean_samples = render_rate_hz / (2.0f * f0_hz);
+    float mean_factor = (1.0f - sigma)
+                      + sigma * controls->mozaik_contrast;
+    float kind_factor = is_long ? controls->mozaik_contrast : 1.0f;
+    mozaik->tile_len = mean_samples * kind_factor / mean_factor;
+    if (mozaik->tile_len < 4.0f) mozaik->tile_len = 4.0f;
+    mozaik->tile_pos = leftover;
+    mozaik->tile_sign = is_long ? 1.0f : -1.0f;
+    mozaik->tiles_emitted++;
+}
+
+static inline float render_mozaik(ma_synth *s,
+                                  const ma_render_controls *controls,
+                                  float f0_hz, float render_rate_hz) {
+    float upper_hz = 0.125f * s->sample_rate_hz;
+    if (upper_hz > 8000.0f) upper_hz = 8000.0f;
+    set_mozaik_guard_target(&s->mozaik,
+                            f0_hz >= 20.0f && f0_hz <= upper_hz ? 1.0f : 0.0f,
+                            render_rate_hz);
+    uint32_t drift_q32 = (uint32_t)(0.5f * controls->mozaik_drift
+                                   * controls->mozaik_drift * Q32_ONE_F
+                                   / render_rate_hz + 0.5f);
+    if (drift_q32) shift_mozaik_phason(&s->mozaik, drift_q32);
+    if (s->mozaik.tile_pos >= s->mozaik.tile_len)
+        start_mozaik_tile(s, controls, f0_hz, render_rate_hz);
+    float unit_pos = s->mozaik.tile_pos / s->mozaik.tile_len;
+    float hann = 0.5f * (1.0f - tw_sin_turns(wrap_phase(unit_pos + 0.25f)));
+    s->mozaik.tile_pos += 1.0f;
+    return s->mozaik.tile_sign * hann;
+}
+
+#if !defined(MA_SOURCE_EVIDENCE)
+static inline float envelope_coefficient(float time_ms, float sample_rate_hz) {
+    float x = LN1000 / (0.001f * time_ms * sample_rate_hz);
+    return tw_one_pole_coeff(x);
+}
+
+static inline float render_envelope(ma_envelope *envelope, ma_adsr controls,
+                                    float sample_rate_hz) {
+    float target = 0.0f;
+    float time_ms = controls.release_ms;
+    switch (envelope->stage) {
+    case MA_ENVELOPE_IDLE:
+        envelope->level = 0.0f;
+        return 0.0f;
+    case MA_ENVELOPE_ATTACK:
+        target = 1.0f;
+        time_ms = controls.attack_ms;
+        break;
+    case MA_ENVELOPE_DECAY:
+        target = controls.sustain;
+        time_ms = controls.decay_ms;
+        break;
+    case MA_ENVELOPE_SUSTAIN:
+        envelope->level = controls.sustain;
+        return envelope->level;
+    case MA_ENVELOPE_RELEASE:
+        break;
+    }
+
+    float coefficient = envelope_coefficient(time_ms, sample_rate_hz);
+    envelope->level += coefficient * (target - envelope->level);
+    if (tw_fabsf(target - envelope->level) > envelope->completion_error)
+        return envelope->level;
+
+    envelope->level = target;
+    switch (envelope->stage) {
+    case MA_ENVELOPE_ATTACK:
+        start_envelope_stage(envelope, MA_ENVELOPE_DECAY, controls.sustain);
+        break;
+    case MA_ENVELOPE_DECAY:
+        envelope->completion_error = 0.0f;
+        envelope->stage = MA_ENVELOPE_SUSTAIN;
+        break;
+    case MA_ENVELOPE_RELEASE:
+        envelope->completion_error = 0.0f;
+        envelope->stage = MA_ENVELOPE_IDLE;
+        break;
+    case MA_ENVELOPE_IDLE:
+    case MA_ENVELOPE_SUSTAIN:
+        break;
+    }
+    return envelope->level;
+}
+
+static inline ma_adsr character_adsr(ma_adsr authored, ma_envelope_time_bias bias,
+                                     float amount) {
+    if (amount > 0.0f) {
+        authored.attack_ms *= 1.0f + amount * bias.attack;
+        authored.decay_ms *= 1.0f + amount * bias.decay;
+        authored.release_ms *= 1.0f + amount * bias.release;
+    }
+    return authored;
+}
+
+static inline float voice_back_end(const ma_synth *s, const ma_voice_front *f,
+                                   float filtered) {
+    float velocity_gain = 0.25f + 0.75f * ma_velocity_level(s->velocity);
+    float output = filtered * s->amp_envelope.level * velocity_gain;
+    if (f->controls.poly_pressure > 0.0f)
+        output *= 1.0f + 0.10f * f->controls.poly_pressure;
+    if (f->character > 0.0f)
+        output *= 1.0f + f->character * s->character.vca_bias;
+    return output;
+}
+#endif
+
+/* Scalar stages shared by the scalar tick (ma_voice.c) and the vector
+ * lanes (ma_lanes.c). */
+#if !defined(MA_SOURCE_EVIDENCE)
+void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
+                      ma_voice_front *restrict f);
+#endif
 
 #endif

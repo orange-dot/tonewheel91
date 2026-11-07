@@ -4,6 +4,7 @@
  * ceiling) so the reset path runs. Output and the whole ma_bcs compared bit
  * for bit after every step. Skips without AVX2. */
 #include "../src/ma_voice.c"
+#include "../src/ma_lanes.c"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

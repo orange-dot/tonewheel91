@@ -5,6 +5,7 @@
  * pitches, every interval, cross-mod off and on, zero waveform levels and
  * zero guards. Every output field compared bit for bit. Skips without AVX2. */
 #include "../src/ma_voice.c"
+#include "../src/ma_lanes.c"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

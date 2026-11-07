@@ -17,11 +17,11 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
 # The Mamut Analog line is a sibling core. Keep it out of the organ and EP
 # products; the aggregate core test and symbol audit are its first hosts.
-MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_patches.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o
+MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_patches.o $(BUILD)/ma_lanes.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o
 MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
 # The voice modules share ma_voice_impl.h; MA_EVIDENCE_OBJS is the same set
 # built with -DMA_SOURCE_EVIDENCE (see the evidence rule below).
-MA_VOICE_MODULES := ma_voice ma_patches
+MA_VOICE_MODULES := ma_voice ma_patches ma_lanes
 MA_VOICE_OBJS := $(MA_VOICE_MODULES:%=$(BUILD)/%.o)
 MA_EVIDENCE_OBJS := $(MA_VOICE_MODULES:%=$(BUILD)/evidence/%.o)
 MA_HOST_OBJS := $(BUILD)/ma_midi_map.o $(BUILD)/ma_midi_render.o
@@ -451,22 +451,22 @@ check-ma3-opt4: $(BUILD)/test_ma_fir
 	$(BUILD)/test_ma_fir
 test: check-ma3-opt4
 
-$(BUILD)/test_ma_bcs_lanes: test/ma_bcs_lanes.c src/ma_voice.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/test_ma_bcs_lanes: test/ma_bcs_lanes.c src/ma_voice.c src/ma_lanes.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma-bcs-lanes
 check-ma-bcs-lanes: $(BUILD)/test_ma_bcs_lanes
 	$(BUILD)/test_ma_bcs_lanes
 test: check-ma-bcs-lanes
 
-$(BUILD)/test_ma_front_lanes: test/ma_front_lanes.c src/ma_voice.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/test_ma_front_lanes: test/ma_front_lanes.c src/ma_voice.c src/ma_lanes.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma-front-lanes
 check-ma-front-lanes: $(BUILD)/test_ma_front_lanes
 	$(BUILD)/test_ma_front_lanes
 test: check-ma-front-lanes
 
-$(BUILD)/test_ma_raster_lanes: test/ma_raster_lanes.c src/ma_voice.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/test_ma_raster_lanes: test/ma_raster_lanes.c src/ma_voice.c src/ma_lanes.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma-raster-lanes
 check-ma-raster-lanes: $(BUILD)/test_ma_raster_lanes
 	$(BUILD)/test_ma_raster_lanes
@@ -486,9 +486,9 @@ $(BUILD)/spike_ma_osc_simd: driver/spike_ma_osc_simd.c src/ma_voice.c src/ma_voi
 # MA3-PERF PMU probe: cache, branch and FP-assist counts per render block.
 $(BUILD)/probe_ma3_pmu: driver/probe_ma3_pmu.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
-# MA3-PERF stage probe: TSC per vector-render stage (white-box ma_voice/ma_pool).
-$(BUILD)/probe_ma3_stages: driver/probe_ma3_stages.c src/ma_voice.c src/ma_voice_impl.h src/ma_pool.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_pool.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_pool.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+# MA3-PERF stage probe: TSC per vector-render stage (white-box ma_voice/ma_lanes/ma_pool).
+$(BUILD)/probe_ma3_stages: driver/probe_ma3_stages.c src/ma_voice.c src/ma_lanes.c src/ma_voice_impl.h src/ma_pool.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o $(BUILD)/ma_pool.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o $(BUILD)/ma_pool.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: spike-ma-osc-simd
 spike-ma-osc-simd: $(BUILD)/spike_ma_osc_simd
 	$(BUILD)/spike_ma_osc_simd --check
