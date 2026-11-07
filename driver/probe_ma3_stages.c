@@ -1,9 +1,9 @@
 /* MA3-PERF stage probe (2026-11-06): where do the vector engine's cycles go?
- * White-box: includes ma_voice.c and ma_pool.c and re-runs the vector render
- * path (ma_voice_pool_render -> pool_tick -> ma_lanes_tick -> ml_kernel)
- * with a TSC read between stages. The instrumented copy must produce the
- * same frames and slot state as the real API on a twin pool; the probe
- * checks that bit-for-bit and fails otherwise. Stage shares are TSC ticks
+ * White-box: includes ma_voice.c, ma_lanes.c and ma_pool.c and re-runs the
+ * vector render path (ma_voice_pool_render -> pool_tick -> ma_lanes_tick ->
+ * ml_kernel) with a TSC read between stages. The instrumented copy must
+ * produce the same frames and slot state as the real API on a twin pool; the
+ * probe checks that bit-for-bit and fails otherwise. Stage shares are TSC ticks
  * on one quiet core (relative, so the constant-rate TSC suffices).
  *
  *   probe_ma3_stages --run   ten 8-slot wet cases (pin with taskset)

@@ -2,11 +2,12 @@
  * 31-tap oversampling decimator stay bit-exact, and get faster, when eight
  * voices run as the eight lanes of one AVX2 vector?
  *
- * White-box: includes ma_voice.c and uses its scalar functions as the
- * reference. Not shipping code. The AVX2 kernels are target-attributed
- * (AVX2 only, no FMA) so every other function keeps the production flags,
- * including -ffp-contract=off. Every lane performs the scalar code's float
- * operations in the scalar code's order; the --check mode compares bits.
+ * White-box: includes ma_voice.c and ma_filter.c and uses their scalar
+ * functions as the reference. Not shipping code. The AVX2 kernels are
+ * target-attributed (AVX2 only, no FMA) so every other function keeps the
+ * production flags, including -ffp-contract=off. Every lane performs the
+ * scalar code's float operations in the scalar code's order; the --check
+ * mode compares bits.
  *
  *   spike_ma_simd --check   exact-bit equivalence, adversarial inputs
  *   spike_ma_simd --bench   cycles per voice-call, scalar vs 8 lanes
