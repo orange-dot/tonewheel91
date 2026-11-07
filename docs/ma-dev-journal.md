@@ -1259,3 +1259,61 @@ one.
   - worst case 1.737 M cycles (Prizma, BCS on)
   - See `docs/ma3-raster-bcs-lanes-20261107.md`.
 - Refactor plan for splitting `ma_voice.c`: `docs/ma-voice-refactor-plan.md`.
+
+### 2026-11-07 — `ma_voice.c` split into voice modules
+
+Executed `docs/ma-voice-refactor-plan.md` from `1308ef0`. Move-only: no
+arithmetic, operation order, constant or flag changed. After every step,
+GCC/Clang `make test` (111,378 core checks), ASan/UBSan, both core-symbol
+audits (only `memset` unresolved), all 20 bench PCM hashes (10 cases × both
+engines), the `exhibit-ma1-osc` output and the white-box counts matched the
+baseline. Evidence: `build/ma-voice-refactor-*`.
+
+| Commit | Module | Contents |
+|---|---|---|
+| `b6c0426` | `ma_voice_impl.h` | Private header: constants, internal types, `static inline` primitives. Machine code identical to the baseline. |
+| `80e65d8` | `ma_patches.c` | The six presets. Adds the evidence object set `$(BUILD)/evidence/%.o`, which replaces `ma_voice_source.o`. |
+| `1d38dfc` | `ma_lanes.c` | The AVX2 lane section and its evidence stubs. |
+| `1881c1e` | `ma_controls.c` | Cold control code, note events, `ma_synth_init*`, the setter API. |
+| `eb4a5a4` | `ma_filter.c` | Mixer pressure, ladder, filter history, output decimator, `voice_filter`, `render_output`. |
+| `30cd135` | — | White-box comment updates. |
+
+Notes:
+
+- Lanes: first attempt made `render_envelope`, `render_mozaik` and
+  `voice_back_end` extern. AUTO regressed up to 3.1 % (instructions +1.5 %:
+  lost `.isra` clones and cross-module calls). Moving them, plus
+  `interval_ratio`, to the header as `static inline` gave AUTO −0.3 to
+  −1.4 % and scalar +0.4 to +1.4 % against step 2. Plain `static` header
+  copies (to keep the baseline's inlining limits) were worse on scalar
+  (+0.8 to +2.3 %). Inlining cannot match the baseline exactly: each helper
+  now has one caller per module, so GCC's called-once heuristic applies.
+- Only `voice_front_a`, `mozaik_slope_q32`, `voice_filter` and
+  `render_output` became extern (`ma_voice_` prefix).
+- `ma_voice_tick_controls` stays in `ma_voice.c` next to
+  `next_render_controls`, because the pool calls it every frame.
+- `ma_lanes.c` includes `ma_raster_table.h` (the vector raster reads the
+  table), so the 28 KiB `static constexpr` table has a copy in two objects.
+  A single extern table would change the generated header and needs an
+  operator decision.
+- Rejected: `ma_sources.c` with raster and BCS (`render_raster`/`render_bcs`
+  extern). Scalar was +2.0 to +3.4 % in all ten cases, also Tepih with BCS
+  off, where neither function runs; instructions rose only 0.3–0.7 %. The
+  cost is `synth_tick` code generation (2144 → 1664 instructions without the
+  inlined sources), not the calls. The header-inline remedy would empty the
+  module, so the code stays. The oscillators were not tried: the evidence
+  tick calls their helpers per substep. Patch:
+  `build/ma-voice-refactor-step5-sources/attempt.patch`.
+- Left in `ma_voice.c` for performance: oscillators, the 8x→2x decimators,
+  raster, BCS, envelopes, the staged scalar tick and the per-sample control
+  path. 1,061 lines; `ma_voice_impl.h` 554, `ma_controls.c` 757,
+  `ma_lanes.c` 1,161, `ma_filter.c` 99, `ma_patches.c` 127.
+- Object sizes: `.text` 67,533 B before, 69,900 B over the five objects
+  after (shared `static inline` helpers compile into each module);
+  `.rodata` +29.5 KiB, mostly the second raster table.
+- Final quiet-host A/B, baseline `1308ef0` vs `30cd135`, 10 cases × 3
+  epochs, CPU 2: AUTO −1.25 to +0.46 %, scalar −2.32 to −0.08 %; PCM
+  identical. Deadline misses (CPU/wall, all blocks): AUTO 0/0 on both
+  sides; scalar 669/698 before and 314/352 after, at 8 voices where the
+  scalar engine already runs near the 128-frame deadline.
+  Runs: `build/ma-voice-refactor-abfinal-{auto,scalar}-20261107-01/`.

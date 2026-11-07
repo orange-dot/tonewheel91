@@ -181,6 +181,16 @@ instrumentation, which can dominate the DSP being measured.
 The following are hypotheses, to be reordered or discarded from measured
 shares. They are not promises that any particular stage dominates.
 
+Since the 2026-11-07 split (`docs/ma-voice-refactor-plan.md`), the
+`ma_voice.c` locations below are spread over the voice modules:
+`ma_voice.c` keeps the scalar tick, the oscillators, the 8x→2x decimators,
+raster, BCS and the per-sample control path; `ma_filter.c` holds the
+mixer pressure, ladder, filter history and output decimator;
+`ma_controls.c` holds control targets, note events and the setter API;
+`ma_voice_impl.h` holds the shared constants, types and `static inline`
+helpers (`render_envelope`, `filter_prewarp`, `render_mozaik` among them);
+`ma_lanes.c` holds the AVX2 lanes.
+
 | Candidate | Current code location | What to investigate / equivalence risk |
 | --- | --- | --- |
 | Decimator indexing and loop overhead | `ma_voice.c`: `decimate_oversample`, `push_oversample_history`, `decimate_filter` | Six 31-tap decimations per normal output sample/voice plus the output filter. Investigate wrap/index overhead and loop specialization while preserving tap order. Symmetric pairing, zero-tap omission, or reassociation must not be assumed bit-equivalent. |

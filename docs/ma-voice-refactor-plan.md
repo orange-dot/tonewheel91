@@ -1,8 +1,10 @@
 # Mamut Analog voice refactor plan (`src/ma_voice.c` split)
 
-Status: planned 2026-11-07, not started. This plan is written for an agent who
-starts after the next MA3-PERF commit (raster in lanes, or whatever lands in
-its place) is on `main`. Use the operator's language in chat. This file, code
+Status: executed 2026-11-07 (`b6c0426` … `30cd135`). `ma_sources.c` was
+measured and rejected; the raster, BCS and oscillator code stays in
+`ma_voice.c`. See the 2026-11-07 split entry in `docs/ma-dev-journal.md`.
+This plan was written for an agent who starts after the next MA3-PERF commit
+(raster in lanes, or whatever lands in its place) is on `main`. Use the operator's language in chat. This file, code
 comments and commit messages stay in English.
 
 ## Why
