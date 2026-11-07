@@ -17,6 +17,7 @@
  * times, so a pooled layout must align or rotate rings on wake. */
 #define _GNU_SOURCE
 #include "../src/ma_voice.c"
+#include "../src/ma_filter.c"
 #include <immintrin.h>
 #include <linux/perf_event.h>
 #include <stdio.h>

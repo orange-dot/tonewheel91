@@ -766,114 +766,6 @@ static float render_bcs(ma_synth *s, float frequency_hz, float amount,
     return s->bcs.output;
 }
 
-static float mix_source_2x(const ma_render_controls *controls, float analog,
-                           float guard1, float guard2,
-                           float mozaik_gain, float mozaik, float raster) {
-    if (controls->raster_mix == 0.0f) {
-        if (!(controls->mozaik_mix > 0.0f && mozaik_gain > 0.0f))
-            return analog;
-        float vco1_weight = guard1 > 0.0f ? 1.0f : 0.0f;
-        float vco2_weight = guard2 > 0.0f ? controls->vco2_level : 0.0f;
-        float analog_weight = vco1_weight + vco2_weight
-                            + controls->noise_level;
-        if (analog_weight < 1.0f) analog_weight = 1.0f;
-        return (analog_weight * analog
-                + controls->mozaik_mix * mozaik_gain * mozaik)
-             / (analog_weight + controls->mozaik_mix);
-    }
-
-    float vco1_weight = guard1 > 0.0f ? 1.0f : 0.0f;
-    float vco2_weight = guard2 > 0.0f ? controls->vco2_level : 0.0f;
-    float analog_weight = vco1_weight + vco2_weight
-                        + controls->noise_level;
-    if (analog_weight < 1.0f) analog_weight = 1.0f;
-    float weighted = analog_weight * analog
-                   + controls->raster_mix * raster;
-    float weight = analog_weight + controls->raster_mix;
-    if (controls->mozaik_mix > 0.0f && mozaik_gain > 0.0f) {
-        weighted += controls->mozaik_mix * mozaik_gain * mozaik;
-        weight += controls->mozaik_mix;
-    }
-    return weighted / weight;
-}
-
-#if !defined(MA_SOURCE_EVIDENCE)
-static float apply_mixer_pressure(float source, float pressure) {
-    if (pressure == 0.0f) return source;
-    float gain = 1.0f + 5.0f * pressure;
-    float shaped = tw_sat(gain * source) / tw_sat(gain);
-    return source + pressure * (shaped - source);
-}
-
-static void reset_ladder(ma_ladder *ladder) {
-    for (int stage = 0; stage < 4; stage++) ladder->state[stage] = 0.0f;
-    ladder->y4_guess = 0.0f;
-    ladder->reset_count++;
-}
-
-static float render_ladder_2x(ma_synth *s,
-                              const ma_render_controls *controls,
-                              float input, float filter_g) {
-    ma_ladder *ladder = &s->ladder;
-    float y[4] = { 0 };
-    float v[4] = { 0 };
-    float next_state[4] = { 0 };
-    float y4_guess = ladder->y4_guess;
-    float input_gain = 1.0f + 3.0f * controls->filter_drive
-                     * controls->filter_drive;
-    float feedback = 4.65f * controls->filter_resonance;
-    for (int iteration = 0; iteration < 2; iteration++) {
-        float u = tw_sat(input_gain * input - feedback * y4_guess);
-        for (int stage = 0; stage < 4; stage++) {
-            v[stage] = (tw_sat(u) - ladder->state[stage]) * filter_g;
-            y[stage] = v[stage] + ladder->state[stage];
-            u = y[stage];
-        }
-        y4_guess = y[3];
-    }
-    bool finite = y4_guess >= -FLT_MAX && y4_guess <= FLT_MAX;
-    for (int stage = 0; stage < 4; stage++) {
-        next_state[stage] = y[stage] + v[stage];
-        finite = finite
-              && y[stage] >= -FLT_MAX && y[stage] <= FLT_MAX
-              && v[stage] >= -FLT_MAX && v[stage] <= FLT_MAX
-              && next_state[stage] >= -FLT_MAX
-              && next_state[stage] <= FLT_MAX;
-    }
-    if (!finite) {
-        reset_ladder(ladder);
-        return 0.0f;
-    }
-    for (int stage = 0; stage < 4; stage++)
-        ladder->state[stage] = next_state[stage];
-    ladder->y4_guess = y4_guess;
-    return y[3];
-}
-
-static void push_filter_history(ma_ladder *ladder, float sample) {
-    ladder->output_history[ladder->output_pos] = sample;
-    ladder->output_pos++;
-    if (ladder->output_pos == 7) ladder->output_pos = 0;
-}
-
-static float decimate_filter(const ma_ladder *ladder) {
-    float output = 0.0f;
-    int index = ladder->output_pos;
-    for (int tap = 0; tap < 7; tap++) {
-        if (--index < 0) index = 6;
-        output += FILTER_HALFBAND_7[tap] * ladder->output_history[index];
-    }
-    return output;
-}
-
-static ma_frame render_output(ma_synth *s,
-                              const ma_render_controls *controls,
-                              float mono) {
-    return ma_output_render(&s->output, mono, 0.0f, controls->body_drive,
-                             controls->body_load_ratio, s->master_level);
-}
-#endif
-
 #if defined(MA_SOURCE_EVIDENCE)
 static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     ma_render_controls controls = next_render_controls(s);
@@ -1000,7 +892,7 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     return (ma_frame){ .left = output, .right = output };
 #else
     if (raw) return (ma_frame){ .left = output, .right = output };
-    return render_output(s, &controls, output);
+    return ma_voice_render_output(s, &controls, output);
 #endif
 }
 #else
@@ -1139,24 +1031,6 @@ static void voice_decimate(ma_synth *s, const float source[8],
     }
 }
 
-/* Two 2x mix/pressure/ladder steps and the 7-tap output decimator. */
-static float voice_filter(ma_synth *s, const ma_voice_front *f,
-                          const float at_2x[2]) {
-    for (int step = 0; step < 2; step++) {
-        float source = mix_source_2x(&f->controls, at_2x[step], f->guard1,
-                                     f->guard2, f->mozaik_gain[step],
-                                     f->mozaik[step], f->raster[step]);
-        float pressured = apply_mixer_pressure(source,
-                                                f->controls.mixer_pressure);
-        s->ladder.pressure_input = source;
-        s->ladder.pressure_output = pressured;
-        push_filter_history(&s->ladder,
-                            render_ladder_2x(s, &f->controls, pressured,
-                                             f->filter_g));
-    }
-    return decimate_filter(&s->ladder);
-}
-
 static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     ma_voice_front f;
     float source[8], at_2x[2];
@@ -1164,9 +1038,9 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
                     s->oscillator1.guard_gain, s->oscillator2.guard_gain, &f);
     voice_oscillator_block(s, &f, source);
     voice_decimate(s, source, at_2x);
-    float output = voice_back_end(s, &f, voice_filter(s, &f, at_2x));
+    float output = voice_back_end(s, &f, ma_voice_filter(s, &f, at_2x));
     if (raw) return (ma_frame){ .left = output, .right = output };
-    return render_output(s, &f.controls, output);
+    return ma_voice_render_output(s, &f.controls, output);
 }
 #endif
 

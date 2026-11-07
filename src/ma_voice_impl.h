@@ -501,6 +501,37 @@ static inline float filter_prewarp(float cutoff_hz, float sample_rate_hz) {
     return x * (z * b1 - b2 + PREWARP_CHEB[0]);
 }
 
+static inline float mix_source_2x(const ma_render_controls *controls, float analog,
+                                  float guard1, float guard2,
+                                  float mozaik_gain, float mozaik, float raster) {
+    if (controls->raster_mix == 0.0f) {
+        if (!(controls->mozaik_mix > 0.0f && mozaik_gain > 0.0f))
+            return analog;
+        float vco1_weight = guard1 > 0.0f ? 1.0f : 0.0f;
+        float vco2_weight = guard2 > 0.0f ? controls->vco2_level : 0.0f;
+        float analog_weight = vco1_weight + vco2_weight
+                            + controls->noise_level;
+        if (analog_weight < 1.0f) analog_weight = 1.0f;
+        return (analog_weight * analog
+                + controls->mozaik_mix * mozaik_gain * mozaik)
+             / (analog_weight + controls->mozaik_mix);
+    }
+
+    float vco1_weight = guard1 > 0.0f ? 1.0f : 0.0f;
+    float vco2_weight = guard2 > 0.0f ? controls->vco2_level : 0.0f;
+    float analog_weight = vco1_weight + vco2_weight
+                        + controls->noise_level;
+    if (analog_weight < 1.0f) analog_weight = 1.0f;
+    float weighted = analog_weight * analog
+                   + controls->raster_mix * raster;
+    float weight = analog_weight + controls->raster_mix;
+    if (controls->mozaik_mix > 0.0f && mozaik_gain > 0.0f) {
+        weighted += controls->mozaik_mix * mozaik_gain * mozaik;
+        weight += controls->mozaik_mix;
+    }
+    return weighted / weight;
+}
+
 /* Out-of-line functions defined in ma_voice.c. The control code
  * (ma_controls.c) snaps the mozaik slope; the vector lanes (ma_lanes.c) run
  * front end part A. */
@@ -508,6 +539,16 @@ uint32_t ma_voice_mozaik_slope_q32(float control);
 #if !defined(MA_SOURCE_EVIDENCE)
 void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
                       ma_voice_front *restrict f);
+#endif
+
+/* The scalar filter stage (ma_filter.c), called once per frame by the
+ * scalar tick. */
+#if !defined(MA_SOURCE_EVIDENCE)
+float ma_voice_filter(ma_synth *s, const ma_voice_front *f,
+                      const float at_2x[2]);
+ma_frame ma_voice_render_output(ma_synth *s,
+                                const ma_render_controls *controls,
+                                float mono);
 #endif
 
 #endif
