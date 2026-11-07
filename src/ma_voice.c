@@ -2175,6 +2175,7 @@ typedef struct {
     ma_render_controls controls;
     ma_source_frame source;
     float character;
+    float note_position;
     float base_hz;
     float filter_g;
     float guard1;
@@ -2188,9 +2189,11 @@ typedef struct {
 /* Controls, pitch, BCS, envelopes, filter prewarp, noise, the source frame,
  * and both 2x mozaik/raster steps. The ladder's previous y4 and the guard
  * gains are inputs because a lane bank may hold them. */
-static void voice_front_end(ma_synth *restrict s, float detune_cents,
-                            float ladder_y4, float guard1, float guard2,
-                            ma_voice_front *restrict f) {
+/* Front end, part A: controls, character, glide, LFO and pitch. BCS comes
+ * next and reads only its own state, so a lane bank may run it for all
+ * voices between part A and part B. */
+static void voice_front_a(ma_synth *restrict s, float detune_cents,
+                          ma_voice_front *restrict f) {
     /* Written in place (f never aliases s): a freestanding core must not
      * emit memcpy. */
     ma_render_controls *controls = &f->controls;
@@ -2206,9 +2209,20 @@ static void voice_front_end(ma_synth *restrict s, float detune_cents,
     if (character > 0.0f)
         base_hz *= octave_ratio_small(character
             * (s->character.vco1_cents + s->character.walk_cents) / 1200.0f);
+    f->character = character;
+    f->note_position = note_position;
+    f->base_hz = base_hz;
+}
+
+/* Front end, part B: the BCS output's effect on the controls (when BCS ran),
+ * envelopes, prewarp, noise, the source frame, mozaik and raster. */
+static void voice_front_b(ma_synth *restrict s, float bcs, float guard1,
+                          float guard2, ma_voice_front *restrict f) {
+    ma_render_controls *controls = &f->controls;
+    float character = f->character;
+    float note_position = f->note_position;
+    float base_hz = f->base_hz;
     if (controls->bcs_amount > 0.0f) {
-        float bcs = render_bcs(s, base_hz, controls->bcs_amount,
-                               controls->bcs_regime, ladder_y4);
         float crossmod_depth = 0.10f + 0.20f * controls->bcs_regime;
         float resonance_depth = 0.08f + 0.08f * controls->bcs_regime;
         controls->crossmod_amount = clamp_signal(
@@ -2250,8 +2264,18 @@ static void voice_front_end(ma_synth *restrict s, float detune_cents,
                                          2.0f * s->sample_rate_hz)
                          : 0.0f;
     }
-    f->character = character;
-    f->base_hz = base_hz;
+}
+
+/* The scalar front end: part A, BCS when enabled, part B. */
+static void voice_front_end(ma_synth *restrict s, float detune_cents,
+                            float ladder_y4, float guard1, float guard2,
+                            ma_voice_front *restrict f) {
+    voice_front_a(s, detune_cents, f);
+    float bcs = 0.0f;
+    if (f->controls.bcs_amount > 0.0f)
+        bcs = render_bcs(s, f->base_hz, f->controls.bcs_amount,
+                         f->controls.bcs_regime, ladder_y4);
+    voice_front_b(s, bcs, guard1, guard2, f);
 }
 
 /* The VCO2 guard target, eight 8x source substeps, and both guard steps. */
@@ -2904,6 +2928,128 @@ ML_TARGET static inline ml_f ml_ladder(ma_voice_lanes *b, ml_f state[4], ml_f *y
     return ml_sel(zero, y[3], finite);
 }
 
+/* render_bcs, eight lanes: RK4 over four substeps per sample. */
+typedef struct { ml_f re, im, x, v; } ml_bcs_state;
+typedef struct {
+    ml_f hopf_mu, hopf_nonlinearity, duffing_frequency_ratio, duffing_damping,
+         duffing_edge, duffing_cubic_stiffness, duffing_cubic_damping,
+         duffing_drive, duffing_feedback, hopf_mix, duffing_mix, output_gain;
+} ml_bcs_parameters;
+
+ML_TARGET static inline ml_bcs_state ml_bcs_derivative(ml_bcs_state st,
+    const ml_bcs_parameters *q, ml_f omega, ml_f external_drive) {
+    ml_f radius2 = ml_add(ml_mul(st.re, st.re), ml_mul(st.im, st.im));
+    ml_f radial = ml_sub(q->hopf_mu, ml_mul(q->hopf_nonlinearity, radius2));
+    ml_f duffing_omega = ml_mul(omega, q->duffing_frequency_ratio);
+    ml_f square = ml_mul(st.x, st.x);
+    ml_f edge_damping = ml_mul(ml_sub(q->duffing_edge, q->duffing_damping), duffing_omega);
+    ml_f nonlinear_damping = ml_mul(ml_mul(q->duffing_cubic_damping, duffing_omega), square);
+    ml_f cubic = ml_mul(ml_mul(ml_mul(q->duffing_cubic_stiffness, duffing_omega), square), st.x);
+    ml_f drive = ml_add(ml_mul(q->duffing_drive, st.re), external_drive);
+    return (ml_bcs_state){
+        .re = ml_add(ml_sub(ml_mul(radial, st.re), ml_mul(omega, st.im)),
+                     ml_mul(ml_mul(q->duffing_feedback, omega), st.x)),
+        .im = ml_add(ml_mul(omega, st.re), ml_mul(radial, st.im)),
+        .x = ml_mul(duffing_omega, st.v),
+        .v = ml_add(ml_sub(ml_sub(ml_mul(ml_sub(edge_damping, nonlinear_damping), st.v),
+                                  ml_mul(duffing_omega, st.x)), cubic),
+                    ml_mul(duffing_omega, drive)),
+    };
+}
+ML_TARGET static inline ml_bcs_state ml_bcs_advance(ml_bcs_state st, ml_bcs_state d, ml_f scale) {
+    return (ml_bcs_state){ ml_add(st.re, ml_mul(scale, d.re)), ml_add(st.im, ml_mul(scale, d.im)),
+                           ml_add(st.x, ml_mul(scale, d.x)), ml_add(st.v, ml_mul(scale, d.v)) };
+}
+/* k1 + 2 k2 + 2 k3 + k4, left to right as in the scalar sum */
+ML_TARGET static inline ml_f ml_rk4_sum(ml_f k1, ml_f k2, ml_f k3, ml_f k4) {
+    return ml_add(ml_add(ml_add(k1, ml_mul(ML_F(2.0f), k2)), ml_mul(ML_F(2.0f), k3)), k4);
+}
+
+/* BCS for the lanes in `on`. Parameters come from the scalar table lerp per
+ * lane; state stays in each voice's ma_synth. A lane whose state leaves the
+ * safe range takes the scalar reset, exactly as render_bcs does. */
+ML_TARGET static void ml_bcs(ma_synth *const voice[MA_LANES],
+                             const ma_voice_front front[MA_LANES],
+                             const float ladder_y4[MA_LANES], unsigned on,
+                             float out[MA_LANES]) {
+    float q[12][MA_LANES] = {}, freq[MA_LANES], upper[MA_LANES], step[MA_LANES],
+          amount[MA_LANES] = {}, feedback[MA_LANES] = {}, st[4][MA_LANES] = {};
+    for (unsigned l = 0; l < MA_LANES; l++) {
+        freq[l] = 20.0f; upper[l] = 8000.0f; step[l] = 0.0f;
+        if (!(on >> l & 1u)) continue;
+        const ma_synth *s = voice[l];
+        ma_bcs_parameters p = bcs_parameters(front[l].controls.bcs_regime);
+        const float values[12] = {
+            p.hopf_mu, p.hopf_nonlinearity, p.duffing_frequency_ratio, p.duffing_damping,
+            p.duffing_edge, p.duffing_cubic_stiffness, p.duffing_cubic_damping,
+            p.duffing_drive, p.duffing_feedback, p.hopf_mix, p.duffing_mix, p.output_gain };
+        for (int k = 0; k < 12; k++) q[k][l] = values[k];
+        float upper_hz = 0.125f * s->sample_rate_hz;
+        if (upper_hz > 8000.0f) upper_hz = 8000.0f;
+        upper[l] = upper_hz;
+        freq[l] = front[l].base_hz;
+        step[l] = 1.0f / (s->sample_rate_hz * BCS_INTEGRATION_STEPS);
+        amount[l] = front[l].controls.bcs_amount;
+        feedback[l] = ladder_y4[l];
+        st[0][l] = s->bcs.hopf_re; st[1][l] = s->bcs.hopf_im;
+        st[2][l] = s->bcs.duffing_x; st[3][l] = s->bcs.duffing_v;
+    }
+    ml_bcs_parameters p = {
+        ml_ld(q[0]), ml_ld(q[1]), ml_ld(q[2]), ml_ld(q[3]), ml_ld(q[4]), ml_ld(q[5]),
+        ml_ld(q[6]), ml_ld(q[7]), ml_ld(q[8]), ml_ld(q[9]), ml_ld(q[10]), ml_ld(q[11]) };
+    ml_f f = ml_ld(freq), up = ml_ld(upper);
+    f = ml_sel(ml_sel(f, up, ml_gt(f, up)), ML_F(20.0f), ml_lt(f, ML_F(20.0f)));
+    ml_f omega = ml_mul(ML_F(BCS_TAU), f);
+    ml_f h = ml_ld(step);
+    ml_f external_drive = ml_mul(ml_mul(ML_F(0.018f), ml_ld(amount)),
+                                 ml_clamp(ml_ld(feedback), -1.0f, 1.0f));
+    ml_bcs_state y = { ml_ld(st[0]), ml_ld(st[1]), ml_ld(st[2]), ml_ld(st[3]) };
+    for (int substep = 0; substep < BCS_INTEGRATION_STEPS; substep++) {
+        ml_bcs_state k1 = ml_bcs_derivative(y, &p, omega, external_drive);
+        ml_bcs_state k2 = ml_bcs_derivative(ml_bcs_advance(y, k1, ml_mul(ML_F(0.5f), h)),
+                                            &p, omega, external_drive);
+        ml_bcs_state k3 = ml_bcs_derivative(ml_bcs_advance(y, k2, ml_mul(ML_F(0.5f), h)),
+                                            &p, omega, external_drive);
+        ml_bcs_state k4 = ml_bcs_derivative(ml_bcs_advance(y, k3, h), &p, omega, external_drive);
+        ml_f sixth = ml_div(h, ML_F(6.0f));
+        y.re = ml_add(y.re, ml_mul(sixth, ml_rk4_sum(k1.re, k2.re, k3.re, k4.re)));
+        y.im = ml_add(y.im, ml_mul(sixth, ml_rk4_sum(k1.im, k2.im, k3.im, k4.im)));
+        y.x = ml_add(y.x, ml_mul(sixth, ml_rk4_sum(k1.x, k2.x, k3.x, k4.x)));
+        y.v = ml_add(y.v, ml_mul(sixth, ml_rk4_sum(k1.v, k2.v, k3.v, k4.v)));
+    }
+    /* bcs_state_is_safe: every value finite and within the ceiling; the
+     * peak is the running maximum of |value| in hopf_re, hopf_im, x, v order */
+    const ml_f ceiling = ML_F(BCS_STATE_CEILING);
+    ml_f safe = _mm256_castsi256_ps(_mm256_set1_epi32(-1)), peak = _mm256_setzero_ps();
+    const ml_f values[4] = { y.re, y.im, y.x, y.v };
+    for (int k = 0; k < 4; k++) {
+        ml_f magnitude = ml_abs(values[k]);
+        safe = ml_and(safe, ml_and(ml_in_range(values[k]), _mm256_cmp_ps(magnitude, ceiling, _CMP_LE_OQ)));
+        peak = ml_sel(peak, magnitude, ml_gt(magnitude, peak));
+    }
+    ml_f output = ml_sat(ml_mul(ml_add(ml_mul(p.hopf_mix, y.re), ml_mul(p.duffing_mix, y.x)),
+                                p.output_gain));
+    float re[MA_LANES], im[MA_LANES], x[MA_LANES], v[MA_LANES], pk[MA_LANES], o[MA_LANES];
+    _mm256_storeu_ps(re, y.re); _mm256_storeu_ps(im, y.im);
+    _mm256_storeu_ps(x, y.x); _mm256_storeu_ps(v, y.v);
+    _mm256_storeu_ps(pk, peak); _mm256_storeu_ps(o, output);
+    unsigned safe_bits = (unsigned)_mm256_movemask_ps(safe);
+    for (unsigned l = 0; l < MA_LANES; l++) {
+        if (!(on >> l & 1u)) continue;
+        ma_bcs *bcs = &voice[l]->bcs;
+        if (!(safe_bits >> l & 1u)) {
+            reset_bcs(bcs);
+            out[l] = 0.0f;
+            continue;
+        }
+        bcs->hopf_re = re[l]; bcs->hopf_im = im[l];
+        bcs->duffing_x = x[l]; bcs->duffing_v = v[l];
+        if (pk[l] > bcs->maximum_state) bcs->maximum_state = pk[l];
+        bcs->output = o[l];
+        out[l] = o[l];
+    }
+}
+
 /* Oscillator block, decimators, filter steps and output decimator. */
 ML_TARGET static void ml_kernel(ma_voice_lanes *b, const ml_in *in, float filtered[MA_LANES]) {
     ml_osc o1 = ml_osc_ld(b, 0), o2 = ml_osc_ld(b, 1);
@@ -2954,10 +3100,18 @@ void ma_lanes_tick(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
     ma_voice_front front[MA_LANES];
     ml_in in;
     ml_benign(&in);
+    unsigned bcs_on = 0;
     for (unsigned lane = 0; lane < MA_LANES; lane++) {
         if (!(b->active >> lane & 1u)) continue;
-        voice_front_end(voice[lane], detune_cents[lane], b->y4_guess[lane],
-                        b->guard_gain[0][lane], b->guard_gain[1][lane], &front[lane]);
+        voice_front_a(voice[lane], detune_cents[lane], &front[lane]);
+        if (front[lane].controls.bcs_amount > 0.0f) bcs_on |= 1u << lane;
+    }
+    float bcs[MA_LANES] = {};
+    if (bcs_on) ml_bcs(voice, front, b->y4_guess, bcs_on, bcs);
+    for (unsigned lane = 0; lane < MA_LANES; lane++) {
+        if (!(b->active >> lane & 1u)) continue;
+        voice_front_b(voice[lane], bcs[lane], b->guard_gain[0][lane],
+                      b->guard_gain[1][lane], &front[lane]);
         ml_fill(&in, lane, &front[lane], voice[lane]);
     }
     float filtered[MA_LANES];

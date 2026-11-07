@@ -1177,3 +1177,25 @@ one.
   See `docs/ma3-stages-20261106.md`.
 - Next: BCS in lanes, then the front-end controls and envelopes in lanes,
   writing lane inputs directly.
+
+### 2026-11-06 — MA3-PERF vector BCS
+
+- The front end is split into part A, then BCS, then part B. The scalar
+  path is still A → `render_bcs` → B. The lanes run BCS eight wide
+  (`ml_bcs`), with RK4 operation order kept; resets use the scalar
+  `reset_bcs`. The new `test/ma_bcs_lanes.c` (`check-ma-bcs-lanes`, in
+  `test`) compares `ml_bcs` with `render_bcs` bit-for-bit over 89,752
+  lane-steps, 304 of them resets. It catches constant and summation-order
+  mutations. The exact |v| = 32 ceiling boundary was not reached by the
+  randomized test and was checked by inspection.
+- GCC/Clang `make test`, ASan/UBSan and the core symbol audit all pass,
+  with every pinned signature intact.
+- A/B with the AUTO engine, 3 epochs (`build/ma3-bcs-ab-20261106-01`),
+  where A is `10418a8` and B adds vector BCS: BCS-on blocks run
+  1.31–1.37x faster (worst case Prizma, 2.954 → 2.254 M cycles), BCS-off
+  medians differ by 0.1–2.5%, and PCM is identical in every case.
+- Continuation audit: the candidate has 1 CPU and 134 wall deadline misses
+  across 122,880 blocks. This run proves cycle improvement, not live
+  readiness or a quiet host throughout. See `docs/ma3-bcs-lanes-20261106.md`
+  for the per-case table and source/binary identities. Next: controls and
+  envelopes in lanes with direct lane-input writes, then raster/mozaik.

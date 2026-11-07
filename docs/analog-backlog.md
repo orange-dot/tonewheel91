@@ -911,6 +911,13 @@ Its readiness/headroom targets are proposed engineering criteria. The first
 [P0–P2 evidence batch](ma3-perf-20261002.md) is complete; noisy host conditions
 limit precision, and no live acceptance is claimed.
 
+Latest MA3-PERF slice: [vector BCS](ma3-bcs-lanes-20261106.md) is implemented
+and bit-exact. Its matched A/B makes BCS-on blocks 1.31–1.37x faster and
+lowers the worst 8-slot median to 2.254 M cycles. This later run has 1 CPU
+and 134 wall deadline misses, so the clean tail in the earlier vector-lane
+run below does not establish current live readiness. Next: front-end controls
+and envelopes in lanes with direct lane-input writes, then raster/mozaik.
+
 | Slice | Status | Deliverable / gate |
 | --- | --- | --- |
 | MA3-1 | done | Pool-backed generic dry MIDI map and `render_midi -I mamutanalog`; direct/raw-parser/SMF PCM twins and legacy regression checks. |

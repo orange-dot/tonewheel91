@@ -22,6 +22,13 @@ The [vector lanes](ma3-vector-lanes-20261106.md) (2026-11-06) meet the interim
 target in hosted measurement. The worst median is 2.95 M cycles per 8-slot
 block, with no deadline miss and no block over the 80% target.
 
+The subsequent [vector BCS A/B](ma3-bcs-lanes-20261106.md) lowers the worst
+8-slot median to 2.254 M cycles, with 1.31–1.37x faster BCS-on blocks and
+identical PCM. That later run has 1 CPU and 134 wall deadline misses on the
+candidate, so it establishes throughput improvement, not live acceptance.
+BCS is now in lanes. Next: controls and envelopes with direct lane-input
+writes, then raster/mozaik; refresh stage attribution before claiming shares.
+
 Owner: the tonewheel91 project. This plan expands MA3-PERF in
 [analog-backlog.md](analog-backlog.md). Task progress and decisions belong in
 [ma-dev-journal.md](ma-dev-journal.md); measured results remain separate from
