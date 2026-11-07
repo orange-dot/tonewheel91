@@ -17,8 +17,13 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
 # The Mamut Analog line is a sibling core. Keep it out of the organ and EP
 # products; the aggregate core test and symbol audit are its first hosts.
-MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o
+MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_patches.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o
 MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
+# The voice modules share ma_voice_impl.h; MA_EVIDENCE_OBJS is the same set
+# built with -DMA_SOURCE_EVIDENCE (see the evidence rule below).
+MA_VOICE_MODULES := ma_voice ma_patches
+MA_VOICE_OBJS := $(MA_VOICE_MODULES:%=$(BUILD)/%.o)
+MA_EVIDENCE_OBJS := $(MA_VOICE_MODULES:%=$(BUILD)/evidence/%.o)
 MA_HOST_OBJS := $(BUILD)/ma_midi_map.o $(BUILD)/ma_midi_render.o
 MA1_LONG_LISTENING_SOURCE := driver/exhibit_ma_blues.c
 MA1_LONG_LISTENING_WAV := $(BUILD)/ma_blade_runner_blues_expanded.wav
@@ -34,12 +39,17 @@ $(BUILD)/%.o: src/%.c src/tonewheel.h | $(BUILD)
 $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o: $(BUILD)/%.o: src/%.c src/epiano.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_voice.o: src/ma_voice.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(MA_VOICE_OBJS): $(BUILD)/%.o: src/%.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
 
 $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o: $(BUILD)/%.o: src/%.c src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
 
-$(BUILD)/ma_voice_source.o: src/ma_voice.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
+# MA_SOURCE_EVIDENCE changes the ma_synth layout, so every voice module is
+# rebuilt with it into its own object set. Never mix the two sets.
+$(BUILD)/evidence:
+	mkdir -p $@
+
+$(MA_EVIDENCE_OBJS): $(BUILD)/evidence/%.o: src/%.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)/evidence
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -DMA_SOURCE_EVIDENCE -c $< -o $@
 
 $(BUILD)/wav.o: driver/wav.c driver/wav.h | $(BUILD)
@@ -156,8 +166,8 @@ $(BUILD)/fuzz_smf: test/fuzz_smf.c driver/smf.c driver/smf.h | $(BUILD)
 $(BUILD)/derive_ma_constants: driver/derive_ma_constants.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/derive_ma_constants.c $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_osc: driver/exhibit_ma_osc.c $(BUILD)/ma_voice_source.o $(BUILD)/drive.o src/mamutanalog.h src/tonewheel.h | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -DMA_SOURCE_EVIDENCE driver/exhibit_ma_osc.c $(BUILD)/ma_voice_source.o $(BUILD)/drive.o $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/exhibit_ma_osc: driver/exhibit_ma_osc.c $(MA_EVIDENCE_OBJS) $(BUILD)/drive.o src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DMA_SOURCE_EVIDENCE driver/exhibit_ma_osc.c $(MA_EVIDENCE_OBJS) $(BUILD)/drive.o $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 $(BUILD)/exhibit_ma_voice: driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
