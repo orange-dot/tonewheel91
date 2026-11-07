@@ -455,6 +455,13 @@ check-ma-front-lanes: $(BUILD)/test_ma_front_lanes
 	$(BUILD)/test_ma_front_lanes
 test: check-ma-front-lanes
 
+$(BUILD)/test_ma_raster_lanes: test/ma_raster_lanes.c src/ma_voice.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma-raster-lanes
+check-ma-raster-lanes: $(BUILD)/test_ma_raster_lanes
+	$(BUILD)/test_ma_raster_lanes
+test: check-ma-raster-lanes
+
 # MA3-PERF SIMD spike: exact-bit 8-lane AVX2 ladder/FIR vs the scalar voice.
 # Not part of `test`; --bench needs an idle host and taskset.
 $(BUILD)/spike_ma_simd: driver/spike_ma_simd.c src/ma_voice.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)

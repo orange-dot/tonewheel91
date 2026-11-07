@@ -1232,3 +1232,30 @@ one.
   deadline misses in 122,880 blocks. See
   `docs/ma3-front-lanes-20261107.md`.
 - Next candidate: raster (9–12% where used).
+
+### 2026-11-07 — MA3-PERF raster in lanes, BCS inputs in registers
+
+- A first `ml_raster` was bit-exact but made the raster patches 5–7% slower.
+  The PMU probe has a new `store` group (`LD_BLOCKS.STORE_FORWARD`, 4K alias,
+  store-buffer-full stalls; the store-forward event is calibrated at 1.000
+  per trigger). It found about 2,800 blocked store forwards per block: lane
+  arrays were filled one scalar at a time and reloaded as vectors. The vector
+  BCS already had about 3,500 per BCS-on block from the same pattern.
+- Fix:
+  - `ML_PICK_PS`/`ML_PICK_U64` build per-lane inputs in registers.
+  - `ml_raster` runs fully eight lanes wide. The mip choice is a count, and
+    each table row is one gather of the int16 (index, index + 1) pair, with
+    an index-255 fixup that keeps every read inside the table.
+  - `ml_bcs` takes its landmark lerp through `vpermps`. The scalar path is
+    unchanged.
+- New `test/ma_raster_lanes.c` (`check-ma-raster-lanes`, in `test`): 224,620
+  lane-samples bit-identical. 18 mutations were caught. Four survivors are
+  documented as equivalent. GCC/Clang `make test`, the core audit and
+  ASan/UBSan pass with every pinned signature.
+- A/B against `d1e76c0` on a quiet host:
+  - 1.15–1.23x with BCS on, 1.07–1.08x for raster with BCS off, and 1.00–1.02x
+    for the rest
+  - identical PCM, 0 deadline misses
+  - worst case 1.737 M cycles (Prizma, BCS on)
+  - See `docs/ma3-raster-bcs-lanes-20261107.md`.
+- Refactor plan for splitting `ma_voice.c`: `docs/ma-voice-refactor-plan.md`.

@@ -2930,6 +2930,26 @@ ML_TARGET static inline ml_f ml_ladder(ma_voice_lanes *b, ml_f state[4], ml_f *y
 }
 
 /* render_bcs, eight lanes: RK4 over four substeps per sample. */
+/* Per-lane scalars straight into a vector register (no store/reload, so no
+ * blocked store forwarding). `get(l)` is read only for lanes in `on`; other
+ * lanes take `fallback`. */
+#define ML_LANE(on, l, get, fallback) (((on) >> (l) & 1u) ? (get(l)) : (fallback))
+#define ML_PICK_PS(on, get, fallback) _mm256_setr_ps( \
+    ML_LANE(on, 0, get, fallback), ML_LANE(on, 1, get, fallback), \
+    ML_LANE(on, 2, get, fallback), ML_LANE(on, 3, get, fallback), \
+    ML_LANE(on, 4, get, fallback), ML_LANE(on, 5, get, fallback), \
+    ML_LANE(on, 6, get, fallback), ML_LANE(on, 7, get, fallback))
+#define ML_PICK_U64(on, get) ((ml_u64){ \
+    _mm256_setr_epi64x((long long)ML_LANE(on, 0, get, 0u), (long long)ML_LANE(on, 1, get, 0u), \
+                       (long long)ML_LANE(on, 2, get, 0u), (long long)ML_LANE(on, 3, get, 0u)), \
+    _mm256_setr_epi64x((long long)ML_LANE(on, 4, get, 0u), (long long)ML_LANE(on, 5, get, 0u), \
+                       (long long)ML_LANE(on, 6, get, 0u), (long long)ML_LANE(on, 7, get, 0u)) })
+ML_TARGET static inline ml_f ml_lane_mask(unsigned on) {
+    return _mm256_castsi256_ps(_mm256_cmpgt_epi32(
+        _mm256_and_si256(_mm256_set1_epi32((int)on), _mm256_setr_epi32(1, 2, 4, 8, 16, 32, 64, 128)),
+        _mm256_setzero_si256()));
+}
+
 typedef struct { ml_f re, im, x, v; } ml_bcs_state;
 typedef struct {
     ml_f hopf_mu, hopf_nonlinearity, duffing_frequency_ratio, duffing_damping,
@@ -2966,45 +2986,64 @@ ML_TARGET static inline ml_f ml_rk4_sum(ml_f k1, ml_f k2, ml_f k3, ml_f k4) {
     return ml_add(ml_add(ml_add(k1, ml_mul(ML_F(2.0f), k2)), ml_mul(ML_F(2.0f), k3)), k4);
 }
 
-/* BCS for the lanes in `on`. Parameters come from the scalar table lerp per
- * lane; state stays in each voice's ma_synth. A lane whose state leaves the
- * safe range takes the scalar reset, exactly as render_bcs does. */
+/* bcs_lerp(first->m, second->m, fraction) for landmark index lm, eight lanes:
+ * the four landmark values sit in one constant vector, indexed per lane. */
+ML_TARGET static inline ml_f ml_bcs_landmark_lerp(float l0, float l1, float l2, float l3,
+                                                  ml_i lm, ml_f fraction) {
+    const ml_f table = _mm256_setr_ps(l0, l1, l2, l3, l3, l3, l3, l3);
+    ml_f first = _mm256_permutevar8x32_ps(table, lm);
+    ml_f second = _mm256_permutevar8x32_ps(table, _mm256_add_epi32(lm, _mm256_set1_epi32(1)));
+    return ml_add(first, ml_mul(fraction, ml_sub(second, first)));
+}
+
+/* BCS for the lanes in `on`. bcs_parameters, the clamps and the step run
+ * eight lanes wide; state stays in each voice's ma_synth and is read into
+ * registers directly. A lane whose state leaves the safe range takes the
+ * scalar reset, exactly as render_bcs does. */
 ML_TARGET static void ml_bcs(ma_synth *const voice[MA_LANES],
                              const ma_voice_front front[MA_LANES],
                              const float ladder_y4[MA_LANES], unsigned on,
                              float out[MA_LANES]) {
-    float q[12][MA_LANES] = {}, freq[MA_LANES], upper[MA_LANES], step[MA_LANES],
-          amount[MA_LANES] = {}, feedback[MA_LANES] = {}, st[4][MA_LANES] = {};
-    for (unsigned l = 0; l < MA_LANES; l++) {
-        freq[l] = 20.0f; upper[l] = 8000.0f; step[l] = 0.0f;
-        if (!(on >> l & 1u)) continue;
-        const ma_synth *s = voice[l];
-        ma_bcs_parameters p = bcs_parameters(front[l].controls.bcs_regime);
-        const float values[12] = {
-            p.hopf_mu, p.hopf_nonlinearity, p.duffing_frequency_ratio, p.duffing_damping,
-            p.duffing_edge, p.duffing_cubic_stiffness, p.duffing_cubic_damping,
-            p.duffing_drive, p.duffing_feedback, p.hopf_mix, p.duffing_mix, p.output_gain };
-        for (int k = 0; k < 12; k++) q[k][l] = values[k];
-        float upper_hz = 0.125f * s->sample_rate_hz;
-        if (upper_hz > 8000.0f) upper_hz = 8000.0f;
-        upper[l] = upper_hz;
-        freq[l] = front[l].base_hz;
-        step[l] = 1.0f / (s->sample_rate_hz * BCS_INTEGRATION_STEPS);
-        amount[l] = front[l].controls.bcs_amount;
-        feedback[l] = ladder_y4[l];
-        st[0][l] = s->bcs.hopf_re; st[1][l] = s->bcs.hopf_im;
-        st[2][l] = s->bcs.duffing_x; st[3][l] = s->bcs.duffing_v;
-    }
+#define BCS_REGIME(l) front[l].controls.bcs_regime
+#define BCS_AMOUNT(l) front[l].controls.bcs_amount
+#define BCS_BASE(l) front[l].base_hz
+#define BCS_RATE(l) voice[l]->sample_rate_hz
+#define BCS_RE(l) voice[l]->bcs.hopf_re
+#define BCS_IM(l) voice[l]->bcs.hopf_im
+#define BCS_X(l) voice[l]->bcs.duffing_x
+#define BCS_V(l) voice[l]->bcs.duffing_v
+    const ml_f on_mask = ml_lane_mask(on);
+    /* bcs_parameters */
+    ml_f position = ml_mul(ML_PICK_PS(on, BCS_REGIME, 0.0f), ML_F(3.0f));
+    ml_i landmark = _mm256_min_epi32(_mm256_cvttps_epi32(position), _mm256_set1_epi32(2));
+    ml_f fraction = ml_sub(position, _mm256_cvtepi32_ps(landmark));
+#define BCS_P(m) ml_bcs_landmark_lerp(BCS_LANDMARK[0].m, BCS_LANDMARK[1].m, BCS_LANDMARK[2].m, \
+                                      BCS_LANDMARK[3].m, landmark, fraction)
     ml_bcs_parameters p = {
-        ml_ld(q[0]), ml_ld(q[1]), ml_ld(q[2]), ml_ld(q[3]), ml_ld(q[4]), ml_ld(q[5]),
-        ml_ld(q[6]), ml_ld(q[7]), ml_ld(q[8]), ml_ld(q[9]), ml_ld(q[10]), ml_ld(q[11]) };
-    ml_f f = ml_ld(freq), up = ml_ld(upper);
+        BCS_P(hopf_mu), BCS_P(hopf_nonlinearity), BCS_P(duffing_frequency_ratio),
+        BCS_P(duffing_damping), BCS_P(duffing_edge), BCS_P(duffing_cubic_stiffness),
+        BCS_P(duffing_cubic_damping), BCS_P(duffing_drive), BCS_P(duffing_feedback),
+        BCS_P(hopf_mix), BCS_P(duffing_mix), BCS_P(output_gain) };
+#undef BCS_P
+    ml_f rate = ML_PICK_PS(on, BCS_RATE, 48000.0f);
+    ml_f up = ml_mul(ML_F(0.125f), rate);
+    up = ml_sel(up, ML_F(8000.0f), ml_gt(up, ML_F(8000.0f)));
+    ml_f f = ML_PICK_PS(on, BCS_BASE, 20.0f);
     f = ml_sel(ml_sel(f, up, ml_gt(f, up)), ML_F(20.0f), ml_lt(f, ML_F(20.0f)));
     ml_f omega = ml_mul(ML_F(BCS_TAU), f);
-    ml_f h = ml_ld(step);
-    ml_f external_drive = ml_mul(ml_mul(ML_F(0.018f), ml_ld(amount)),
-                                 ml_clamp(ml_ld(feedback), -1.0f, 1.0f));
-    ml_bcs_state y = { ml_ld(st[0]), ml_ld(st[1]), ml_ld(st[2]), ml_ld(st[3]) };
+    ml_f h = ml_div(ML_F(1.0f), ml_mul(rate, ML_F((float)BCS_INTEGRATION_STEPS)));
+    ml_f external_drive = ml_mul(ml_mul(ML_F(0.018f), ML_PICK_PS(on, BCS_AMOUNT, 0.0f)),
+                                 ml_clamp(ml_and(on_mask, ml_ld(ladder_y4)), -1.0f, 1.0f));
+    ml_bcs_state y = { ML_PICK_PS(on, BCS_RE, 0.0f), ML_PICK_PS(on, BCS_IM, 0.0f),
+                       ML_PICK_PS(on, BCS_X, 0.0f), ML_PICK_PS(on, BCS_V, 0.0f) };
+#undef BCS_REGIME
+#undef BCS_AMOUNT
+#undef BCS_BASE
+#undef BCS_RATE
+#undef BCS_RE
+#undef BCS_IM
+#undef BCS_X
+#undef BCS_V
     for (int substep = 0; substep < BCS_INTEGRATION_STEPS; substep++) {
         ml_bcs_state k1 = ml_bcs_derivative(y, &p, omega, external_drive);
         ml_bcs_state k2 = ml_bcs_derivative(ml_bcs_advance(y, k1, ml_mul(ML_F(0.5f), h)),
@@ -3052,10 +3091,12 @@ ML_TARGET static void ml_bcs(ma_synth *const voice[MA_LANES],
 }
 
 /* Front end, part B, for a lane: the scalar parts of voice_front_b (BCS
- * effect, envelopes, noise, mozaik, raster) and the plain lane inputs,
- * written directly. Cutoff, prewarp and the source frame follow eight lanes
- * wide in ml_front_math; they read only the envelope level, the controls
- * and the guards, so running noise, mozaik and raster first changes nothing. */
+ * effect, envelopes, noise, mozaik) and the plain lane inputs, written
+ * directly. Raster follows eight lanes wide in ml_raster; it reads only its
+ * own state, base_hz and the raster controls, none of which this touches,
+ * so moving it after mozaik changes nothing. Cutoff, prewarp and the source
+ * frame follow in ml_front_math; they read only the envelope level, the
+ * controls and the guards. */
 static void voice_front_b_lane(ma_synth *restrict s, float bcs, float guard1,
                                float guard2, ma_voice_front *restrict f,
                                ml_in *in, unsigned l) {
@@ -3086,10 +3127,6 @@ static void voice_front_b_lane(ma_synth *restrict s, float bcs, float guard1,
         f->mozaik[at_2x] = render_mozaik(s, controls, f->base_hz,
                                          2.0f * s->sample_rate_hz);
         (void)next_mozaik_guard_gain(&s->mozaik);
-        f->raster[at_2x] = controls->raster_mix > 0.0f
-                         ? render_raster(s, controls, f->base_hz,
-                                         2.0f * s->sample_rate_hz)
-                         : 0.0f;
     }
     in->base[l] = f->base_hz;
     in->noise[l] = f->noise;
@@ -3110,7 +3147,6 @@ static void voice_front_b_lane(ma_synth *restrict s, float bcs, float guard1,
     for (int k = 0; k < 2; k++) {
         in->mozaik_gain[k][l] = f->mozaik_gain[k];
         in->mozaik[k][l] = f->mozaik[k];
-        in->raster[k][l] = f->raster[k];
     }
 }
 
@@ -3265,6 +3301,116 @@ ML_TARGET static void ml_front_math(const ml_front_in *x, ml_in *in, float cutof
     _mm256_storeu_ps(in->v2step, ml_turns(v2q));
 }
 
+/* Both table values raster_table_sample reads, eight lanes: one 32-bit
+ * gather per row fetches the int16 pair (index, index + 1). Index 255 wraps
+ * to 0 within its row, so it reads the pair at 254 and, when any lane needs
+ * it, entry 0 of the row; no read leaves MA_RASTER_TABLE. */
+ML_TARGET static inline ml_f ml_raster_row(ml_i row, ml_i word, ml_i last, bool any_last,
+                                           ml_f fraction) {
+    const int *table = (const int *)(const void *)&MA_RASTER_TABLE[0][0][0];
+    ml_i pair = _mm256_i32gather_epi32(table, _mm256_add_epi32(row, word), 2);
+    ml_i low = _mm256_srai_epi32(_mm256_slli_epi32(pair, 16), 16);
+    ml_i high = _mm256_srai_epi32(pair, 16);
+    ml_i a = _mm256_blendv_epi8(low, high, last), b = high;
+    if (any_last) {
+        ml_i start = _mm256_i32gather_epi32(table, row, 2);
+        b = _mm256_blendv_epi8(high, _mm256_srai_epi32(_mm256_slli_epi32(start, 16), 16), last);
+    }
+    const ml_f scale = ML_F(1.0f / 32768.0f);
+    ml_f first = ml_mul(_mm256_cvtepi32_ps(a), scale);
+    ml_f second = ml_mul(_mm256_cvtepi32_ps(b), scale);
+    return ml_add(first, ml_mul(fraction, ml_sub(second, first)));
+}
+
+/* render_raster for the lanes in `on`, both 2x steps of one output sample,
+ * written to in->raster (0 for other lanes, as the scalar path gives).
+ * Everything runs eight lanes wide: the phase step and q48, raster_mip (the
+ * limits halve, so the scalar walk equals a count of passing limits), family
+ * and morph, the phase warp, the table reads and interpolations, the mip
+ * blend and the phase advance. Lanes outside `on` compute on benign inputs
+ * (rate 1, everything else 0), are masked out and never written back. */
+ML_TARGET static void ml_raster(ma_synth *const voice[MA_LANES],
+                                const ma_voice_front front[MA_LANES],
+                                unsigned on, ml_in *in) {
+#define RASTER_BASE(l) front[l].base_hz
+#define RASTER_RATE(l) voice[l]->sample_rate_hz
+#define RASTER_POSITION(l) front[l].controls.raster_position
+#define RASTER_WARP(l) front[l].controls.raster_warp
+#define RASTER_PHASE(l) voice[l]->raster.phase_q48
+    const ml_f zero = _mm256_setzero_ps(), one = ML_F(1.0f);
+    const ml_f on_mask = ml_lane_mask(on);
+    ml_f step = ml_phase_step(ML_PICK_PS(on, RASTER_BASE, 0.0f),
+                              ml_mul(ML_F(2.0f), ML_PICK_PS(on, RASTER_RATE, 1.0f)));
+    const ml_u64 vstep = ml_f_to_u64(ml_mul(step, ML_F(0x1p48f)));
+    const ml_f warp = ML_PICK_PS(on, RASTER_WARP, 0.0f);
+    /* raster_mip */
+    ml_f effective_step = ml_mul(step, ml_add(one, ml_mul(ML_F(0.8f), warp)));
+    ml_i mip = _mm256_setzero_si256();
+    for (int k = 0; k + 1 < MA_RASTER_MIPS; k++)
+        mip = _mm256_sub_epi32(mip, _mm256_castps_si256(
+            ml_gt(ml_mul(effective_step, ML_F((float)(64 >> k))), ML_F(0.45f))));
+    ml_f load = ml_mul(effective_step, _mm256_cvtepi32_ps(_mm256_srlv_epi32(_mm256_set1_epi32(64), mip)));
+    ml_i top = _mm256_cmpeq_epi32(mip, _mm256_set1_epi32(MA_RASTER_MIPS - 1));
+    ml_f blend = ml_sel(ml_clamp(ml_mul(ml_sub(load, ML_F(0.225f)), ML_F(1.0f / 0.225f)), 0.0f, 1.0f),
+                        zero, _mm256_castsi256_ps(top));
+    const ml_f blend_on = ml_gt(blend, zero);
+    const bool any_blend = ml_any(blend_on);
+    /* family, morph and the table rows (coarse row clamped where unused) */
+    ml_f family_position = ml_mul(ML_PICK_PS(on, RASTER_POSITION, 0.0f),
+                                  ML_F((float)(MA_RASTER_FAMILIES - 1)));
+    ml_i family = _mm256_cvttps_epi32(family_position);
+    const ml_f morph = ml_sub(family_position, _mm256_cvtepi32_ps(family));
+    ml_i next_family = _mm256_min_epi32(_mm256_add_epi32(family, _mm256_set1_epi32(1)),
+                                        _mm256_set1_epi32(MA_RASTER_FAMILIES - 1));
+    ml_i coarse = _mm256_min_epi32(_mm256_add_epi32(mip, _mm256_set1_epi32(1)),
+                                   _mm256_set1_epi32(MA_RASTER_MIPS - 1));
+    const ml_i mips = _mm256_set1_epi32(MA_RASTER_MIPS);
+#define RASTER_ROW(f, m) _mm256_slli_epi32(_mm256_add_epi32(_mm256_mullo_epi32(f, mips), m), 8)
+    const ml_i row_a = RASTER_ROW(family, mip), row_b = RASTER_ROW(next_family, mip);
+    const ml_i coarse_a = RASTER_ROW(family, coarse), coarse_b = RASTER_ROW(next_family, coarse);
+#undef RASTER_ROW
+    ml_u64 vphase = ML_PICK_U64(on, RASTER_PHASE);
+    const ml_u64 mask48 = ml_u64_set(PHASE_MASK_Q48);
+    for (int at_2x = 0; at_2x < 2; at_2x++) {
+        ml_f p = ml_turns(vphase);
+        ml_f warped = ml_add(p, ml_mul(ml_mul(ML_F(0.12f), warp), ml_sin_turns(p)));
+        warped = ml_sel(warped, ml_add(warped, one), ml_lt(warped, zero));
+        warped = ml_sel(warped, ml_sub(warped, one), ml_ge(warped, one));
+        ml_f table_phase = ml_mul(warped, ML_F((float)MA_RASTER_SAMPLES));
+        ml_i whole = _mm256_cvttps_epi32(table_phase);   /* (uint16_t): 0 <= table_phase < 256 */
+        ml_f fraction = ml_sub(table_phase, _mm256_cvtepi32_ps(whole));
+        ml_i index = _mm256_and_si256(whole, _mm256_set1_epi32(MA_RASTER_SAMPLES - 1));
+        ml_i last = _mm256_cmpeq_epi32(index, _mm256_set1_epi32(MA_RASTER_SAMPLES - 1));
+        bool any_last = !_mm256_testz_si256(last, last);
+        ml_i word = _mm256_min_epi32(index, _mm256_set1_epi32(MA_RASTER_SAMPLES - 2));
+        ml_f first = ml_raster_row(row_a, word, last, any_last, fraction);
+        ml_f second = ml_raster_row(row_b, word, last, any_last, fraction);
+        ml_f sample = ml_add(first, ml_mul(morph, ml_sub(second, first)));
+        if (any_blend) {
+            first = ml_raster_row(coarse_a, word, last, any_last, fraction);
+            second = ml_raster_row(coarse_b, word, last, any_last, fraction);
+            ml_f coarse_sample = ml_add(first, ml_mul(morph, ml_sub(second, first)));
+            sample = ml_sel(sample, ml_add(sample, ml_mul(blend, ml_sub(coarse_sample, sample))), blend_on);
+        }
+        _mm256_storeu_ps(in->raster[at_2x], ml_and(on_mask, sample));
+        vphase = ml_u64_and(ml_u64_add(vphase, vstep), mask48);
+    }
+    alignas(32) uint64_t phase[MA_LANES];
+    alignas(32) int32_t mip_out[MA_LANES];
+    ml_u64_st(phase, vphase);
+    _mm256_store_si256((ml_i *)mip_out, mip);
+    for (unsigned l = 0; l < MA_LANES; l++)
+        if (on >> l & 1u) {
+            voice[l]->raster.phase_q48 = phase[l];
+            voice[l]->raster.mip = (uint8_t)mip_out[l];
+        }
+#undef RASTER_BASE
+#undef RASTER_RATE
+#undef RASTER_POSITION
+#undef RASTER_WARP
+#undef RASTER_PHASE
+}
+
 /* Oscillator block, decimators, filter steps and output decimator. */
 ML_TARGET static void ml_kernel(ma_voice_lanes *b, const ml_in *in, float filtered[MA_LANES]) {
     ml_osc o1 = ml_osc_ld(b, 0), o2 = ml_osc_ld(b, 1);
@@ -3332,6 +3478,11 @@ void ma_lanes_tick(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
         ml_front_gather(&fx, lane, voice[lane], &front[lane],
                         b->guard_gain[0][lane], b->guard_gain[1][lane]);
     }
+    unsigned raster_on = 0;
+    for (unsigned lane = 0; lane < MA_LANES; lane++)
+        if ((b->active >> lane & 1u) && front[lane].controls.raster_mix > 0.0f)
+            raster_on |= 1u << lane;
+    if (raster_on) ml_raster(voice, front, raster_on, &in);
     float cutoff[MA_LANES];
     ml_front_math(&fx, &in, cutoff);
     for (unsigned lane = 0; lane < MA_LANES; lane++)
@@ -3342,6 +3493,9 @@ void ma_lanes_tick(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
         out[lane] = b->active >> lane & 1u
                   ? voice_back_end(voice[lane], &front[lane], filtered[lane]) : 0.0f;
 }
+#undef ML_PICK_U64
+#undef ML_PICK_PS
+#undef ML_LANE
 #undef ML_TARGET
 #undef ML_F
 #else

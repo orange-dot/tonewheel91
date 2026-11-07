@@ -1,7 +1,8 @@
 /* MA3-PERF PMU probe (2026-11-06): where do the remaining cycles go?
  * Per 128-frame render block, for the ten 8-slot wet cases and both pool
  * engines: branches and mispredictions, L1D/L2/L3 misses, floating-point
- * assists (denormal handling) and divider uops. Haswell raw events, user
+ * assists (denormal handling), divider uops, and blocked store forwarding,
+ * 4K aliasing and store-buffer stalls. Haswell raw events, user
  * space, this thread; one event group at a time on the same deterministic
  * workload, so nothing is multiplexed (checked per block).
  *
@@ -33,12 +34,16 @@ static const event L3_MISS = { "l3_load_misses", PERF_TYPE_RAW, 0x20d1 }; /* MEM
 static const event LLC_MISS = { "llc_misses", PERF_TYPE_RAW, 0x412e };    /* LONGEST_LAT_CACHE.MISS */
 static const event FP_ASSIST = { "fp_assists", PERF_TYPE_RAW, 0x1eca };   /* FP_ASSIST.ANY */
 static const event DIVIDER = { "divider_uops", PERF_TYPE_RAW, 0x0214 };   /* ARITH.DIVIDER_UOPS */
+static const event SF_BLOCK = { "store_forward_blocks", PERF_TYPE_RAW, 0x0203 };/* LD_BLOCKS.STORE_FORWARD */
+static const event ALIAS_4K = { "alias_4k", PERF_TYPE_RAW, 0x0107 };      /* LD_BLOCKS_PARTIAL.ADDRESS_ALIAS */
+static const event SB_STALL = { "sb_full_stall_cycles", PERF_TYPE_RAW, 0x08a2 };/* RESOURCE_STALLS.SB */
 
 typedef struct { const char *name; event ev[MAXEV]; unsigned count; } group_def;
 static const group_def GROUPS[] = {
     { "branch", { INSTR, BRANCHES, BR_MISSES }, 3 },
     { "cache", { L1D_REPL, L2_MISS, LLC_MISS }, 3 },
     { "assist", { FP_ASSIST, DIVIDER }, 2 },
+    { "store", { SF_BLOCK, ALIAS_4K, SB_STALL }, 3 },
 };
 
 typedef struct { int fd[MAXEV + 1]; unsigned n; } group;
@@ -83,6 +88,8 @@ static void calibrate(void) {
         { &L3_MISS, "1e6 dependent loads to random lines in 64 MiB" },
         { &LLC_MISS, "1e6 dependent loads to random lines in 64 MiB" },
         { &FP_ASSIST, "1e6 multiplies of a subnormal" }, { &DIVIDER, "1e6 divss" },
+        { &SF_BLOCK, "1e6 dword loads over four byte stores" },
+        { &ALIAS_4K, "1e6 loads 4 KiB after a store" },
     };
     enum { N = 1000000, LINES = (64 << 20) / 64 };
     uint32_t *chain = malloc((size_t)LINES * 16 * sizeof *chain);   /* one uint32 per 64-byte line slot */
@@ -109,6 +116,17 @@ static void calibrate(void) {
         } else if (cases[c].e == &FP_ASSIST) {
             volatile float tiny = 0x1p-140f;                 /* subnormal input */
             for (unsigned i = 0; i < N; i++) sink = tiny * 0.75f;
+        } else if (cases[c].e == &SF_BLOCK) {
+            /* the load spans four separate stores, so it cannot be forwarded */
+            static volatile union { uint8_t b[4]; uint32_t w; } u;
+            for (unsigned i = 0; i < N; i++) {
+                u.b[0] = (uint8_t)i; u.b[1] = (uint8_t)i; u.b[2] = (uint8_t)i; u.b[3] = (uint8_t)i;
+                isink = isink + u.w;
+            }
+        } else if (cases[c].e == &ALIAS_4K) {
+            /* same low 12 address bits, different line: a false store/load dependence */
+            static volatile alignas(4096) uint32_t page[2048];
+            for (unsigned i = 0; i < N; i++) { page[0] = i; isink = isink + page[1024]; }
         } else if (cases[c].e == &DIVIDER) {
             volatile float x = 3.0f;
             for (unsigned i = 0; i < N; i++) sink = x / 7.0f;
