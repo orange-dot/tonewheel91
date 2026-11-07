@@ -466,8 +466,45 @@ static inline float voice_back_end(const ma_synth *s, const ma_voice_front *f,
 }
 #endif
 
-/* Scalar stages shared by the scalar tick (ma_voice.c) and the vector
- * lanes (ma_lanes.c). */
+static inline ma_smoother initialized_smoother(float value) {
+    return (ma_smoother){ .current = value, .target = value };
+}
+
+static inline void set_smoother_target(ma_smoother *smoother, float target,
+                                       float sample_rate_hz) {
+    if (target == smoother->target) return;
+    smoother->target = target;
+    smoother->remaining = smoothing_frames(sample_rate_hz);
+    smoother->step = (target - smoother->current)
+                   / (float)smoother->remaining;
+}
+
+static inline void set_bypass_smoother_target(ma_smoother *smoother, float target,
+                                              float sample_rate_hz) {
+    if (target == 0.0f) {
+        *smoother = initialized_smoother(0.0f);
+        return;
+    }
+    set_smoother_target(smoother, target, sample_rate_hz);
+}
+
+static inline float filter_prewarp(float cutoff_hz, float sample_rate_hz) {
+    float x = cutoff_hz / (2.0f * sample_rate_hz);
+    float z = 2.0f * x * (1.0f / 0.42f) - 1.0f;
+    float b1 = 0.0f;
+    float b2 = 0.0f;
+    for (int k = 6; k >= 1; k--) {
+        float b = 2.0f * z * b1 - b2 + PREWARP_CHEB[k];
+        b2 = b1;
+        b1 = b;
+    }
+    return x * (z * b1 - b2 + PREWARP_CHEB[0]);
+}
+
+/* Out-of-line functions defined in ma_voice.c. The control code
+ * (ma_controls.c) snaps the mozaik slope; the vector lanes (ma_lanes.c) run
+ * front end part A. */
+uint32_t ma_voice_mozaik_slope_q32(float control);
 #if !defined(MA_SOURCE_EVIDENCE)
 void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
                       ma_voice_front *restrict f);
