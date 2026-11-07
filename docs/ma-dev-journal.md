@@ -1199,3 +1199,19 @@ one.
   readiness or a quiet host throughout. See `docs/ma3-bcs-lanes-20261106.md`
   for the per-case table and source/binary identities. Next: controls and
   envelopes in lanes with direct lane-input writes, then raster/mozaik.
+
+### 2026-11-07 — MA3-PERF front-end sub-stages
+
+- `driver/probe_ma3_stages.c` now mirrors the current lane path (front A,
+  vector BCS, front B) and splits the front end into ten sub-stages, run
+  stage-major across voices. Frames and slot state are bit-identical to a
+  twin pool, the two quiet runs agree to within about 0.7 points, and timer
+  overhead is 7–11%.
+- In the held state, controls (4.7–6.9%) and envelopes (1.7–4.5%) are
+  cheap. The source frame (8–12%) is the largest front-end item.
+  Raster is 9–12% where it is used, cutoff and prewarp 5–8%, mozaik 4–6%,
+  the lane fill 3–4%, and vector BCS 13.6–16.2% when on.
+  See `docs/ma3-frontend-stages-20261107.md`.
+- Next: put the source frame, cutoff and prewarp in lanes, writing the
+  lane inputs directly (about 18–24% of a block). Then raster. Controls and
+  envelopes wait until a moving-control workload shows a cost.

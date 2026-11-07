@@ -20,11 +20,15 @@
 
 #define AVX2 __attribute__((target("avx2")))
 enum { FRAMES = 128, WARMUP = 256, BLOCKS = 1024 };
-enum { ST_GATHER, ST_CONTROL, ST_FRONT, ST_FILL, ST_OSC, ST_DECIMATE, ST_FILTER,
-       ST_BACK, ST_SLOTS, ST_OUTPUT, ST_COUNT };
+/* Front-end sub-stages run stage-major across the gathered voices: each voice
+ * still performs its own operations in order, and voices share no state. */
+enum { ST_GATHER, ST_CONTROL, ST_FE_CONTROLS, ST_FE_PITCH, ST_FE_BCS, ST_FE_ENVELOPES,
+       ST_FE_CUTOFF, ST_FE_NOISE, ST_FE_SOURCE, ST_FE_MOZAIK, ST_FE_RASTER, ST_FILL,
+       ST_OSC, ST_DECIMATE, ST_FILTER, ST_BACK, ST_SLOTS, ST_OUTPUT, ST_COUNT };
 static const char *const STAGE[ST_COUNT] = {
-    "gather_scatter", "control_pan", "front_end", "lane_fill", "osc_block",
-    "decimators", "filter_fir7", "back_end", "slot_loop", "output_effects" };
+    "gather_scatter", "control_pan", "fe_controls", "fe_pitch", "fe_bcs", "fe_envelopes",
+    "fe_cutoff_prewarp", "fe_noise", "fe_source_frame", "fe_mozaik", "fe_raster", "lane_fill",
+    "osc_block", "decimators", "filter_fir7", "back_end", "slot_loop", "output_effects" };
 static uint64_t stage[ST_COUNT];
 static inline uint64_t tsc(void) { _mm_lfence(); uint64_t t = __rdtsc(); _mm_lfence(); return t; }
 
@@ -76,28 +80,100 @@ AVX2 static void kernel_timed(ma_voice_lanes *b, const ml_in *in, float filtered
     stage[ST_OSC] += t1 - t0; stage[ST_DECIMATE] += t2 - t1; stage[ST_FILTER] += t3 - t2;
 }
 
-/* ma_lanes_tick, split by stage (fill after all front ends: fill only copies) */
+/* ma_lanes_tick (front A, vector BCS, front B), split by sub-stage */
 static void lanes_tick_timed(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
                              const float detune[MA_LANES], float out[MA_LANES]) {
     ma_voice_front front[MA_LANES];
     ml_in in;
-    uint64_t t0 = tsc();
-    for (unsigned l = 0; l < MA_LANES; l++)
-        if (b->active >> l & 1u)
-            voice_front_end(voice[l], detune[l], b->y4_guess[l], b->guard_gain[0][l],
-                            b->guard_gain[1][l], &front[l]);
-    uint64_t t1 = tsc();
+    unsigned act = b->active;
+#define EACH for (unsigned l = 0; l < MA_LANES; l++) if (act >> l & 1u)
+    uint64_t t = tsc(), u;
+    /* front A: controls */
+    EACH fill_render_controls(voice[l], &front[l].controls);
+    u = tsc(); stage[ST_FE_CONTROLS] += u - t; t = u;
+    /* front A: character, glide, LFO, pitch */
+    EACH {
+        ma_synth *sv = voice[l]; ma_voice_front *f = &front[l];
+        ma_render_controls *controls = &f->controls;
+        float character = next_character(sv);
+        float note_position = next_glide_note(sv);
+        float pitch_delta = controls->pitch_bend_semitones + next_lfo(sv, controls);
+        float base_hz = note_position_hz(note_position);
+        if (detune[l] != 0.0f) base_hz *= octave_ratio_small(detune[l] / 1200.0f);
+        if (pitch_delta != 0.0f) base_hz *= octave_ratio_small(pitch_delta / 12.0f);
+        if (character > 0.0f)
+            base_hz *= octave_ratio_small(character
+                * (sv->character.vco1_cents + sv->character.walk_cents) / 1200.0f);
+        f->character = character; f->note_position = note_position; f->base_hz = base_hz;
+    }
+    u = tsc(); stage[ST_FE_PITCH] += u - t; t = u;
+    /* BCS, eight lanes */
+    unsigned bcs_on = 0;
+    EACH if (front[l].controls.bcs_amount > 0.0f) bcs_on |= 1u << l;
+    float bcs[MA_LANES] = {};
+    if (bcs_on) ml_bcs(voice, front, b->y4_guess, bcs_on, bcs);
+    u = tsc(); stage[ST_FE_BCS] += u - t; t = u;
+    /* front B: BCS effect on controls, envelopes */
+    EACH {
+        ma_synth *sv = voice[l]; ma_render_controls *controls = &front[l].controls;
+        if (controls->bcs_amount > 0.0f) {
+            float crossmod_depth = 0.10f + 0.20f * controls->bcs_regime;
+            float resonance_depth = 0.08f + 0.08f * controls->bcs_regime;
+            controls->crossmod_amount = clamp_signal(
+                controls->crossmod_amount + controls->bcs_amount * crossmod_depth * bcs[l], 0.0f, 1.0f);
+            controls->filter_resonance = clamp_signal(
+                controls->filter_resonance + controls->bcs_amount * resonance_depth * bcs[l], 0.0f, 1.0f);
+        }
+        ma_adsr filter_adsr = character_adsr(sv->filter_adsr, sv->character.filter_time_bias, front[l].character);
+        ma_adsr amp_adsr = character_adsr(sv->amp_adsr, sv->character.amp_time_bias, front[l].character);
+        (void)render_envelope(&sv->filter_envelope, filter_adsr, sv->sample_rate_hz);
+        (void)render_envelope(&sv->amp_envelope, amp_adsr, sv->sample_rate_hz);
+    }
+    u = tsc(); stage[ST_FE_ENVELOPES] += u - t; t = u;
+    /* front B: cutoff and prewarp */
+    float filter_modulation[MA_LANES];
+    EACH {
+        ma_synth *sv = voice[l]; ma_voice_front *f = &front[l];
+        float envelope_amount = filter_envelope_amount(sv, &f->controls);
+        filter_modulation[l] = sv->filter_envelope.level * envelope_amount;
+        sv->filter_cutoff_effective_hz = effective_filter_cutoff(sv, &f->controls, envelope_amount, f->note_position);
+        f->filter_g = filter_prewarp(sv->filter_cutoff_effective_hz, sv->sample_rate_hz);
+        f->guard1 = b->guard_gain[0][l];
+        f->guard2 = b->guard_gain[1][l];
+    }
+    u = tsc(); stage[ST_FE_CUTOFF] += u - t; t = u;
+    EACH front[l].noise = next_noise(&voice[l]->noise_state);
+    u = tsc(); stage[ST_FE_NOISE] += u - t; t = u;
+    EACH front[l].source = prepare_source_frame_guarded(voice[l], &front[l].controls, front[l].base_hz,
+                                                        filter_modulation[l], front[l].guard1, front[l].guard2);
+    u = tsc(); stage[ST_FE_SOURCE] += u - t; t = u;
+    /* mozaik and raster: disjoint state, so mozaik's two steps may precede raster's */
+    EACH {
+        ma_synth *sv = voice[l]; ma_voice_front *f = &front[l];
+        for (int at_2x = 0; at_2x < 2; at_2x++) {
+            f->mozaik_gain[at_2x] = sv->mozaik.guard_gain;
+            f->mozaik[at_2x] = render_mozaik(sv, &f->controls, f->base_hz, 2.0f * sv->sample_rate_hz);
+            (void)next_mozaik_guard_gain(&sv->mozaik);
+        }
+    }
+    u = tsc(); stage[ST_FE_MOZAIK] += u - t; t = u;
+    EACH {
+        ma_synth *sv = voice[l]; ma_voice_front *f = &front[l];
+        for (int at_2x = 0; at_2x < 2; at_2x++)
+            f->raster[at_2x] = f->controls.raster_mix > 0.0f
+                             ? render_raster(sv, &f->controls, f->base_hz, 2.0f * sv->sample_rate_hz) : 0.0f;
+    }
+    u = tsc(); stage[ST_FE_RASTER] += u - t; t = u;
     ml_benign(&in);
-    for (unsigned l = 0; l < MA_LANES; l++)
-        if (b->active >> l & 1u) ml_fill(&in, l, &front[l], voice[l]);
-    uint64_t t2 = tsc();
+    EACH ml_fill(&in, l, &front[l], voice[l]);
+    u = tsc(); stage[ST_FILL] += u - t; t = u;
     float filtered[MA_LANES];
     kernel_timed(b, &in, filtered);
-    uint64_t t3 = tsc();
+    t = tsc();
     for (unsigned l = 0; l < MA_LANES; l++)
-        out[l] = b->active >> l & 1u ? voice_back_end(voice[l], &front[l], filtered[l]) : 0.0f;
-    uint64_t t4 = tsc();
-    stage[ST_FRONT] += t1 - t0; stage[ST_FILL] += t2 - t1; stage[ST_BACK] += t4 - t3;
+        out[l] = act >> l & 1u ? voice_back_end(voice[l], &front[l], filtered[l]) : 0.0f;
+    stage[ST_BACK] += tsc() - t;
+#undef EACH
 }
 
 /* pool_tick(p, true), split by stage */
