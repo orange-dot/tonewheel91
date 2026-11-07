@@ -2472,7 +2472,8 @@ static void ml_benign(ml_in *in) {
     }
 }
 
-static void ml_fill(ml_in *in, unsigned l, const ma_voice_front *f,
+/* Kept for white-box probes; the lane tick writes lane inputs directly. */
+[[maybe_unused]] static void ml_fill(ml_in *in, unsigned l, const ma_voice_front *f,
                     const ma_synth *s) {
     const ma_vco_controls *v[2] = { &f->source.vco1, &f->source.vco2 };
     float (*c[2])[MA_LANES] = { in->c1, in->c2 };
@@ -3050,6 +3051,220 @@ ML_TARGET static void ml_bcs(ma_synth *const voice[MA_LANES],
     }
 }
 
+/* Front end, part B, for a lane: the scalar parts of voice_front_b (BCS
+ * effect, envelopes, noise, mozaik, raster) and the plain lane inputs,
+ * written directly. Cutoff, prewarp and the source frame follow eight lanes
+ * wide in ml_front_math; they read only the envelope level, the controls
+ * and the guards, so running noise, mozaik and raster first changes nothing. */
+static void voice_front_b_lane(ma_synth *restrict s, float bcs, float guard1,
+                               float guard2, ma_voice_front *restrict f,
+                               ml_in *in, unsigned l) {
+    ma_render_controls *controls = &f->controls;
+    if (controls->bcs_amount > 0.0f) {
+        float crossmod_depth = 0.10f + 0.20f * controls->bcs_regime;
+        float resonance_depth = 0.08f + 0.08f * controls->bcs_regime;
+        controls->crossmod_amount = clamp_signal(
+            controls->crossmod_amount
+                + controls->bcs_amount * crossmod_depth * bcs,
+            0.0f, 1.0f);
+        controls->filter_resonance = clamp_signal(
+            controls->filter_resonance
+                + controls->bcs_amount * resonance_depth * bcs,
+            0.0f, 1.0f);
+    }
+    ma_adsr filter_adsr = character_adsr(s->filter_adsr,
+        s->character.filter_time_bias, f->character);
+    ma_adsr amp_adsr = character_adsr(s->amp_adsr,
+        s->character.amp_time_bias, f->character);
+    (void)render_envelope(&s->filter_envelope, filter_adsr, s->sample_rate_hz);
+    (void)render_envelope(&s->amp_envelope, amp_adsr, s->sample_rate_hz);
+    f->guard1 = guard1;
+    f->guard2 = guard2;
+    f->noise = next_noise(&s->noise_state);
+    for (int at_2x = 0; at_2x < 2; at_2x++) {
+        f->mozaik_gain[at_2x] = s->mozaik.guard_gain;
+        f->mozaik[at_2x] = render_mozaik(s, controls, f->base_hz,
+                                         2.0f * s->sample_rate_hz);
+        (void)next_mozaik_guard_gain(&s->mozaik);
+        f->raster[at_2x] = controls->raster_mix > 0.0f
+                         ? render_raster(s, controls, f->base_hz,
+                                         2.0f * s->sample_rate_hz)
+                         : 0.0f;
+    }
+    in->base[l] = f->base_hz;
+    in->noise[l] = f->noise;
+    in->g1[l] = guard1;
+    in->g2[l] = guard2;
+    in->crossmod[l] = controls->crossmod_amount;
+    in->v2level[l] = controls->vco2_level;
+    in->noiselevel[l] = controls->noise_level;
+    in->guard_hz[l] = 0.45f * s->sample_rate_hz;
+    uint16_t frames = smoothing_frames(s->sample_rate_hz);
+    in->guard_frames_i[l] = frames;
+    in->guard_frames_f[l] = (float)frames;
+    in->raster_mix[l] = controls->raster_mix;
+    in->mozaik_mix[l] = controls->mozaik_mix;
+    in->pressure[l] = controls->mixer_pressure;
+    in->drive[l] = controls->filter_drive;
+    in->resonance[l] = controls->filter_resonance;
+    for (int k = 0; k < 2; k++) {
+        in->mozaik_gain[k][l] = f->mozaik_gain[k];
+        in->mozaik[k][l] = f->mozaik[k];
+        in->raster[k][l] = f->raster[k];
+    }
+}
+
+/* Front-end math for eight voices, written straight into the lane inputs:
+ * filter_envelope_amount, effective_filter_cutoff, filter_prewarp and
+ * prepare_source_frame_guarded, each lane in its scalar operation order.
+ * Per-lane scalar inputs are gathered by the caller (ml_front_in). */
+typedef struct {
+    float env_level[MA_LANES], env_amount[MA_LANES], velocity_filter[MA_LANES];
+    float note[MA_LANES], keytrack[MA_LANES], cutoff_hz[MA_LANES], poly[MA_LANES];
+    float character[MA_LANES], cutoff_octaves[MA_LANES], vco2_cents[MA_LANES];
+    float cutoff_max[MA_LANES], rate[MA_LANES];
+    float vco[2][5][MA_LANES];                       /* saw pulse tri sine pw */
+    float sync_amount[MA_LANES], sync_softness[MA_LANES], v2level[MA_LANES];
+    float noise_level[MA_LANES], crossmod[MA_LANES], fine_cents[MA_LANES];
+    float base[MA_LANES], interval[MA_LANES], g1[MA_LANES], g2[MA_LANES];
+} ml_front_in;
+
+static void ml_front_benign(ml_front_in *x) {
+    *x = (ml_front_in){};
+    for (int l = 0; l < MA_LANES; l++) {
+        x->cutoff_hz[l] = 1000.0f; x->cutoff_max[l] = 20000.0f;
+        x->rate[l] = 48000.0f; x->interval[l] = 1.0f;
+    }
+}
+
+static void ml_front_gather(ml_front_in *x, unsigned l, const ma_synth *s,
+                            const ma_voice_front *f, float guard1, float guard2) {
+    const ma_render_controls *c = &f->controls;
+    x->env_level[l] = s->filter_envelope.level;
+    x->env_amount[l] = c->filter_env_amount;
+    x->velocity_filter[l] = ma_velocity_filter(s->velocity);
+    x->note[l] = f->note_position;
+    x->keytrack[l] = c->filter_keytrack;
+    x->cutoff_hz[l] = c->filter_cutoff_hz;
+    x->poly[l] = c->poly_pressure;
+    x->character[l] = s->character.smoother.current;
+    x->cutoff_octaves[l] = s->character.cutoff_octaves;
+    x->vco2_cents[l] = s->character.vco2_cents;
+    float cutoff_max = 0.42f * s->sample_rate_hz;
+    if (cutoff_max > 20000.0f) cutoff_max = 20000.0f;
+    x->cutoff_max[l] = cutoff_max;
+    x->rate[l] = s->sample_rate_hz;
+    const ma_vco_controls *v[2] = { &c->vco1, &c->vco2 };
+    for (int k = 0; k < 2; k++) {
+        x->vco[k][0][l] = v[k]->saw_level; x->vco[k][1][l] = v[k]->pulse_level;
+        x->vco[k][2][l] = v[k]->triangle_level; x->vco[k][3][l] = v[k]->sine_level;
+        x->vco[k][4][l] = v[k]->pulse_width;
+    }
+    x->sync_amount[l] = c->sync_amount; x->sync_softness[l] = c->sync_softness;
+    x->v2level[l] = c->vco2_level; x->noise_level[l] = c->noise_level;
+    x->crossmod[l] = c->crossmod_amount; x->fine_cents[l] = c->vco2_fine_cents;
+    x->base[l] = f->base_hz;
+    x->interval[l] = interval_ratio(s->vco2_interval);
+    x->g1[l] = guard1; x->g2[l] = guard2;
+}
+
+ML_TARGET static inline ml_f ml_octave_ratio_small(ml_f octaves) {
+    octaves = ml_clamp(octaves, -0.25f, 0.25f);
+    ml_f value = ML_F(EXP2_SMALL[5]);
+    for (int i = 4; i >= 0; i--) value = ml_add(ml_mul(value, octaves), ML_F(EXP2_SMALL[i]));
+    return value;
+}
+ML_TARGET static inline ml_f ml_phase_step(ml_f hz, ml_f rate) {
+    return ml_clamp(ml_div(hz, rate), 0.0f, 0.45f);
+}
+ML_TARGET static inline ml_i ml_active(const ml_f level[5]) {
+    const ml_f zero = _mm256_setzero_ps();
+    ml_i saw = _mm256_and_si256(_mm256_castps_si256(_mm256_cmp_ps(level[0], zero, _CMP_NEQ_UQ)), _mm256_set1_epi32(WAVE_SAW));
+    ml_i pulse = _mm256_and_si256(_mm256_castps_si256(_mm256_cmp_ps(level[1], zero, _CMP_NEQ_UQ)), _mm256_set1_epi32(WAVE_PULSE));
+    ml_i tri = _mm256_and_si256(_mm256_castps_si256(_mm256_cmp_ps(level[2], zero, _CMP_NEQ_UQ)), _mm256_set1_epi32(WAVE_TRIANGLE));
+    return _mm256_or_si256(_mm256_or_si256(saw, pulse), tri);
+}
+ML_TARGET static inline ml_f ml_waveform_divisor(const ml_f level[5]) {
+    ml_f sum = ml_add(ml_add(ml_add(level[0], level[1]), level[2]), level[3]);
+    return ml_sel(ML_F(1.0f), sum, ml_gt(sum, ML_F(1.0f)));
+}
+
+/* Writes the source-frame fields and filter_g of `in`; cutoff_out gets
+ * effective_filter_cutoff for each lane (the caller stores it per voice). */
+ML_TARGET static void ml_front_math(const ml_front_in *x, ml_in *in, float cutoff_out[MA_LANES]) {
+    const ml_f zero = _mm256_setzero_ps(), one = ML_F(1.0f);
+    /* filter_envelope_amount, filter modulation */
+    ml_f amount = ml_clamp(ml_add(ml_ld(x->env_amount), ml_mul(ML_F(0.25f), ml_ld(x->velocity_filter))), 0.0f, 1.0f);
+    ml_f level = ml_ld(x->env_level);
+    ml_f modulation = ml_mul(level, amount);
+    /* effective_filter_cutoff */
+    ml_f envelope = ml_add(one, ml_mul(ml_mul(ML_F(0.78f), level), amount));
+    ml_f keytrack = ml_add(one, ml_mul(ml_mul(ml_mul(ml_sub(ml_ld(x->note), ML_F(60.0f)),
+                                                     ML_F(1.0f / 48.0f)), ml_ld(x->keytrack)), ML_F(0.42f)));
+    keytrack = ml_clamp(keytrack, 0.55f, 1.35f);
+    ml_f cutoff = ml_mul(ml_mul(ml_ld(x->cutoff_hz), envelope), keytrack);
+    ml_f poly = ml_ld(x->poly);
+    ml_f poly_on = ml_gt(poly, zero);
+    if (ml_any(poly_on))
+        cutoff = ml_sel(cutoff, ml_mul(cutoff, ml_octave_ratio_small(ml_mul(ML_F(0.25f), poly))), poly_on);
+    ml_f character = ml_ld(x->character);
+    ml_f character_on = ml_gt(character, zero);
+    if (ml_any(character_on))
+        cutoff = ml_sel(cutoff, ml_mul(cutoff, ml_octave_ratio_small(ml_mul(character, ml_ld(x->cutoff_octaves)))),
+                        character_on);
+    ml_f cutoff_max = ml_ld(x->cutoff_max);
+    cutoff = ml_sel(ml_sel(cutoff, cutoff_max, ml_gt(cutoff, cutoff_max)), ML_F(20.0f), ml_lt(cutoff, ML_F(20.0f)));
+    _mm256_storeu_ps(cutoff_out, cutoff);
+    /* filter_prewarp */
+    ml_f fs = ml_ld(x->rate);
+    ml_f xw = ml_div(cutoff, ml_mul(ML_F(2.0f), fs));
+    ml_f z = ml_sub(ml_mul(ml_mul(ML_F(2.0f), xw), ML_F(1.0f / 0.42f)), one);
+    ml_f b1 = zero, b2 = zero;
+    for (int k = 6; k >= 1; k--) {
+        ml_f bk = ml_add(ml_sub(ml_mul(ml_mul(ML_F(2.0f), z), b1), b2), ML_F(PREWARP_CHEB[k]));
+        b2 = b1;
+        b1 = bk;
+    }
+    _mm256_storeu_ps(in->filter_g, ml_mul(xw, ml_add(ml_sub(ml_mul(z, b1), b2), ML_F(PREWARP_CHEB[0]))));
+    /* prepare_source_frame_guarded */
+    ml_f v1[5], v2[5];
+    for (int k = 0; k < 5; k++) { v1[k] = ml_ld(x->vco[0][k]); v2[k] = ml_ld(x->vco[1][k]); }
+    _mm256_storeu_si256((ml_i *)in->act1, ml_active(v1));
+    _mm256_storeu_si256((ml_i *)in->act2, ml_active(v2));
+    _mm256_storeu_ps(in->div1, ml_waveform_divisor(v1));
+    _mm256_storeu_ps(in->div2, ml_waveform_divisor(v2));
+    ml_f rate = ml_mul(ML_F(8.0f), fs);
+    _mm256_storeu_ps(in->rate, rate);
+    _mm256_storeu_ps(in->sync, ml_mul(ml_ld(x->sync_amount),
+        ml_clamp(ml_sub(one, ml_mul(ML_F(0.75f), ml_ld(x->sync_softness))), 0.0f, 1.0f)));
+    v1[4] = ml_clamp(ml_add(v1[4], ml_mul(ML_F(0.120f), modulation)), 0.05f, 0.95f);
+    v2[4] = ml_clamp(ml_sub(v2[4], ml_mul(ML_F(0.080f), modulation)), 0.05f, 0.95f);
+    for (int k = 0; k < 5; k++) { _mm256_storeu_ps(in->c1[k], v1[k]); _mm256_storeu_ps(in->c2[k], v2[k]); }
+    ml_f envelope_ratio = ml_octave_ratio_small(ml_mul(ML_F(0.125f), modulation));
+    _mm256_storeu_ps(in->envr, envelope_ratio);
+    ml_f vco1_weight = ml_sel(zero, one, ml_gt(ml_ld(x->g1), zero));
+    ml_f vco2_weight = ml_sel(zero, ml_ld(x->v2level), ml_gt(ml_ld(x->g2), zero));
+    ml_f mixer = ml_add(ml_add(vco1_weight, vco2_weight), ml_ld(x->noise_level));
+    _mm256_storeu_ps(in->mixdiv, ml_sel(mixer, one, ml_lt(mixer, one)));
+    ml_f base = ml_ld(x->base);
+    ml_f no_crossmod = _mm256_cmp_ps(ml_ld(x->crossmod), zero, _CMP_EQ_OQ);
+    ml_f v1hz = ml_mul(base, envelope_ratio);
+    ml_u64 v1q = ml_f_to_u64(ml_mul(ml_phase_step(v1hz, rate), ML_F(0x1p48f)));
+    ml_f v1step = ml_turns(v1q);
+    _mm256_storeu_ps(in->v1hz, ml_and(no_crossmod, v1hz));
+    _mm256_storeu_ps(in->v1step, ml_and(no_crossmod, v1step));
+    ml_u64_st(in->v1q, ml_u64_sel(ml_u64_set(0), v1q, no_crossmod));
+    ml_f fine = ml_octave_ratio_small(ml_div(ml_ld(x->fine_cents), ML_F(1200.0f)));
+    ml_f v2hz = ml_mul(ml_mul(base, ml_ld(x->interval)), fine);
+    if (ml_any(character_on))
+        v2hz = ml_sel(v2hz, ml_mul(v2hz, ml_octave_ratio_small(
+            ml_div(ml_mul(character, ml_ld(x->vco2_cents)), ML_F(1200.0f)))), character_on);
+    _mm256_storeu_ps(in->v2hz, v2hz);
+    ml_u64 v2q = ml_f_to_u64(ml_mul(ml_phase_step(v2hz, rate), ML_F(0x1p48f)));
+    ml_u64_st(in->v2q, v2q);
+    _mm256_storeu_ps(in->v2step, ml_turns(v2q));
+}
+
 /* Oscillator block, decimators, filter steps and output decimator. */
 ML_TARGET static void ml_kernel(ma_voice_lanes *b, const ml_in *in, float filtered[MA_LANES]) {
     ml_osc o1 = ml_osc_ld(b, 0), o2 = ml_osc_ld(b, 1);
@@ -3108,12 +3323,19 @@ void ma_lanes_tick(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
     }
     float bcs[MA_LANES] = {};
     if (bcs_on) ml_bcs(voice, front, b->y4_guess, bcs_on, bcs);
+    ml_front_in fx;
+    ml_front_benign(&fx);
     for (unsigned lane = 0; lane < MA_LANES; lane++) {
         if (!(b->active >> lane & 1u)) continue;
-        voice_front_b(voice[lane], bcs[lane], b->guard_gain[0][lane],
-                      b->guard_gain[1][lane], &front[lane]);
-        ml_fill(&in, lane, &front[lane], voice[lane]);
+        voice_front_b_lane(voice[lane], bcs[lane], b->guard_gain[0][lane],
+                           b->guard_gain[1][lane], &front[lane], &in, lane);
+        ml_front_gather(&fx, lane, voice[lane], &front[lane],
+                        b->guard_gain[0][lane], b->guard_gain[1][lane]);
     }
+    float cutoff[MA_LANES];
+    ml_front_math(&fx, &in, cutoff);
+    for (unsigned lane = 0; lane < MA_LANES; lane++)
+        if (b->active >> lane & 1u) voice[lane]->filter_cutoff_effective_hz = cutoff[lane];
     float filtered[MA_LANES];
     ml_kernel(b, &in, filtered);
     for (unsigned lane = 0; lane < MA_LANES; lane++)

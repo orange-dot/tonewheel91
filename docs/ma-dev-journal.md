@@ -1215,3 +1215,20 @@ one.
 - Next: put the source frame, cutoff and prewarp in lanes, writing the
   lane inputs directly (about 18–24% of a block). Then raster. Controls and
   envelopes wait until a moving-control workload shows a cost.
+
+### 2026-11-07 — MA3-PERF front-end math in lanes
+
+- New `ml_front_math` (AVX2) computes the envelope amount, effective
+  cutoff, Chebyshev prewarp and full source frame for eight voices, and
+  writes them straight into the lane inputs. `voice_front_b_lane` keeps
+  the scalar parts and writes the plain lane inputs directly, so the lane
+  fill is gone. The scalar path is unchanged.
+- New `test/ma_front_lanes.c` (`check-ma-front-lanes`, in `test`): 400,000
+  lane-frames bit-identical to the scalar functions, and both deliberate
+  mutations caught. GCC/Clang `make test`, the core audit and ASan/UBSan
+  pass with 0 warnings and every pinned signature.
+- A/B against `4106152` on a quiet host: 1.08–1.12x faster with identical
+  PCM, worst case 2.073 M cycles (Prizma, BCS on), and 0 CPU and wall
+  deadline misses in 122,880 blocks. See
+  `docs/ma3-front-lanes-20261107.md`.
+- Next candidate: raster (9–12% where used).
