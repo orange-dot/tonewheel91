@@ -25,13 +25,12 @@ its internal sub-gates already has working code.
   `ma_voice.c` (scalar tick, oscillators, decimators, raster, BCS,
   per-sample controls), `ma_voice_impl.h` (private constants, types,
   `static inline` helpers), `ma_controls.c`, `ma_patches.c`, `ma_lanes.c`,
-  `ma_filter.c`. `ma_sources.c` was measured and rejected.
-- No next DSP candidate is chosen yet. Open operator decisions:
-  - one extern raster table instead of a copy in `ma_voice.o` and
-    `ma_lanes.o`
-  - the refactor plan's follow-ups: the stage probe calling the real stages,
-    one source for scalar and lane front end part B, and the
-    `MA_SOURCE_EVIDENCE` layout switch
+  `ma_filter.c`, and `ma_raster_table.c` (one raster table, below).
+  `ma_sources.c` was measured and rejected.
+- No next DSP candidate is chosen yet. Open operator decisions: the
+  refactor plan's follow-ups (the stage probe calling the real stages, one
+  source for scalar and lane front end part B, and the `MA_SOURCE_EVIDENCE`
+  layout switch).
 - Other MA3 work: OPT1–3 are measured and await operator listening. OPT4
   was reverted on 2026-11-06 (candidate kept in `bb0ec9a`). MA3-LIVE is
   queued. MA3-1/2 are done; the MA3-2 listening set was accepted on
@@ -1329,3 +1328,30 @@ Notes:
   sides; scalar 669/698 before and 314/352 after, at 8 voices where the
   scalar engine already runs near the 128-frame deadline.
   Runs: `build/ma-voice-refactor-abfinal-{auto,scalar}-20261107-01/`.
+
+### 2026-11-07 — one raster table
+
+- Operator decision: one extern raster table instead of a copy in
+  `ma_voice.o` and `ma_lanes.o`. The data moves unchanged from
+  `src/ma_raster_table.h` into `src/ma_raster_table.c` as
+  `const int16_t MA_RASTER_TABLE[8][7][256]`. The header keeps the
+  dimensions and gains the `extern` declaration. The new object is in
+  `MA_OBJS` and the evidence object set.
+- Identity: the header SHA256 pinned in `docs/ma2-perf-evidence.md`
+  (`d2a27107…`) is now historical. The compiled table is byte-identical to
+  the old static table: 28,672 bytes, SHA256 `928257a6…`, 32-byte aligned
+  in both. Evidence: `build/raster-table-extern-20261107/`.
+- The definition is `alignas(64)`. Both former static copies happened to sit
+  on 64-byte boundaries. Without the specifier the shared table landed at
+  32 mod 64, so every 512-byte row started mid-line under the vector gather.
+- `ma_voice.o` and `ma_lanes.o` disassemble identically to `b6bb3a2` per
+  function. `.rodata` across the voice objects drops by 28 KiB, to within
+  0.8 KiB of the pre-split size.
+- GCC/Clang `make test`, ASan/UBSan, both core-symbol audits, all 20 PCM
+  hashes, the `exhibit-ma1-osc` output and the white-box counts are
+  unchanged.
+- Quiet-host A/B against `30cd135`, 10 cases × 3 epochs, CPU 2: AUTO −1.32
+  to +0.85 %, scalar −0.43 to +0.19 %; PCM identical. AUTO was noisy in this
+  window (one A epoch 19 % off). Two earlier AUTO runs of the unaligned
+  table each had one case near +1.5–1.8 % from a single noisy epoch, in
+  different cases. Runs: `build/ma-voice-refactor-abrt*-20261107-*`.
