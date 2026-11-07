@@ -12,24 +12,36 @@ its internal sub-gates already has working code.
 ## Current position
 
 - Active milestone: **MA3 — first playable, stereo and effects**.
-- Active task: **MA3-OPT4 measured screen; keep/reject pending**.
-  The operator approved starting the model/agent plan on 2026-10-02;
-  `docs/ma3-perf-plan.md` defines P0–P6. Fresh evidence is recorded in
-  `docs/ma3-perf-20261002.md`; run `build/ma3-perf-20261002-01/`.
-  The first FIR traversal candidate is implemented; `docs/ma3-opt4.md` records
-  correctness. The operator later authorized performance measurement;
-  `docs/ma3-opt4-measure-20261003.md` records a mixed A/B screen. P3 Raster
-  investigation and a supported OPT4 keep/reject decision remain pending.
-  MA3-1/2 are done and the MA3-2 listening set was accepted on 2026-09-08.
-  Blues/Hurt renders are complete. OPT1–3 have implementation/measurement
-  evidence; listening remains pending and 32-slot wet cost exceeds the budget.
-- Earlier recorded green aggregate run: GCC, Clang and ASan/UBSan/
-  float-cast-overflow, 2026-09-08, on MA3-2: core `111378`, hosted `116`,
-  MIDI map `22`, architecture `227`, character `8700`, stereo `2611`;
-  zero failures, plus MA2-7 pool, MA3-1/2 MIDI twins, effect tests and seven CLI tests.
-  Both compiler core-symbol audits pass.
-- Later OPT3 entries (2026-09-10) record GCC/Clang/sanitizer and numerical
-  referee passes; see `docs/ma3-opt3.md` for that source-bound evidence.
+- Active task: **MA3-PERF**, updated 2026-11-07. The interim 8-slot target
+  (operator decision 2026-11-06; core default stays 32) is met in hosted
+  measurement by bit-exact AVX2 vector lanes (`engine` AUTO). The vector
+  engine now covers the oscillator block, decimators, ladder, BCS, front-end
+  math and raster. Its worst 8-slot case is 1.737 M cycles per 128-frame
+  block (Prizma, BCS on), with 0 deadline misses
+  (`docs/ma3-raster-bcs-lanes-20261107.md`). 32 slots remain open; MA3-LIVE
+  owns isolation, priority and the no-xrun gate.
+- Latest slice: `src/ma_voice.c` split into voice modules, move-only, PCM
+  unchanged (2026-11-07 entry below; `b6c0426` … `30cd135`). Files:
+  `ma_voice.c` (scalar tick, oscillators, decimators, raster, BCS,
+  per-sample controls), `ma_voice_impl.h` (private constants, types,
+  `static inline` helpers), `ma_controls.c`, `ma_patches.c`, `ma_lanes.c`,
+  `ma_filter.c`. `ma_sources.c` was measured and rejected.
+- No next DSP candidate is chosen yet. Open operator decisions:
+  - one extern raster table instead of a copy in `ma_voice.o` and
+    `ma_lanes.o`
+  - the refactor plan's follow-ups: the stage probe calling the real stages,
+    one source for scalar and lane front end part B, and the
+    `MA_SOURCE_EVIDENCE` layout switch
+- Other MA3 work: OPT1–3 are measured and await operator listening. OPT4
+  was reverted on 2026-11-06 (candidate kept in `bb0ec9a`). MA3-LIVE is
+  queued. MA3-1/2 are done; the MA3-2 listening set was accepted on
+  2026-09-08.
+- Latest green aggregate run: 2026-11-07 on `eb4a5a4` (later commits change
+  only comments and docs). GCC, Clang and ASan/UBSan/float-cast-overflow:
+  core `111378`, hosted `116`, MIDI map `22`, architecture `227`, character
+  `8700`, stereo `2611`, zero failures. The pool engine twin is
+  bit-identical over 73,354 frames, the three lane white-box gates hold
+  their counts, and both compiler core-symbol audits pass.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
 - Core implementation status: MA0, MA1, MA2-1 through MA2-7, MA2-DIG,
