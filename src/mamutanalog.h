@@ -81,6 +81,12 @@ typedef struct {
     float width;
     float crossfeed;
     float master_level;
+    /* Glas (ma-constants.md 10C). Zero mixes are an exact bypass. */
+    float formant_mix;
+    float formant_vowel;
+    float formant_shift;
+    float formant_orbita;
+    float grain_mix;
 } ma_patch;
 
 /* Compiled factory bank; hosted mirrors are not core dependencies. */
@@ -248,6 +254,65 @@ typedef struct {
     uint64_t reset_count;
 } ma_bcs;
 
+/* Glas: four formant centres shared by a formant bank after the ladder and
+ * a pitch-synchronous formant-grain source; Orbita moons can capture the
+ * centres on the voice's harmonics. ma-constants.md 10C. */
+enum { MA_FORMANTS = 4, MA_GRAINS_PER_FORMANT = 4 };
+
+typedef struct {
+    float s1;
+    float s2;
+} ma_formant_svf;
+
+typedef struct {
+    float ratio;
+    int16_t captured;   /* harmonic number, or -1 */
+    int16_t candidate;
+    uint8_t hold;
+} ma_formant_moon;
+
+typedef struct {
+    float phase;
+    float step;
+    float envelope;
+    float decay;
+    float attack_pos;
+    float attack_step;
+    float gain;
+    bool active;
+} ma_grain;
+
+typedef struct {
+    float formant_mix;
+    float formant_vowel;
+    float formant_shift;
+    float formant_orbita;
+    float grain_mix;
+    ma_smoother mix_smoother;
+    ma_smoother vowel_smoother;
+    ma_smoother shift_smoother;
+    ma_smoother grain_smoother;
+    ma_formant_svf svf[MA_FORMANTS];
+    ma_formant_moon moon[MA_FORMANTS];
+    float centre_hz[MA_FORMANTS];
+    float g[MA_FORMANTS];
+    float k[MA_FORMANTS];
+    ma_grain grain[MA_FORMANTS][MA_GRAINS_PER_FORMANT];
+    float pulse_phase;
+    float grain_out[2];
+    float frame_grain_mix;  /* this frame's grain mix; 0 when Glas is idle */
+    uint8_t grain_cursor[MA_FORMANTS];
+    uint8_t tick_pos;
+    bool retrigger;
+    bool coefficients_ready;
+    uint64_t captures;
+    uint64_t releases;
+    uint64_t resets;
+    uint64_t grains_launched;
+    uint64_t grains_stolen;
+    uint32_t coefficient_epoch;  /* bumped by every Orbita tick */
+} ma_glas;
+
 typedef struct {
     float state[4];
     float y4_guess;
@@ -336,6 +401,7 @@ typedef struct {
     ma_mozaik mozaik;
     ma_ladder ladder;
     ma_output_state output;
+    ma_glas glas;
 #if defined(MA_SOURCE_EVIDENCE)
     float oversample_history[3][31];
     uint8_t oversample_history_pos[3];
@@ -433,6 +499,12 @@ void ma_synth_set_oscillator_modulation(ma_synth *s, float sync_amount,
                                         float crossmod_amount,
                                         float noise_level);
 void ma_synth_set_raster(ma_synth *s, float mix, float position, float warp);
+/* Glas formant bank and Orbita formants (ma-constants.md 10C). Mix zero is
+ * an exact, state-preserving bypass when grain mix is zero too. */
+void ma_synth_set_formant(ma_synth *s, float mix, float vowel, float shift,
+                          float orbita);
+/* Glas formant grains: crossfade into the source at mix [0,1]. */
+void ma_synth_set_grain(ma_synth *s, float mix);
 /* BCS is a feedback coordinate, not an audible parallel source. Amount zero
  * is an exact state-preserving bypass; regime traverses stable, edge,
  * subharmonic and recovery landmarks over the unit interval. */
@@ -583,6 +655,19 @@ typedef struct {
     uint32_t reset_count[MA_LANES];
     uint8_t history_pos[2], output_pos;          /* shared by all lanes */
     uint8_t own_history_pos[2][MA_LANES], own_output_pos[MA_LANES];
+    /* Glas (ma-constants.md 10C): formant SVF state and coefficients, and
+     * the formant grains, lane-major. Grain index = formant * 4 + slot. */
+    float glas_s1[MA_FORMANTS][MA_LANES], glas_s2[MA_FORMANTS][MA_LANES];
+    float glas_g[MA_FORMANTS][MA_LANES], glas_k[MA_FORMANTS][MA_LANES];
+    float grain_phase[MA_FORMANTS * MA_GRAINS_PER_FORMANT][MA_LANES];
+    float grain_step[MA_FORMANTS * MA_GRAINS_PER_FORMANT][MA_LANES];
+    float grain_envelope[MA_FORMANTS * MA_GRAINS_PER_FORMANT][MA_LANES];
+    float grain_decay[MA_FORMANTS * MA_GRAINS_PER_FORMANT][MA_LANES];
+    float grain_attack_pos[MA_FORMANTS * MA_GRAINS_PER_FORMANT][MA_LANES];
+    float grain_attack_step[MA_FORMANTS * MA_GRAINS_PER_FORMANT][MA_LANES];
+    float grain_gain[MA_FORMANTS * MA_GRAINS_PER_FORMANT][MA_LANES];
+    int32_t grain_active[MA_FORMANTS * MA_GRAINS_PER_FORMANT][MA_LANES];   /* 0 or -1 */
+    uint32_t glas_epoch[MA_LANES];
     uint8_t active;                              /* gathered, still awake */
 } ma_voice_lanes;
 

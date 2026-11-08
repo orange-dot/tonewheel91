@@ -176,6 +176,7 @@ The earlier Mamut-only listening evidence remains in
 ## Targets
 
 The supported instrument target is the current x86-64 Linux/ALSA host.
+x86-64 builds require AVX2 (`-march=x86-64-v3`: Haswell, 2013, or later).
 
 ## License
 

@@ -1038,7 +1038,11 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
                     s->oscillator1.guard_gain, s->oscillator2.guard_gain, &f);
     voice_oscillator_block(s, &f, source);
     voice_decimate(s, source, at_2x);
-    float output = voice_back_end(s, &f, ma_voice_filter(s, &f, at_2x));
+    bool glas = ma_glas_active(&s->glas);
+    s->glas.frame_grain_mix = glas ? ma_glas_prepare(s, f.base_hz) : 0.0f;
+    float filtered = ma_voice_filter(s, &f, at_2x);
+    if (glas) filtered = ma_glas_formant(s, filtered);
+    float output = voice_back_end(s, &f, filtered);
     if (raw) return (ma_frame){ .left = output, .right = output };
     return ma_voice_render_output(s, &f.controls, output);
 }
@@ -1058,4 +1062,5 @@ float ma_voice_tick_detuned(ma_synth *s, float cents) {
 }
 void ma_voice_tick_controls(ma_synth *s) {
     (void)next_render_controls(s);
+    ma_glas_tick_controls(&s->glas);
 }

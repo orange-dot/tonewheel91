@@ -5,6 +5,14 @@ WARN   := -Wall -Wextra -Wpedantic
 CFLAGS := -std=c23 -O2 $(WARN) -ffp-contract=off
 TEST_EXTRA ?= check-core-symbols
 
+# x86-64 requires AVX2 (x86-64-v3: AVX2, FMA, BMI; Haswell 2013 and later),
+# operator decision 2026-11-08: SIMD is first class. -ffp-contract=off still
+# forbids implicit FMA, so PCM stays bit-exact. ARCH_CFLAGS= builds the old
+# baseline for A/B measurements. Applied with override so the sanitize and
+# analyze CFLAGS overrides keep it.
+ARCH_CFLAGS ?= $(if $(findstring x86_64,$(shell $(CC) -dumpmachine)),-march=x86-64-v3)
+override CFLAGS += $(ARCH_CFLAGS)
+
 # The core stays freestanding-clean; drivers and tests are hosted.
 CORE_CFLAGS := $(CFLAGS) -ffreestanding
 
@@ -17,11 +25,11 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
 # The Mamut Analog line is a sibling core. Keep it out of the organ and EP
 # products; the aggregate core test and symbol audit are its first hosts.
-MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_filter.o $(BUILD)/ma_controls.o $(BUILD)/ma_patches.o $(BUILD)/ma_lanes.o $(BUILD)/ma_raster_table.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o
+MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_filter.o $(BUILD)/ma_controls.o $(BUILD)/ma_patches.o $(BUILD)/ma_lanes.o $(BUILD)/ma_raster_table.o $(BUILD)/ma_glas.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o
 MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
 # The voice modules share ma_voice_impl.h; MA_EVIDENCE_OBJS is the same set
 # built with -DMA_SOURCE_EVIDENCE (see the evidence rule below).
-MA_VOICE_MODULES := ma_voice ma_filter ma_controls ma_patches ma_lanes ma_raster_table
+MA_VOICE_MODULES := ma_voice ma_filter ma_controls ma_patches ma_lanes ma_raster_table ma_glas
 MA_VOICE_OBJS := $(MA_VOICE_MODULES:%=$(BUILD)/%.o)
 MA_EVIDENCE_OBJS := $(MA_VOICE_MODULES:%=$(BUILD)/evidence/%.o)
 MA_HOST_OBJS := $(BUILD)/ma_midi_map.o $(BUILD)/ma_midi_render.o
@@ -471,6 +479,14 @@ $(BUILD)/test_ma_raster_lanes: test/ma_raster_lanes.c src/ma_voice.c src/ma_lane
 check-ma-raster-lanes: $(BUILD)/test_ma_raster_lanes
 	$(BUILD)/test_ma_raster_lanes
 test: check-ma-raster-lanes
+
+# Glas gate: formant bank, Orbita formants, formant grains (ma-constants 10C).
+$(BUILD)/test_ma_glas: test/ma_glas.c src/ma_voice_impl.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma-glas
+check-ma-glas: $(BUILD)/test_ma_glas
+	$(BUILD)/test_ma_glas
+test: check-ma-glas
 
 # MA3-PERF SIMD spike: exact-bit 8-lane AVX2 ladder/FIR vs the scalar voice.
 # Not part of `test`; --bench needs an idle host and taskset.

@@ -86,6 +86,9 @@ float ma_voice_filter(ma_synth *s, const ma_voice_front *f,
         float source = mix_source_2x(&f->controls, at_2x[step], f->guard1,
                                      f->guard2, f->mozaik_gain[step],
                                      f->mozaik[step], f->raster[step]);
+        float grain_mix = s->glas.frame_grain_mix;
+        if (grain_mix > 0.0f)
+            source += grain_mix * (s->glas.grain_out[step] - source);
         float pressured = apply_mixer_pressure(source,
                                                 f->controls.mixer_pressure);
         s->ladder.pressure_input = source;

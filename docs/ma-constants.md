@@ -755,6 +755,137 @@ Granica uses amount/regime `.72/.62`, no pulse components, a sine/triangle
 spine with VCO2 one octave down, restrained Raster `.10/.68/.12`, cutoff
 `820 Hz`, resonance `.26`, filter drive `.15` and master `.54`.
 
+## 10C. Glas: formant bank, Orbita formants and formant grains (MA3-GLAS)
+
+Operator decision 2026-11-07. This lifts, for this unit only, the
+backlog exclusions of additional sources and of a second filter stage
+through MA5. Glas is one per-voice unit with three parts. All three share
+one set of four formant centres. Every part has an exact bypass: with
+formant mix and grain mix both at literal zero, Glas does no work, touches
+no state, and every pre-existing signature is unchanged. The vector lanes
+run Glas (2026-11-08, `docs/ma3-glas-lanes-20261108.md`).
+- The smoothers, the Orbita tick and the grain pulse and launch run per
+  lane.
+- The grains and the formant SVF bank run lane-major, with the same
+  operations in the same order.
+- The grain crossfade is a lane select inside the vector source mix.
+- A pool with Glas therefore stays on the lanes. The
+source-evidence build does not render Glas.
+
+### 10C.1 Formant table
+
+Vowel line, dark to bright. Position `v` in `[0,1]` maps linearly to
+`p = 4v`. Adjacent vowels are interpolated linearly in Hz.
+
+| `p` | Vowel | F1 | F2 | F3 | F4 |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 0 | u | 300 | 870 | 2240 | 3300 |
+| 1 | o | 570 | 840 | 2410 | 3300 |
+| 2 | a | 730 | 1090 | 2440 | 3300 |
+| 3 | e | 530 | 1840 | 2480 | 3300 |
+| 4 | i | 270 | 2290 | 3010 | 3300 |
+
+- F1–F3 are adult-male averages from Peterson & Barney, JASA 1952.
+- F4 is a single [DECISION] value.
+- Bandwidths are `80, 90, 120, 160 Hz` and formant gains are
+  `1, .63, .25, .14` [DECISION].
+- Shift `s` in `[-1,1]` scales every centre by
+  `octave_ratio_small(s/4)^2`, which is ±½ octave.
+- Centres clamp to `[60 Hz, .40 fs]`.
+
+### 10C.2 Formant bank
+
+The bank runs on the ladder's 1x output, before the VCA. Each formant is a
+topology-preserving SVF:
+- `g = G/(1−G)`, with `G` from the §6.1 prewarp polynomial;
+- `k = B/F`, clamped to `[.02, 2]`;
+- the output is `k·bp`, which has unity gain at the centre.
+
+The four band-pass outputs are weighted by the formant gains, summed and
+multiplied by `FORMANT_MAKEUP`. The result crossfades with the ladder
+output: `y = x + mix·(bank − x)`. Coefficients are recomputed at every
+Orbita tick. Non-finite SVF state resets the bank and is counted.
+
+### 10C.3 Orbita formants
+
+Each formant centre is a moon: a ratio `r` to the voice's base frequency
+`f0` (§2, after detune, bend, LFO and character). The dynamics come from
+the Orbita spike (`ma-orbita-spike-20261107.md`), applied to the integer
+harmonic grid.
+
+Every 32 frames:
+- the home ratio is `h = F_vowel/f0`, and the target harmonic is
+  `n = max(1, round(h))`;
+- amount `d = 0` sets `r = h` with no capture, so the centres are fixed
+  formants;
+- otherwise a free moon moves by `r −= .12·d²·(r − n)`. It is captured
+  when `|r − n|/n < .002` holds for 8 ticks. A captured moon slews `.25`
+  of the remaining distance per tick and snaps exactly within `1e-6·n`;
+- a capture is released when the home drifts `|h − n_c| > .65` harmonics
+  away [DECISION]. The moon then glides to the new nearest harmonic.
+- a note-on captures every moon on the harmonic nearest its home at once
+  [DECISION], so a new note never starts with a formant sweep.
+
+The effective centre is `f0·r`.
+
+### 10C.4 Formant grains
+
+Formant grains are a pitch-synchronous source in the style of FOF (Rodet,
+CMJ 1984). They run at the 2x ladder-input rate `R`.
+- A pulse phase advances by `f0/R`. Each wrap launches one grain per
+  formant, but only while `20 ≤ f0 ≤ 2000 Hz`.
+- A grain is a sine at the formant centre, starting at phase 0.
+- Its envelope has a raised-cosine attack of 2 ms and decays by
+  `1 − tw_one_pole_coeff(π·B/R)` per sample. It is weighted by its
+  formant's gain.
+- Each formant has four grain slots, launched round-robin. A slot that is
+  still sounding is stolen, and the steal is counted.
+- A grain ends below `1e-4` of its peak.
+- The sum is multiplied by `GRAIN_NORM`.
+
+Grains crossfade into the normalized source at 2x, after the source mixer
+and before mixer pressure: `src = src + grain_mix·(grains − src)`. Literal
+zero advances no grain state.
+
+### 10C.5 Controls
+
+| Control | Domain | Default | Smoothing |
+| --- | --- | --- | --- |
+| formant mix | `[0,1]` | 0 | 6 ms, bypass snap at 0 |
+| formant vowel | `[0,1]` | .25 (o) | 6 ms |
+| formant shift | `[-1,1]` | 0 | 6 ms |
+| formant orbita | `[0,1]` | 0 | none, read per tick |
+| grain mix | `[0,1]` | 0 | 6 ms, bypass snap at 0 |
+
+`FORMANT_MAKEUP` and `GRAIN_NORM` are measured at implementation and pinned
+here (see 10C.6).
+
+### 10C.6 Measured gains
+
+From `make check-ma-glas` (`test/ma_glas.c`), at 48 kHz:
+
+- **`FORMANT_MAKEUP = 4.0`** [DECISION, measured].
+  - At 2.6, a 130.8 Hz saw through vowel o came out at an RMS ratio of
+    .474 (−6.5 dB).
+  - At 4.0 that ratio is .729 (−2.7 dB), and a sine at F1 of vowel a gains
+    about 4×.
+  - The bank's sine response for vowel a at makeup 2.6 was: 150 Hz .083,
+    F1 2.62, F2 1.71, 6 kHz .085.
+- **`GRAIN_NORM = .30`** [DECISION].
+  - At 98 Hz, vowel a, grain mix 1, the strongest harmonic is the 7th
+    (686 Hz, nearest F1).
+  - 488 grains launched per second and none were stolen.
+  - Through the Lead output stage the voice peaks at .036.
+- **Orbita sweep** of the vowel 0 → 1 over 2 s at amount .8, MIDI 48:
+  24 captures, 24 releases, 0 resets. Every captured centre sits exactly
+  on its harmonic.
+- **Pool:** a Glas pool renders bit-identical PCM on the AUTO (vector
+  lanes) and SCALAR engines. A heavy twin, with unison 4, 16 slots,
+  overlapping notes, patch edits and grains on and off, matches over
+  76,800 frames.
+- **Bypass:** all pre-existing PCM signatures are unchanged under
+  `make test`, `make test-clang` and `make sanitize`.
+
 ## 11. Card character and pan (MA2 constants pinned early)
 
 Character seed: `0x4d41434841523031` (`MACHAR01`) [DECISION]. For card

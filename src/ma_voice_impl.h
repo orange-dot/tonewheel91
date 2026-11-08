@@ -541,6 +541,31 @@ void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
                       ma_voice_front *restrict f);
 #endif
 
+/* Glas (ma_glas.c, ma-constants.md 10C). The scalar tick calls
+ * ma_glas_prepare once per frame while ma_glas_active, then the bank. The
+ * vector lanes call ma_glas_prepare_controls, then pulse/launch per lane and
+ * render grains and the bank lane-major with the same arithmetic. */
+static constexpr float GLAS_GAIN[MA_FORMANTS] = { 1.0f, 0.63f, 0.25f, 0.14f };
+static constexpr float FORMANT_MAKEUP = 4.0f;      /* 10C.6 */
+static constexpr float GRAIN_NORM = 0.30f;         /* 10C.6 */
+static constexpr float GRAIN_FLOOR = 1.0e-4f;
+float ma_glas_prepare_controls(ma_synth *s, float f0);
+bool ma_glas_pulse(ma_glas *g, float f0, float render_rate_hz);
+ma_grain ma_glas_new_grain(const ma_glas *g, int formant, float render_rate_hz);
+void ma_glas_reset_state(ma_glas *g);
+void ma_glas_init(ma_glas *g, float mix, float vowel, float shift, float orbita,
+                  float grain_mix);
+void ma_glas_set_formant(ma_glas *g, float mix, float vowel, float shift,
+                         float orbita, float sample_rate_hz);
+void ma_glas_set_grain(ma_glas *g, float mix, float sample_rate_hz);
+bool ma_glas_active(const ma_glas *g);
+/* Control-only voices (the pool's control synth) advance and snap the Glas
+ * smoothers so woken slots inherit settled values. */
+void ma_glas_tick_controls(ma_glas *g);
+void ma_glas_snap_controls(ma_glas *g);
+float ma_glas_prepare(ma_synth *s, float f0);
+float ma_glas_formant(ma_synth *s, float x);
+
 /* The scalar filter stage (ma_filter.c), called once per frame by the
  * scalar tick. */
 #if !defined(MA_SOURCE_EVIDENCE)

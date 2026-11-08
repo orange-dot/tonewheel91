@@ -436,6 +436,14 @@ static ma_patch sanitize_patch(const ma_patch *value, float sample_rate_hz) {
         .crossfeed = clamp_control(source->crossfeed, 0.0f, 1.0f, 0.0f),
         .master_level = clamp_control(source->master_level,
                                       0.0f, 1.0f, 0.18f),
+        .formant_mix = clamp_control(source->formant_mix, 0.0f, 1.0f, 0.0f),
+        .formant_vowel = clamp_control(source->formant_vowel,
+                                       0.0f, 1.0f, 0.25f),
+        .formant_shift = clamp_control(source->formant_shift,
+                                       -1.0f, 1.0f, 0.0f),
+        .formant_orbita = clamp_control(source->formant_orbita,
+                                        0.0f, 1.0f, 0.0f),
+        .grain_mix = clamp_control(source->grain_mix, 0.0f, 1.0f, 0.0f),
     };
     for (int macro = 0; macro < MA_MACRO_COUNT; macro++)
         result.macro[macro] = clamp_control(source->macro[macro],
@@ -522,6 +530,8 @@ void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
     s->identity_zero = resolve_identity(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     resolve_effective_identity(s);
     initialize_control_smoothers(s);
+    ma_glas_init(&s->glas, value.formant_mix, value.formant_vowel,
+                 value.formant_shift, value.formant_orbita, value.grain_mix);
     reset_mozaik(&s->mozaik, effective_phason_q32(s));
     s->filter_g = filter_prewarp(s->filter_cutoff_hz, s->sample_rate_hz);
     tw_drive_init(&s->output.body, s->sample_rate_hz);
@@ -556,6 +566,7 @@ void ma_synth_note_on(ma_synth *s, uint8_t channel, uint8_t note,
     start_envelope_stage(&s->amp_envelope, MA_ENVELOPE_ATTACK, 1.0f);
     start_envelope_stage(&s->filter_envelope, MA_ENVELOPE_ATTACK, 1.0f);
     reset_mozaik(&s->mozaik, effective_phason_q32(s));
+    s->glas.retrigger = true;
 }
 
 void ma_synth_note_off(ma_synth *s, uint8_t channel, uint8_t note,
@@ -606,6 +617,15 @@ void ma_synth_set_oscillator_modulation(ma_synth *s, float sync_amount,
     s->crossmod_amount = clamp_control(crossmod_amount, 0.0f, 1.0f, 0.0f);
     s->noise_level = clamp_control(noise_level, 0.0f, 1.0f, 0.02f);
     update_control_targets(s);
+}
+
+void ma_synth_set_formant(ma_synth *s, float mix, float vowel, float shift,
+                          float orbita) {
+    ma_glas_set_formant(&s->glas, mix, vowel, shift, orbita, s->sample_rate_hz);
+}
+
+void ma_synth_set_grain(ma_synth *s, float mix) {
+    ma_glas_set_grain(&s->glas, mix, s->sample_rate_hz);
 }
 
 void ma_synth_set_raster(ma_synth *s, float mix, float position, float warp) {
@@ -734,6 +754,7 @@ void ma_synth_set_mod_wheel(ma_synth *s, float amount) {
 
 void ma_voice_snap_controls(ma_synth *s) {
     initialize_control_smoothers(s);
+    ma_glas_snap_controls(&s->glas);
 }
 
 void ma_voice_patch_controls(ma_synth *s, const ma_patch *patch) {
@@ -743,6 +764,9 @@ void ma_voice_patch_controls(ma_synth *s, const ma_patch *patch) {
     ma_synth_set_oscillator_modulation(s, p.sync_amount, p.sync_softness,
                                       p.crossmod_amount, p.noise_level);
     ma_synth_set_raster(s, p.raster_mix, p.raster_position, p.raster_warp);
+    ma_synth_set_formant(s, p.formant_mix, p.formant_vowel, p.formant_shift,
+                         p.formant_orbita);
+    ma_synth_set_grain(s, p.grain_mix);
     ma_synth_set_bcs(s, p.bcs_amount, p.bcs_regime);
     ma_synth_set_mozaik(s, p.mozaik_mix, p.mozaik_slope, p.mozaik_contrast,
                        p.mozaik_phason, p.mozaik_drift);

@@ -58,6 +58,26 @@ void ma_lanes_gather(ma_voice_lanes *b, unsigned lane, const ma_synth *s) {
     b->pressure_input[lane] = s->ladder.pressure_input;
     b->pressure_output[lane] = s->ladder.pressure_output;
     b->reset_count[lane] = s->ladder.reset_count;
+    const ma_glas *g = &s->glas;
+    for (int i = 0; i < MA_FORMANTS; i++) {
+        b->glas_s1[i][lane] = g->svf[i].s1;
+        b->glas_s2[i][lane] = g->svf[i].s2;
+        b->glas_g[i][lane] = g->g[i];
+        b->glas_k[i][lane] = g->k[i];
+        for (int j = 0; j < MA_GRAINS_PER_FORMANT; j++) {
+            const ma_grain *q = &g->grain[i][j];
+            int x = i * MA_GRAINS_PER_FORMANT + j;
+            b->grain_phase[x][lane] = q->phase;
+            b->grain_step[x][lane] = q->step;
+            b->grain_envelope[x][lane] = q->envelope;
+            b->grain_decay[x][lane] = q->decay;
+            b->grain_attack_pos[x][lane] = q->attack_pos;
+            b->grain_attack_step[x][lane] = q->attack_step;
+            b->grain_gain[x][lane] = q->gain;
+            b->grain_active[x][lane] = q->active ? -1 : 0;
+        }
+    }
+    b->glas_epoch[lane] = g->coefficient_epoch;
     b->active |= (uint8_t)(1u << lane);
 }
 
@@ -86,6 +106,23 @@ void ma_lanes_scatter(const ma_voice_lanes *b, unsigned lane, ma_synth *s) {
     s->ladder.pressure_input = b->pressure_input[lane];
     s->ladder.pressure_output = b->pressure_output[lane];
     s->ladder.reset_count = b->reset_count[lane];
+    ma_glas *g = &s->glas;
+    for (int i = 0; i < MA_FORMANTS; i++) {
+        g->svf[i].s1 = b->glas_s1[i][lane];
+        g->svf[i].s2 = b->glas_s2[i][lane];
+        for (int j = 0; j < MA_GRAINS_PER_FORMANT; j++) {
+            ma_grain *q = &g->grain[i][j];
+            int x = i * MA_GRAINS_PER_FORMANT + j;
+            q->phase = b->grain_phase[x][lane];
+            q->step = b->grain_step[x][lane];
+            q->envelope = b->grain_envelope[x][lane];
+            q->decay = b->grain_decay[x][lane];
+            q->attack_pos = b->grain_attack_pos[x][lane];
+            q->attack_step = b->grain_attack_step[x][lane];
+            q->gain = b->grain_gain[x][lane];
+            q->active = b->grain_active[x][lane] != 0;
+        }
+    }
 }
 
 #define ML_TARGET __attribute__((target("avx2")))
@@ -105,8 +142,12 @@ typedef struct {
     alignas(32) float raster_mix[MA_LANES], mozaik_mix[MA_LANES], pressure[MA_LANES];
     alignas(32) float drive[MA_LANES], resonance[MA_LANES], filter_g[MA_LANES];
     alignas(32) float mozaik_gain[2][MA_LANES], mozaik[2][MA_LANES], raster[2][MA_LANES];
+    /* Glas formant grains (ma-constants.md 10C): this frame's grain mix and
+     * its two 2x samples, rendered per lane by ma_glas_prepare. */
+    alignas(32) float grain_mix[MA_LANES], grain[2][MA_LANES];
     alignas(32) uint64_t v1q[MA_LANES], v2q[MA_LANES];
     alignas(32) int32_t act1[MA_LANES], act2[MA_LANES], guard_frames_i[MA_LANES];
+    bool grain_any;
 } ml_in;
 
 static void ml_benign(ml_in *in) {
@@ -1091,6 +1132,14 @@ ML_TARGET static void ml_kernel(ma_voice_lanes *b, const ml_in *in, float filter
     ml_f drive = ml_ld(in->drive), resonance = ml_ld(in->resonance);
     for (int step = 0; step < 2; step++) {
         ml_f mixed = ml_mix(in, at_2x[step], step);
+        if (in->grain_any) {
+            /* source += grain_mix * (grain - source), only where the mix is
+             * positive: the scalar path branches, so zero-mix lanes keep
+             * their bits (including -0). */
+            ml_f gm = ml_ld(in->grain_mix);
+            ml_f blended = ml_add(mixed, ml_mul(gm, ml_sub(ml_ld(in->grain[step]), mixed)));
+            mixed = ml_sel(mixed, blended, ml_gt(gm, _mm256_setzero_ps()));
+        }
         ml_f pressured = ml_pressure(mixed, pressure);
         _mm256_storeu_ps(b->pressure_input, mixed);
         _mm256_storeu_ps(b->pressure_output, pressured);
@@ -1100,6 +1149,89 @@ ML_TARGET static void ml_kernel(ma_voice_lanes *b, const ml_in *in, float filter
     for (int stage = 0; stage < 4; stage++) _mm256_storeu_ps(b->ladder_state[stage], state[stage]);
     _mm256_storeu_ps(b->y4_guess, y4);
     _mm256_storeu_ps(filtered, ml_decimate7(b->output_history, b->output_pos));
+}
+
+/* Glas, lane-major (ma_glas.c arithmetic, operation for operation). */
+static void ml_glas_zero(ma_voice_lanes *b, unsigned lane) {
+    for (int i = 0; i < MA_FORMANTS; i++) b->glas_s1[i][lane] = b->glas_s2[i][lane] = 0.0f;
+    for (int x = 0; x < MA_FORMANTS * MA_GRAINS_PER_FORMANT; x++) {
+        b->grain_phase[x][lane] = b->grain_step[x][lane] = b->grain_envelope[x][lane] = 0.0f;
+        b->grain_decay[x][lane] = b->grain_attack_pos[x][lane] = 0.0f;
+        b->grain_attack_step[x][lane] = b->grain_gain[x][lane] = 0.0f;
+        b->grain_active[x][lane] = 0;
+    }
+}
+static void ml_glas_launch(ma_voice_lanes *b, unsigned lane, ma_glas *g, float rate) {
+    for (int i = 0; i < MA_FORMANTS; i++) {
+        uint8_t slot = g->grain_cursor[i];
+        g->grain_cursor[i] = (uint8_t)((slot + 1u) % MA_GRAINS_PER_FORMANT);
+        int x = i * MA_GRAINS_PER_FORMANT + slot;
+        if (b->grain_active[x][lane]) g->grains_stolen++;
+        ma_grain q = ma_glas_new_grain(g, i, rate);
+        b->grain_phase[x][lane] = q.phase;
+        b->grain_step[x][lane] = q.step;
+        b->grain_envelope[x][lane] = q.envelope;
+        b->grain_decay[x][lane] = q.decay;
+        b->grain_attack_pos[x][lane] = q.attack_pos;
+        b->grain_attack_step[x][lane] = q.attack_step;
+        b->grain_gain[x][lane] = q.gain;
+        b->grain_active[x][lane] = -1;
+        g->grains_launched++;
+    }
+}
+/* One 2x grain sample for the lanes in `on`. */
+ML_TARGET static ml_f ml_glas_grains(ma_voice_lanes *b, unsigned on) {
+    const ml_f one = ML_F(1.0f), lanes = ml_lane_mask(on);
+    ml_f y = _mm256_setzero_ps();
+    for (int x = 0; x < MA_FORMANTS * MA_GRAINS_PER_FORMANT; x++) {
+        ml_f act = ml_and(_mm256_castsi256_ps(_mm256_loadu_si256((const ml_i *)b->grain_active[x])), lanes);
+        if (!ml_any(act)) continue;
+        ml_f phase = ml_ld(b->grain_phase[x]), step = ml_ld(b->grain_step[x]);
+        ml_f env = ml_ld(b->grain_envelope[x]), decay = ml_ld(b->grain_decay[x]);
+        ml_f apos = ml_ld(b->grain_attack_pos[x]), astep = ml_ld(b->grain_attack_step[x]);
+        ml_f gain = ml_ld(b->grain_gain[x]);
+        ml_f in_attack = ml_lt(apos, one);
+        ml_f attack = ml_sel(one, ml_mul(ML_F(0.5f), ml_sub(one, ml_sin_turns(
+            ml_wrap(ml_sub(ML_F(0.25f), ml_mul(ML_F(0.5f), apos)))))), in_attack);
+        ml_f apos_next = ml_sel(apos, ml_add(apos, astep), in_attack);
+        ml_f term = ml_mul(ml_mul(ml_mul(gain, attack), env), ml_sin_turns(phase));
+        y = ml_sel(y, ml_add(y, term), act);
+        ml_f phase_next = ml_add(phase, step);
+        phase_next = ml_sel(phase_next, ml_sub(phase_next, one), ml_ge(phase_next, one));
+        ml_f env_next = ml_mul(env, decay);
+        ml_f alive = _mm256_andnot_ps(ml_lt(env_next, ML_F(GRAIN_FLOOR)), act);
+        _mm256_storeu_ps(b->grain_phase[x], ml_sel(phase, phase_next, act));
+        _mm256_storeu_ps(b->grain_envelope[x], ml_sel(env, env_next, act));
+        _mm256_storeu_ps(b->grain_attack_pos[x], ml_sel(apos, apos_next, act));
+        _mm256_storeu_si256((ml_i *)b->grain_active[x], _mm256_castps_si256(
+            ml_sel(_mm256_castsi256_ps(_mm256_loadu_si256((const ml_i *)b->grain_active[x])), alive, act)));
+    }
+    return ml_mul(ML_F(GRAIN_NORM), y);
+}
+/* The formant bank on the ladder output for lanes in `on` with mix > 0.
+ * Non-finite lanes return their input and are reported in *bad. */
+ML_TARGET static ml_f ml_glas_formant(ma_voice_lanes *b, ml_f x, ml_f mix, unsigned on,
+                                      unsigned *bad) {
+    ml_f lanes = ml_and(ml_lane_mask(on), ml_gt(mix, _mm256_setzero_ps()));
+    ml_f bank = _mm256_setzero_ps();
+    for (int i = 0; i < MA_FORMANTS; i++) {
+        ml_f s1 = ml_ld(b->glas_s1[i]), s2 = ml_ld(b->glas_s2[i]);
+        ml_f g = ml_ld(b->glas_g[i]), k = ml_ld(b->glas_k[i]);
+        ml_f hp = ml_div(ml_sub(ml_sub(x, ml_mul(ml_add(k, g), s1)), s2),
+                         ml_add(ML_F(1.0f), ml_mul(g, ml_add(g, k))));
+        ml_f bp = ml_add(ml_mul(g, hp), s1);
+        ml_f s1n = ml_add(ml_mul(g, hp), bp);
+        ml_f lp = ml_add(ml_mul(g, bp), s2);
+        ml_f s2n = ml_add(ml_mul(g, bp), lp);
+        bank = ml_add(bank, ml_mul(ml_mul(ML_F(GLAS_GAIN[i]), k), bp));
+        _mm256_storeu_ps(b->glas_s1[i], ml_sel(s1, s1n, lanes));
+        _mm256_storeu_ps(b->glas_s2[i], ml_sel(s2, s2n, lanes));
+    }
+    bank = ml_mul(bank, ML_F(FORMANT_MAKEUP));
+    ml_f finite = ml_and(ml_ge(bank, ML_F(-FLT_MAX)), ml_le(bank, ML_F(FLT_MAX)));
+    *bad = (unsigned)_mm256_movemask_ps(_mm256_andnot_ps(finite, lanes));
+    ml_f ok = ml_and(lanes, finite);
+    return ml_sel(x, ml_add(x, ml_mul(mix, ml_sub(bank, x))), ok);
 }
 
 void ma_lanes_tick(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
@@ -1133,8 +1265,67 @@ void ma_lanes_tick(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
     ml_front_math(&fx, &in, cutoff);
     for (unsigned lane = 0; lane < MA_LANES; lane++)
         if (b->active >> lane & 1u) voice[lane]->filter_cutoff_effective_hz = cutoff[lane];
+    /* Glas, in the scalar tick's order of effects per lane: controls and the
+     * Orbita tick per lane, grains lane-major into the 2x source mix, the
+     * formant bank lane-major after the ladder. */
+    unsigned glas_on = 0, grain_on = 0;
+    float grain_gm[MA_LANES] = {};
+    for (unsigned lane = 0; lane < MA_LANES; lane++) {
+        if (!(b->active >> lane & 1u)) continue;
+        ma_glas *g = &voice[lane]->glas;
+        if (!ma_glas_active(g)) { g->frame_grain_mix = 0.0f; continue; }
+        float gm = ma_glas_prepare_controls(voice[lane], front[lane].base_hz);
+        g->frame_grain_mix = gm;
+        glas_on |= 1u << lane;
+        if (g->coefficient_epoch != b->glas_epoch[lane]) {
+            for (int i = 0; i < MA_FORMANTS; i++) {
+                b->glas_g[i][lane] = g->g[i];
+                b->glas_k[i][lane] = g->k[i];
+            }
+            b->glas_epoch[lane] = g->coefficient_epoch;
+        }
+        if (gm > 0.0f) { grain_on |= 1u << lane; grain_gm[lane] = gm; }
+    }
+    if (grain_on) {
+        for (int k = 0; k < 2; k++) {
+            for (unsigned lane = 0; lane < MA_LANES; lane++) {
+                if (!(grain_on >> lane & 1u)) continue;
+                float rate = 2.0f * voice[lane]->sample_rate_hz;
+                if (ma_glas_pulse(&voice[lane]->glas, front[lane].base_hz, rate))
+                    ml_glas_launch(b, lane, &voice[lane]->glas, rate);
+            }
+            alignas(32) float y[MA_LANES];
+            _mm256_store_ps(y, ml_glas_grains(b, grain_on));
+            for (unsigned lane = 0; lane < MA_LANES; lane++) {
+                if (!(grain_on >> lane & 1u)) continue;
+                if (!(y[lane] >= -FLT_MAX && y[lane] <= FLT_MAX)) {
+                    ma_glas_reset_state(&voice[lane]->glas);
+                    ml_glas_zero(b, lane);
+                    y[lane] = 0.0f;
+                }
+                voice[lane]->glas.grain_out[k] = y[lane];
+            }
+            _mm256_storeu_ps(in.grain[k], _mm256_load_ps(y));
+        }
+        _mm256_storeu_ps(in.grain_mix, _mm256_setr_ps(grain_gm[0], grain_gm[1], grain_gm[2],
+            grain_gm[3], grain_gm[4], grain_gm[5], grain_gm[6], grain_gm[7]));
+        in.grain_any = true;
+    }
     float filtered[MA_LANES];
     ml_kernel(b, &in, filtered);
+    if (glas_on) {
+        float m[MA_LANES] = {};
+        for (unsigned lane = 0; lane < MA_LANES; lane++)
+            if (glas_on >> lane & 1u) m[lane] = voice[lane]->glas.mix_smoother.current;
+        unsigned bad = 0;
+        ml_f mix = _mm256_setr_ps(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7]);
+        _mm256_storeu_ps(filtered, ml_glas_formant(b, ml_ld(filtered), mix, glas_on, &bad));
+        for (unsigned lane = 0; lane < MA_LANES; lane++)
+            if (bad >> lane & 1u) {
+                ma_glas_reset_state(&voice[lane]->glas);
+                ml_glas_zero(b, lane);
+            }
+    }
     for (unsigned lane = 0; lane < MA_LANES; lane++)
         out[lane] = b->active >> lane & 1u
                   ? voice_back_end(voice[lane], &front[lane], filtered[lane]) : 0.0f;
