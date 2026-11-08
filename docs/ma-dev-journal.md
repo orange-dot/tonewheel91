@@ -27,7 +27,12 @@ its internal sub-gates already has working code.
   `static inline` helpers), `ma_controls.c`, `ma_patches.c`, `ma_lanes.c`,
   `ma_filter.c`, and `ma_raster_table.c` (one raster table, below).
   `ma_sources.c` was measured and rejected.
-- No next DSP candidate is chosen yet. Open operator decisions: the
+- DSP candidate in progress: **Orbita** (operator, 2026-11-07), pulled
+  forward from the MA5 promotion gate. The offline spike is done
+  (`docs/ma-orbita-spike-20261107.md`).
+  First musical use: MA3 Hurt with Orbita (`docs/ma3-hurt-orbita.md`), hosted
+  only. No engine code changed.
+- Open operator decisions: the
   refactor plan's follow-ups (the stage probe calling the real stages, one
   source for scalar and lane front end part B, and the `MA_SOURCE_EVIDENCE`
   layout switch).
@@ -1355,3 +1360,172 @@ Notes:
   window (one A epoch 19 % off). Two earlier AUTO runs of the unaligned
   table each had one case near +1.5–1.8 % from a single noisy epoch, in
   different cases. Runs: `build/ma-voice-refactor-abrt*-20261107-*`.
+
+### 2026-11-07 — Orbita offline spike
+
+- Operator decision: run the Orbita offline experiment now, ahead of the MA5
+  promotion gate. Hosted only: `driver/spike_ma_orbita.c`,
+  `make spike-ma-orbita` (checks) and `make audition-ma-orbita` (renders to
+  `build/ma-orbita-spike-20261107/`). Not part of `make test`; no core file
+  changed.
+- Part A ports the donor SET5-1 primitive (five moons, 32-sample tick,
+  capture/escape hysteresis, Kirkwood repulsion, staggered Roche ring). Part B
+  drives the real voice: one moon is the VCO2/VCO1 ratio, written through
+  `ma_synth_set_vco2` (fine only, interval fixed per scenario).
+- The check table passes on GCC, Clang and ASan/UBSan/float-cast-overflow.
+  Two-run and GCC/Clang PCM signatures are equal. At d = 0, the VCO2 moon is
+  PCM-identical to no Orbita (`711fc4506158ab29`).
+- Findings: the donor kick is absolute, so moons at 7/2 and above cannot
+  escape; escape from a strong entry is recaptured in ~40 ms at d = .8; about
+  7 % of the home span lies outside every window; Kirkwood parks ejected moons
+  at window edges or between two repellers. The moon bank costs about
+  143–200 ns/sample per voice (rough, noisy host). The VCO2 insertion needs a
+  continuous ratio path in the core for the ±6 % window.
+- Next: the v0.2 insertion choice (VCO2 ratio, Mozaik/AUX pitch, or the
+  donor moon bank as a layer).
+
+### 2026-11-07 — MA3 Hurt with Orbita
+
+- Operator: a new Hurt automation using Orbita, plus a dirtier vocal ("this
+  is proper industrial"). New hosted exhibit `driver/exhibit_ma3_hurt_orbita.c`
+  (`make check-ma3-hurt-orbita`, `make audition-ma3-hurt-orbita`). Automation,
+  measurements and signatures: `docs/ma3-hurt-orbita.md`. No core file
+  changed.
+- Shared code:
+  - `driver/ma_orbita.{h,c}` (primitive moved out of the spike; all ten spike
+    signatures unchanged) plus `orbit_kick_relative`;
+  - `driver/ma3_hurt_parts.h` (part setup shared with the base Hurt);
+  - a `ma3_show` `layer` hook and a sixth stem.
+- Operator decision: `ma3_render` is now one pass that writes each WAV to its
+  final path as it renders. The two-pass twin comparison is gone. The base
+  Blues and Hurt give the same PCM (first 30 s, all stems).
+- Lesson: with one pass, a re-render to the same prefix overwrites the
+  previous take while it renders. Give each take its own directory.
+- Vocal: in the base Hurt, all 200 vocal notes measure sine-like (median
+  harmonic purity .993). The new vocal patch puts the median at about .54
+  (see the doc for per-section numbers). Filter keytrack is too weak to brighten
+  high notes (about +3 % at MIDI 64); grit after the filter does it instead.
+- Vocal v3 (operator): the v2 vocal sounded nasal. v3 drops pulse and sync,
+  sits darker (cutoff 900 → 620 Hz) and wetter (reverb .45, damping .72),
+  with a longer sustain (.85, 900 ms release). New `--vocal-only` render
+  (bit-identical vocal stem, about 85 s per song). `driver/remix_stems.py`
+  builds constant-gain masters from stems: `--replace`, `--keep-master`,
+  no compression. Third mix: `hurt_orbita_master_vocal-6_v3.wav`.
+- Vocal v4: the duck call is the 0.8–2.5 kHz band, not the attack. v4 puts
+  grit before a steep fixed lowpass and keeps body drive low. Nasal band
+  −28.7 dB (v3 −22.9), purity .817. One lowpass trades richness against the
+  nasal band. A formant stage is the missing unit (doc, "Vocal v4"). Fourth
+  mix: `hurt_orbita_master_vocal-6_v4.wav`.
+
+### 2026-11-07 — Glas: formant bank, Orbita formants, formant grains
+
+- Operator: "add 4 resonant filters per voice and do Orbita formants", then
+  "also the formant grain oscillator, everything". Core unit Glas, new module
+  `src/ma_glas.c`, constants in `ma-constants.md` §10C (written first).
+  - Four TPT band-pass SVFs after the ladder, with the vowel table and shift.
+  - Orbita moons capture the formant centres on the voice's harmonic grid.
+    A note-on snaps them to the nearest harmonic, so there is no attack
+    sweep.
+  - FOF-style formant grains enter the 2x source mix.
+  - New patch fields: `formant_mix/vowel/shift/orbita`, `grain_mix`.
+  - New setters: `ma_synth_set_formant`, `ma_synth_set_grain`.
+- Exact bypass: with both mixes at zero, Glas touches no state. `make test`,
+  `make test-clang` and `make sanitize` pass with every pre-existing
+  signature unchanged.
+- New gate: `make check-ma-glas` (`test/ma_glas.c`) covers bypass, bank
+  response, harmonic capture, grain spectrum, determinism, hostile input and
+  the pool's AUTO/SCALAR twin.
+- The vector lanes do not implement Glas: `ma_voice_pool_render` goes scalar
+  while any voice has it active.
+- Lesson: `filter_prewarp` is pinned for the 2x ladder; a 1x filter must pass
+  `2F`.
+- Not done yet: patch-file v4 (the five fields are not in the file format),
+  Patchlab, and lanes support.
+- Hurt vocal v5 on Glas, as A/B takes: Orbita formants .55 and 0, with
+  matched masters (`docs/ma3-hurt-orbita.md`).
+
+### 2026-11-07 — MA3 Hurt, industrial
+
+- Operator: base the arrangement on the original performance, make it
+  stronger and closer to it than orchestration edition 2, with a heavy
+  industrial rhythm and a simpler orchestration.
+- New generator `driver/make_hurt_industrial.py`. It reads the Songparts
+  transcription and keeps the original parts and form from bar 8, with no
+  FX wash, Synth 3 or side-stick. The kit follows the original sections, and
+  the original toms' rhythm becomes Orbita metal.
+- New exhibit `driver/exhibit_ma3_hurt_industrial.c`:
+  - 9 pools, 6 stems;
+  - hosted Orbita metal: a struck five-moon bank in ring breakup, captured
+    more firmly toward the climax;
+  - the Glas vocal (v5 take a);
+  - Orbita on the pad;
+  - `--parts` for subset renders, which are bit-identical per stem.
+- Balance came from single-part renders. The snare's noise peaks capped the
+  static master, so the snare is now saturated in the voice (+2.47 dB
+  master). Full render 9 min 29 s. Mix FNV `10cafff0c99bd4e3`; master
+  `36d82cc9…`. Results: `docs/ma3-hurt-industrial.md`.
+- The orchestration exhibit and generator (another session's work) are not
+  touched.
+- Revision (operator): the rhythm is kick and hat only. Snare and metal are
+  out of the default parts but still selectable with `--parts`. Hat +8 dB,
+  rhythm −3 dB in the mix, master gain unchanged (`remix_stems.py
+  --master-db`). Master `162febfb…`.
+- Revision (operator): the hat is much quieter (gain 1.21, −8 dB) and
+  wetter (chorus .15, reverb .45). Master `a03359e1…`.
+- Revision (operator): back to the MA3 Hurt kick and pulse (`--rhythm ma3`
+  in generator and exhibit), on the original form, level-matched to the base
+  render. Master `49f1472f…`. The industrial kit stays selectable.
+- Revision (operator): the first-verse vocal gets dirt and a "thin anger"
+  (`--vocal-edge`: formants up, breath, grains, BCS, pre-filter drive;
+  blended out over bars 23–25). Nasal band −16.6 dB, against −12.8 dB on the
+  rejected first try. Master `83ea5bcb…`.
+- Revision (operator): the first verse fat and huge (`--vocal-fat`). Notes
+  before bar 24 go to a tenth pool: unison 4 detuned 10 c, sub-octave VCO2,
+  dark ladder, light Glas. The low-end share rose from −11.0 to −5.9 dB and
+  the image is 6 dB wider. Master `08c44b52…`.
+- Revision (operator): the whole vocal is fat (`--vocal-fat-all`; the first
+  verse is bit-identical, the rest is 1.2–2.2 dB louder). Master `14dad94b…`.
+- Revision (operator): the guitar motif from bar 68 is fat and wet with a
+  clear pulse (`--gtr-fat`: unison 4, sub-octave, reverb .38, click and
+  short release), 1 dB under its previous level. Master `12c94b0f…`.
+
+### 2026-11-08 — AVX2 as the x86-64 baseline
+
+- Operator: SIMD is first class, and x86 may require AVX2. Every x86-64
+  object now builds with `-march=x86-64-v3`, keeping `-ffp-contract=off`.
+  `ARCH_CFLAGS=` restores the old baseline for A/B.
+- GCC and Clang `make test`, the sanitized test binaries, the core symbol
+  audit and three Hurt industrial stems are all unchanged bit for bit.
+- `make sanitize` stops at the Workbench's own symbol audit, which fails on
+  sanitizer symbols in any sanitized build.
+- Speed A/B is pending a quiet host (`build/ab-{base,v3}/bench_ma3_perf`).
+  Details: `docs/ma3-avx2-baseline-20261108.md`.
+- Next, as planned: Glas into the lanes (step C), then ISA-neutral lanes
+  (step B).
+
+### 2026-11-08 — Glas on the lanes, lanes in the MA3 shows
+
+- Glas runs per lane inside `ma_lanes_tick`: scalar grains, Orbita tick
+  and formant bank per lane, with the grain crossfade as a lane select in the
+  vector source mix. The pool fallback is removed.
+- `ma3_show` renders pools in runs through `ma_voice_pool_render`, so
+  exhibits use the lanes; until now they never did.
+- Bit-exact: `make test` and `test-clang`, a heavy Glas twin over 76,800
+  frames, Blues and Hurt over 30 s, and three industrial stems.
+- Fat vocal render: 238.6 s scalar against 134.3 s on the lanes (1.78×,
+  noisy host). `docs/ma3-glas-lanes-20261108.md`.
+- Next: vectorise the formant SVF and grains (pure speed); quiet-host A/B;
+  then step B, ISA-neutral lanes.
+- Glas grains and formant SVF vectorised across the lanes: lane-major
+  state in `ma_voice_lanes`, shared scalar helpers split out of
+  `ma_glas.c`. Bit-exact (heavy twin; fat vocal `7d28100b…`). Fat vocal
+  render 204.8 s scalar against 107.9 s on the lanes (1.90×, noisy host).
+- Workbench: `WB_AUDIO_OBJS` lacks a `src/mamutanalog.h` dependency; stale
+  objects segfaulted `test_live` until rebuilt.
+- Quiet-host A/B (`build/ma3-avx2-ab-20261108-01`, 10 cases × 3 epochs,
+  CPU 2): AVX2 baseline against old flags is 1.016× on the lanes
+  (1.005–1.027×; worst case now 1.699 M cycles) and 1.079× on the scalar
+  engine (1.049–1.096×, 9–13 % fewer instructions). PCM is equal
+  everywhere.
+- Glas fat vocal, pinned: 92.9 s scalar against 50.2 s on the lanes
+  (1.85×, two runs each).

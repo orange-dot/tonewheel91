@@ -1030,6 +1030,10 @@ scheduled in advance; the operator chooses after their offline evidence.
 
 ## Explicitly out of scope through MA5
 
+Operator decision 2026-11-07: Glas (`ma-constants.md` §10C) is an exception
+to the first and third items below. It adds one formant-grain source and a
+formant bank after the ladder. Both are exactly bypassed at zero.
+
 - a literal clone or revision selector for the 1978 instrument;
 - patch schema, preset browser or persistence;
 - additional Mamut spectral/additive sources beyond Raster, or a filter-model
@@ -1082,7 +1086,8 @@ zone; transport does not define the DSP model.
 | Hidden GFM field | committed; donor field implementation exists but insertion differs | MA4 |
 | Per-note expression state | committed internal landing zone | MA3; no new transport |
 | BCS | implemented feedback-only in MA2-BCS; operator listening pending | ad hoc slice before MA2-4 |
-| Orbita | candidate; donor plan only | post-MA5 offline backlog if selected |
+| Orbita | candidate; offline spike done 2026-11-07 (`docs/ma-orbita-spike-20261107.md`); hosted use in MA3 Hurt (`docs/ma3-hurt-orbita.md`) | v0.2 insertion choice |
+| Glas (formant bank, Orbita formants, formant grains) | implemented in the core 2026-11-07 by operator decision; scalar only, exact bypass (`ma-constants.md` §10C) | lanes support and patch-file v4 if it stays |
 | Kosava | candidate; donor plan only | post-MA5 offline backlog if selected |
 | Mraz | research priority among wild concepts | unscheduled |
 | Lavina | research | unscheduled |
