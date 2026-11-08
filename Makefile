@@ -509,6 +509,18 @@ $(BUILD)/probe_ma3_stages: driver/probe_ma3_stages.c src/ma_voice.c src/ma_lanes
 spike-ma-osc-simd: $(BUILD)/spike_ma_osc_simd
 	$(BUILD)/spike_ma_osc_simd --check
 
+# Orbita offline spike (post-MA5 candidate, docs/ma-orbita-spike-20261107.md).
+# Hosted only, not part of `test`; the core is linked through its public API.
+$(BUILD)/ma_orbita.o: driver/ma_orbita.c driver/ma_orbita.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+$(BUILD)/spike_ma_orbita: driver/spike_ma_orbita.c driver/ma_orbita.h $(BUILD)/ma_orbita.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma_orbita.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: spike-ma-orbita audition-ma-orbita
+spike-ma-orbita: $(BUILD)/spike_ma_orbita
+	$(BUILD)/spike_ma_orbita --check
+audition-ma-orbita: $(BUILD)/spike_ma_orbita
+	$(BUILD)/spike_ma_orbita --render -o $(BUILD)/ma-orbita-spike-20261107
+
 $(BUILD)/exhibit_ma_pool: driver/exhibit_ma_pool.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
@@ -542,8 +554,24 @@ $(BUILD)/ma3_show.o: driver/ma3_show.c driver/ma3_show.h src/mamutanalog.h drive
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 $(BUILD)/exhibit_ma3_blues: driver/exhibit_ma3_blues.c driver/ma3_blues_material.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
-$(BUILD)/exhibit_ma3_hurt: driver/exhibit_ma3_hurt.c driver/ma3_hurt_material.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/exhibit_ma3_hurt: driver/exhibit_ma3_hurt.c driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/exhibit_ma3_hurt_orbita: driver/exhibit_ma3_hurt_orbita.c driver/ma3_hurt_material.h driver/ma3_hurt_parts.h driver/ma_orbita.h $(BUILD)/ma_orbita.o $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma_orbita.o $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-hurt-orbita audition-ma3-hurt-orbita
+check-ma3-hurt-orbita: $(BUILD)/exhibit_ma3_hurt_orbita
+	$(BUILD)/exhibit_ma3_hurt_orbita --check
+audition-ma3-hurt-orbita: $(BUILD)/exhibit_ma3_hurt_orbita
+	mkdir -p $(BUILD)/ma3-hurt-orbita
+	$(BUILD)/exhibit_ma3_hurt_orbita --render $(BUILD)/ma3-hurt-orbita/hurt_orbita
+$(BUILD)/exhibit_ma3_hurt_industrial: driver/exhibit_ma3_hurt_industrial.c driver/ma3_hurt_material.h driver/ma3_hurt_parts.h driver/ma_orbita.h $(BUILD)/ma_orbita.o $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma_orbita.o $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-hurt-industrial audition-ma3-hurt-industrial
+check-ma3-hurt-industrial: $(BUILD)/exhibit_ma3_hurt_industrial
+	$(BUILD)/exhibit_ma3_hurt_industrial --check
+audition-ma3-hurt-industrial: $(BUILD)/exhibit_ma3_hurt_industrial
+	mkdir -p $(BUILD)/ma3-hurt-industrial
+	$(BUILD)/exhibit_ma3_hurt_industrial --render $(BUILD)/ma3-hurt-industrial/hurt_industrial
 .PHONY: check-ma3-shows audition-ma3-blues audition-ma3-hurt
 check-ma3-shows: $(BUILD)/exhibit_ma3_blues $(BUILD)/exhibit_ma3_hurt
 	$(BUILD)/exhibit_ma3_blues --check

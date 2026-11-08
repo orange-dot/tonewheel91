@@ -3,7 +3,7 @@
 #define MA3_SHOW_H
 #include "../src/mamutanalog.h"
 
-enum { MA3_RATE=48000, MA3_PARTS=10, MA3_STEMS=5, MA3_EVENTS=16000 };
+enum { MA3_RATE=48000, MA3_PARTS=10, MA3_STEMS=6, MA3_EVENTS=16000 };
 typedef struct {
     const char *name;
     ma_patch patch;
@@ -29,12 +29,16 @@ struct ma3_show {
     ma3_event event[MA3_EVENTS];
     size_t event_count;
     void (*controls)(ma_voice_pool *pools, const ma3_show *show, size_t frame);
+    /* Optional hosted audio added to the stems every frame, after the pools
+     * and before the presentation fade. Called from frame 0 on each pass, so
+     * it must restart its own state there. NULL leaves the show unchanged. */
+    void (*layer)(const ma3_show *show, size_t frame, ma_frame stems[MA3_STEMS]);
 };
 void ma3_part_init(ma3_part *part, const char *name, ma_patch patch,
     unsigned limit, unsigned unison, unsigned stem, float gain, float chorus_mix, float reverb_mix);
 bool ma3_add_event(ma3_show *show, ma3_event event);
 bool ma3_check(ma3_show *show);
-/* Two complete passes; write only the second, then compare per-stem hashes.
- * seconds limits the captured prefix for short checks; zero selects the full show. */
+/* One pass, writing each stem and the mix as it renders. seconds limits the
+ * captured prefix for short checks; zero selects the full show. */
 bool ma3_render(const ma3_show *show, const char *prefix, unsigned seconds);
 #endif

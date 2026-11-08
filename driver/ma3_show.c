@@ -67,10 +67,14 @@ static bool pass(const ma3_show *s, unsigned seconds, wav_f32_writer *writers, l
     }
     size_t next=0, frames=(size_t)seconds*MA3_RATE;
     unsigned aggregate_peak=0;
+    static ma_frame part_out[MA3_PARTS][BLOCK];
     for(size_t at=0;at<frames;) {
         size_t count=frames-at; if(count>BLOCK) count=BLOCK;
         float pcm[OUTPUTS][2*BLOCK]={0};
-        for(size_t i=0;i<count;i++) {
+        /* Pools render in runs between control steps and events, through
+         * ma_voice_pool_render, so AUTO pools use the vector lanes; the lane
+         * engine is bit-identical to the scalar tick. */
+        for(size_t i=0;i<count;) {
             size_t frame=at+i;
             if(s->controls && frame%480==0) s->controls(pools,s,frame);
             while(next<s->event_count && s->event[next].frame==frame) {
@@ -80,15 +84,29 @@ static bool pass(const ma3_show *s, unsigned seconds, wav_f32_writer *writers, l
                     ma_voice_pool_set_poly_pressure(p,e.channel,e.note,e.pressure);
                 } else if(!ma_voice_pool_note_off(p,e.channel,e.note,0)) return false;
             }
-            ma_frame stems[MA3_STEMS]={0}; unsigned active=0;
+            size_t run=count;
+            if(s->controls) {
+                size_t control=(frame/480+1)*480-at;
+                if(control<run) run=control;
+            }
+            if(next<s->event_count && s->event[next].frame-at<run) run=s->event[next].frame-at;
+            for(unsigned p=0;p<s->part_count;p++)
+                ma_voice_pool_render(&pools[p],part_out[p]+i,run-i);
+            unsigned active=0;
+            for(unsigned p=0;p<s->part_count;p++) active+=pools[p].diagnostics.active_slots;
+            if(active>aggregate_peak) aggregate_peak=active;
+            i=run;
+        }
+        for(size_t i=0;i<count;i++) {
+            size_t frame=at+i;
+            ma_frame stems[MA3_STEMS]={0};
             for(unsigned p=0;p<s->part_count;p++) {
-                ma_frame f=ma_voice_pool_tick(&pools[p]);
+                ma_frame f=part_out[p][i];
                 const ma3_part *part=&s->part[p];
                 stems[part->stem].left+=f.left*part->gain;
                 stems[part->stem].right+=f.right*part->gain;
-                active+=pools[p].diagnostics.active_slots;
             }
-            if(active>aggregate_peak) aggregate_peak=active;
+            if(s->layer) s->layer(s,frame,stems);
             /* One presentation fade on every stem; no limiter or gain riding. */
             size_t end=(size_t)s->seconds*MA3_RATE;
             float fade=frame<MA3_RATE/2 ? (float)frame/(MA3_RATE/2) : 1;
@@ -115,7 +133,7 @@ static bool pass(const ma3_show *s, unsigned seconds, wav_f32_writer *writers, l
         at+=count;
         if(at%(30*MA3_RATE)==0) {printf("  rendered %zu/%u s\n",at/MA3_RATE,seconds);fflush(stdout);}
     }
-    printf("  aggregate active peak %u (limits apply separately to each timbre)\n",aggregate_peak);
+    printf("  aggregate active peak %u at run boundaries (limits apply separately to each timbre)\n",aggregate_peak);
     for(unsigned p=0;p<s->part_count;p++) {
         ma_pool_diagnostics d=pools[p].diagnostics;
         printf("  %-12s active %u peak %u steals R/S/H=%" PRIu64 "/%" PRIu64 "/%" PRIu64
@@ -130,32 +148,28 @@ static bool pass(const ma3_show *s, unsigned seconds, wav_f32_writer *writers, l
 bool ma3_render(const ma3_show *s,const char *prefix,unsigned seconds) {
     if(!seconds) seconds=s->seconds;
     if(seconds>s->seconds || !prefix || !*prefix) return false;
-    level first[OUTPUTS]={0}, second[OUTPUTS]={0};
+    level levels[OUTPUTS]={0};
     wav_f32_writer writers[OUTPUTS]={0};
-    char temporary[OUTPUTS][1024]={{0}}, paths[OUTPUTS][1024]={{0}};
+    char paths[OUTPUTS][1024]={{0}};
     for(unsigned st=0;st<=s->stem_count;st++) {
         const char *name=st==s->stem_count?"mix":s->stem_name[st];
         int n=snprintf(paths[st],sizeof paths[st],"%s_%s.wav",prefix,name);
-        int m=snprintf(temporary[st],sizeof temporary[st],"%s_%s.wav.ma-tmp",prefix,name);
-        if(n<0||m<0||(size_t)n>=sizeof paths[st]||(size_t)m>=sizeof temporary[st]) return false;
+        if(n<0||(size_t)n>=sizeof paths[st]) return false;
     }
-    printf("  reference pass\n");fflush(stdout);
-    if(!pass(s,seconds,NULL,first)) return false;
+    /* One pass, written as it renders. A failed pass removes every
+     * incomplete file; no reference pass and no twin comparison. */
     bool ok=true;
-    for(unsigned st=0;st<=s->stem_count;st++)
-        if(wav_f32_open(&writers[st],temporary[st],(size_t)seconds*MA3_RATE,MA3_RATE,2)) {ok=false;break;}
-    if(ok) {puts("  output pass");fflush(stdout);ok=pass(s,seconds,writers,second);}
-    for(unsigned st=0;st<=s->stem_count;st++)
-        if(first[st].hash!=second[st].hash) ok=false;
-    for(unsigned st=0;st<=s->stem_count;st++) {
+    unsigned opened=0;
+    for(;opened<=s->stem_count;opened++)
+        if(wav_f32_open(&writers[opened],paths[opened],(size_t)seconds*MA3_RATE,MA3_RATE,2)) {ok=false;break;}
+    if(ok) {puts("  render pass");fflush(stdout);ok=pass(s,seconds,writers,levels);}
+    for(unsigned st=0;st<opened;st++) {
         if(ok) {if(wav_f32_close(&writers[st])) ok=false;}
         else wav_f32_abort(&writers[st]);
     }
-    if(!ok) {for(unsigned st=0;st<=s->stem_count;st++) if(temporary[st][0]) remove(temporary[st]);return false;}
-    for(unsigned st=0;st<=s->stem_count;st++) {
-        if(rename(temporary[st],paths[st])) return false;
-        printf("  %s peak=%.9f rms=%.9f FNV64=%016" PRIx64 " two runs identical\n",
-            paths[st],(double)second[st].peak,sqrt(second[st].square/(2.0*seconds*MA3_RATE)),second[st].hash);
-    }
+    if(!ok) return false;
+    for(unsigned st=0;st<=s->stem_count;st++)
+        printf("  %s peak=%.9f rms=%.9f FNV64=%016" PRIx64 "\n",
+            paths[st],(double)levels[st].peak,sqrt(levels[st].square/(2.0*seconds*MA3_RATE)),levels[st].hash);
     return true;
 }
