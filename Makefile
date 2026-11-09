@@ -14,6 +14,27 @@ TEST_EXTRA ?= check-core-symbols
 ARCH_CFLAGS ?= $(if $(findstring x86_64,$(shell $(CC) -dumpmachine)),-march=x86-64-v3)
 override CFLAGS += $(ARCH_CFLAGS)
 
+# Link-time optimization: LTO=1 compiles every object as LTO IR and
+# optimizes each program across modules at link time. -ffp-contract=off and
+# the exact FP semantics hold across the link, so PCM does not change.
+LTO ?= 0
+LTO_CFLAGS := $(if $(filter 1,$(LTO)),-flto=auto)
+override CFLAGS += $(LTO_CFLAGS)
+# The core-symbol audit must link LTO objects through the LTO plugin: a plain
+# `cc -r` over slim LTO objects resolves nothing and the audit passes vacuously.
+AUDIT_LDFLAGS := $(if $(LTO_CFLAGS),$(CFLAGS) $(if $(findstring clang,$(shell $(CC) --version)),,-flinker-output=nolto-rel))
+
+# Header dependencies are generated: every compile writes <output>.d.
+override CPPFLAGS += -MMD -MP
+
+# $(BUILD)/.flags records the toolchain and flags. Its timestamp moves only
+# when they change, and every target depends on it, so a changed CC, LTO or
+# CFLAGS, or a build directory from before the generated dependencies,
+# rebuilds everything once instead of mixing stale objects.
+BUILD_FLAGS := $(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(LDLIBS)
+$(shell mkdir -p $(BUILD) && printf '%s\n' '$(BUILD_FLAGS)' | cmp -s - $(BUILD)/.flags || printf '%s\n' '$(BUILD_FLAGS)' > $(BUILD)/.flags)
+.EXTRA_PREREQS := $(BUILD)/.flags
+
 # The core stays freestanding-clean; drivers and tests are hosted.
 CORE_CFLAGS := $(CFLAGS) -ffreestanding
 
@@ -42,71 +63,71 @@ all: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/test_ma_
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/%.o: src/%.c src/tonewheel.h | $(BUILD)
+$(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
 
-$(BUILD)/ep_voice.o $(BUILD)/ep_piano.o: $(BUILD)/%.o: src/%.c src/epiano.h src/tonewheel.h | $(BUILD)
+$(BUILD)/ep_voice.o $(BUILD)/ep_piano.o: $(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
 
-$(MA_VOICE_OBJS): $(BUILD)/%.o: src/%.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(MA_VOICE_OBJS): $(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o: $(BUILD)/%.o: src/%.c src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o: $(BUILD)/%.o: src/%.c | $(BUILD)
 
 # MA_SOURCE_EVIDENCE changes the ma_synth layout, so every voice module is
 # rebuilt with it into its own object set. Never mix the two sets.
 $(BUILD)/evidence:
 	mkdir -p $@
 
-$(MA_EVIDENCE_OBJS): $(BUILD)/evidence/%.o: src/%.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)/evidence
+$(MA_EVIDENCE_OBJS): $(BUILD)/evidence/%.o: src/%.c | $(BUILD)/evidence
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -DMA_SOURCE_EVIDENCE -c $< -o $@
 
-$(BUILD)/wav.o: driver/wav.c driver/wav.h | $(BUILD)
+$(BUILD)/wav.o: driver/wav.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_dark_lead.o: driver/ma_dark_lead.c driver/ma_dark_lead.h src/mamutanalog.h | $(BUILD)
+$(BUILD)/ma_dark_lead.o: driver/ma_dark_lead.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_architecture_score.o: driver/ma_architecture_score.c driver/ma_architecture_score.h src/mamutanalog.h | $(BUILD)
+$(BUILD)/ma_architecture_score.o: driver/ma_architecture_score.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_architecture_render.o: driver/ma_architecture_render.c driver/ma_architecture_render.h driver/ma_architecture_score.h driver/ma_dark_lead.h driver/wav.h src/mamutanalog.h | $(BUILD)
+$(BUILD)/ma_architecture_render.o: driver/ma_architecture_render.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_architecture_cli.o: driver/ma_architecture_cli.c driver/ma_architecture_cli.h driver/ma_architecture_render.h driver/host_parse.h | $(BUILD)
+$(BUILD)/ma_architecture_cli.o: driver/ma_architecture_cli.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/host_parse.o: driver/host_parse.c driver/host_parse.h | $(BUILD)
+$(BUILD)/host_parse.o: driver/host_parse.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_patch_file.o: driver/ma_patch_file.c driver/ma_patch_file.h driver/host_parse.h src/mamutanalog.h | $(BUILD)
+$(BUILD)/ma_patch_file.o: driver/ma_patch_file.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/smf.o: driver/smf.c driver/smf.h | $(BUILD)
+$(BUILD)/smf.o: driver/smf.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/smf_schedule.o: driver/smf_schedule.c driver/smf_schedule.h driver/smf.h driver/host_parse.h | $(BUILD)
+$(BUILD)/smf_schedule.o: driver/smf_schedule.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_midi_map.o: driver/ma_midi_map.c driver/ma_midi_map.h driver/ma_midi_tables.h src/mamutanalog.h | $(BUILD)
+$(BUILD)/ma_midi_map.o: driver/ma_midi_map.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_midi_render.o: driver/ma_midi_render.c driver/ma_midi_render.h driver/ma_midi_map.h driver/smf.h src/mamutanalog.h | $(BUILD)
+$(BUILD)/ma_midi_render.o: driver/ma_midi_render.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/live_io.o: driver/live_io.c driver/live_io.h driver/host_parse.h | $(BUILD)
+$(BUILD)/live_io.o: driver/live_io.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/midi_map.o: driver/midi_map.c driver/midi_map.h driver/midi_owner.h src/tonewheel.h src/epiano.h | $(BUILD)
+$(BUILD)/midi_map.o: driver/midi_map.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/ep_midi_map.o: driver/ep_midi_map.c driver/midi_map.h driver/midi_owner.h src/tonewheel.h src/epiano.h | $(BUILD)
+$(BUILD)/ep_midi_map.o: driver/ep_midi_map.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/viz.o: driver/viz.c driver/viz.h | $(BUILD)
+$(BUILD)/viz.o: driver/viz.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/test: test/test.c $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS) src/tonewheel.h src/epiano.h src/mamutanalog.h | $(BUILD)
+$(BUILD)/test: test/test.c $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) test/test.c $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 $(BUILD)/test_hosted: test/hosted.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(MA_RUNTIME_OBJS) | $(BUILD)
@@ -118,40 +139,40 @@ $(BUILD)/test_midi_map: test/midi_map.c $(BUILD)/midi_map.o $(BUILD)/ep_midi_map
 $(BUILD)/test_ma_architecture: test/ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) test/ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_phase: driver/exhibit_phase.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_phase: driver/exhibit_phase.c $(BUILD)/wav.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_phase.c $(BUILD)/wav.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_contacts: driver/exhibit_contacts.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_contacts: driver/exhibit_contacts.c $(BUILD)/wav.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_contacts.c $(BUILD)/wav.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_taper: driver/exhibit_taper.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_taper: driver/exhibit_taper.c $(BUILD)/wav.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_taper.c $(BUILD)/wav.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_percussion: driver/exhibit_percussion.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_percussion: driver/exhibit_percussion.c $(BUILD)/wav.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_percussion.c $(BUILD)/wav.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_scanner: driver/exhibit_scanner.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_scanner: driver/exhibit_scanner.c $(BUILD)/wav.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_scanner.c $(BUILD)/wav.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_drive: driver/exhibit_drive.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_drive: driver/exhibit_drive.c $(BUILD)/wav.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_drive.c $(BUILD)/wav.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_rotary: driver/exhibit_rotary.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_rotary: driver/exhibit_rotary.c $(BUILD)/wav.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_rotary.c $(BUILD)/wav.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_wear: driver/exhibit_wear.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_wear: driver/exhibit_wear.c $(BUILD)/wav.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_wear.c $(BUILD)/wav.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_depth: driver/exhibit_depth.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_depth: driver/exhibit_depth.c $(BUILD)/wav.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_depth.c $(BUILD)/wav.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_warmth: driver/exhibit_warmth.c $(BUILD)/wav.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_warmth: driver/exhibit_warmth.c $(BUILD)/wav.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_warmth.c $(BUILD)/wav.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_viz: driver/exhibit_viz.c $(BUILD)/viz.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_viz: driver/exhibit_viz.c $(BUILD)/viz.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_viz.c $(BUILD)/viz.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ep_voice: driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) src/epiano.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ep_voice: driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 $(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/smf_schedule.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) $(MA_OBJS) $(MA_HOST_OBJS) | $(BUILD)
@@ -160,58 +181,58 @@ $(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD
 $(BUILD)/render_ma_architecture: driver/render_ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/render_ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/tw91: driver/main.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(CORE_OBJS) src/tonewheel.h | $(BUILD)
+$(BUILD)/tw91: driver/main.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/main.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(CORE_OBJS) $(LDFLAGS) -o $@ -lasound $(LDLIBS)
 
-$(BUILD)/ep73: driver/ep73.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) src/epiano.h src/tonewheel.h | $(BUILD)
+$(BUILD)/ep73: driver/ep73.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/ep73.c $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) $(LDFLAGS) -o $@ -lasound $(LDLIBS)
 
-$(BUILD)/patchlab: driver/ma_patchlab.c driver/ma_patch_file.h $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(BUILD)/midi.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/patchlab: driver/ma_patchlab.c $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(BUILD)/midi.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/ma_patchlab.c $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(BUILD)/midi.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lasound -lm $(LDLIBS)
 
-$(BUILD)/fuzz_smf: test/fuzz_smf.c driver/smf.c driver/smf.h | $(BUILD)
+$(BUILD)/fuzz_smf: test/fuzz_smf.c driver/smf.c | $(BUILD)
 	$(FUZZ_CC) -std=c23 -O1 -g -fsanitize=fuzzer,address,undefined test/fuzz_smf.c driver/smf.c -o $@
 
 $(BUILD)/derive_ma_constants: driver/derive_ma_constants.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/derive_ma_constants.c $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_osc: driver/exhibit_ma_osc.c $(MA_EVIDENCE_OBJS) $(BUILD)/drive.o src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_osc: driver/exhibit_ma_osc.c $(MA_EVIDENCE_OBJS) $(BUILD)/drive.o | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DMA_SOURCE_EVIDENCE driver/exhibit_ma_osc.c $(MA_EVIDENCE_OBJS) $(BUILD)/drive.o $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_voice: driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_voice: driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_identity: driver/exhibit_ma_identity.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_identity: driver/exhibit_ma_identity.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_identity.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_patches: driver/exhibit_ma_patches.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_patches: driver/exhibit_ma_patches.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_patches.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_blues: driver/exhibit_ma_blues.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_blues: driver/exhibit_ma_blues.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_blues.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_blues_panic: driver/exhibit_ma_blues_panic.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_blues_panic: driver/exhibit_ma_blues_panic.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_blues_panic.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_blade_runner_main_titles: driver/exhibit_ma_blade_runner_main_titles.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_blade_runner_main_titles: driver/exhibit_ma_blade_runner_main_titles.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_blade_runner_main_titles.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_eno_ascent_noir: driver/exhibit_ma_eno_ascent_noir.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/smf.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_eno_ascent_noir: driver/exhibit_ma_eno_ascent_noir.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/smf.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_eno_ascent_noir.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/smf.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_nin_hurt_noir: driver/exhibit_ma_nin_hurt_noir.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_nin_hurt_noir: driver/exhibit_ma_nin_hurt_noir.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_nin_hurt_noir.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_blues_ma2_full: driver/exhibit_ma_blues_ma2_full.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_blues_ma2_full: driver/exhibit_ma_blues_ma2_full.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_blues_ma2_full.c $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_blade_runner_main_titles_ma2_full: driver/exhibit_ma_blade_runner_main_titles_ma2_full.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_blade_runner_main_titles_ma2_full: driver/exhibit_ma_blade_runner_main_titles_ma2_full.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_blade_runner_main_titles_ma2_full.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_nin_hurt_noir_ma2_full: driver/exhibit_ma_nin_hurt_noir_ma2_full.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_nin_hurt_noir_ma2_full: driver/exhibit_ma_nin_hurt_noir_ma2_full.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_nin_hurt_noir_ma2_full.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_hurt_organ: driver/exhibit_ma_hurt_organ.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_OBJS) $(CORE_OBJS) src/mamutanalog.h | $(BUILD)
+$(BUILD)/exhibit_ma_hurt_organ: driver/exhibit_ma_hurt_organ.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_OBJS) $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(MA_OBJS) $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 .PHONY: audition-ma-hurt-organ
@@ -237,30 +258,30 @@ check-ma-chopin: $(BUILD)/exhibit_ma_chopin
 audition-ma-chopin: $(BUILD)/exhibit_ma_chopin
 	./$(BUILD)/exhibit_ma_chopin --render -o $(BUILD)/ma_chopin_op28_4
 
-$(BUILD)/exhibit_ma_raster: driver/exhibit_ma_raster.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_raster: driver/exhibit_ma_raster.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_raster.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_bcs: driver/exhibit_ma_bcs.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_bcs: driver/exhibit_ma_bcs.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_bcs.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/exhibit_ma_output: driver/exhibit_ma_output.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_output: driver/exhibit_ma_output.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_output.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/bench_ma: driver/bench_ma.c $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/bench_ma: driver/bench_ma.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/bench_ma.c $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ $(LDLIBS)
 
 .PHONY: bench-ma
 bench-ma: $(BUILD)/bench_ma
 	$(BUILD)/bench_ma
 
-$(BUILD)/exhibit_ma_character: driver/exhibit_ma_character.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_character: driver/exhibit_ma_character.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_character.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 .PHONY: audition-ma2-4
 audition-ma2-4: $(BUILD)/exhibit_ma_character
 	$(BUILD)/exhibit_ma_character
 
-$(BUILD)/exhibit_ma_stereo: driver/exhibit_ma_stereo.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/exhibit_ma_stereo: driver/exhibit_ma_stereo.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_stereo.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 .PHONY: audition-ma2-5
@@ -268,12 +289,12 @@ audition-ma2-5: $(BUILD)/exhibit_ma_stereo
 	$(BUILD)/exhibit_ma_stereo
 
 check-core-symbols: $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
-	sh test/check_core_symbols.sh "$(CC)" "$(BUILD)/core-combined.o" $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
+	sh test/check_core_symbols.sh "$(CC) $(AUDIT_LDFLAGS)" "$(BUILD)/core-combined.o" $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS)
 
-$(BUILD)/test_ma_character: test/ma_character.c $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/test_ma_character: test/ma_character.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) test/ma_character.c $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/test_ma_stereo: test/ma_stereo.c $(MA_RUNTIME_OBJS) src/ma_internal.h src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/test_ma_stereo: test/ma_stereo.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) test/ma_stereo.c $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 test: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/test_ma_architecture $(BUILD)/test_ma_character $(BUILD)/test_ma_stereo $(BUILD)/test_ma_pool $(TEST_EXTRA)
@@ -292,10 +313,10 @@ test-clang:
 	$(MAKE) BUILD=build/clang CC=clang test
 
 sanitize:
-	ASAN_OPTIONS=detect_leaks=0 $(MAKE) BUILD=build/sanitize CC=clang TEST_EXTRA= CFLAGS='-std=c23 -O1 -g -Wall -Wextra -Wpedantic -ffp-contract=off -fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined,float-cast-overflow' test
+	ASAN_OPTIONS=detect_leaks=0 $(MAKE) BUILD=build/sanitize CC=clang LTO=0 TEST_EXTRA= CFLAGS='-std=c23 -O1 -g -Wall -Wextra -Wpedantic -ffp-contract=off -fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined,float-cast-overflow' test
 
 analyze:
-	$(MAKE) BUILD=build/analyze CC=gcc CFLAGS='-std=c23 -O1 -g -Wall -Wextra -Wpedantic -ffp-contract=off -fanalyzer' all
+	$(MAKE) BUILD=build/analyze CC=gcc LTO=0 CFLAGS='-std=c23 -O1 -g -Wall -Wextra -Wpedantic -ffp-contract=off -fanalyzer' all
 
 fuzz-smf: $(BUILD)/fuzz_smf renders/ep73-d5.mid
 	ASAN_OPTIONS=detect_leaks=0 $(BUILD)/fuzz_smf \
@@ -422,17 +443,17 @@ clean:
 
 .PHONY: all test test-clang sanitize analyze fuzz-smf derive-ma-constants exhibit-ma1 exhibit-ma1-osc audition-ma1-5 audition-ma1-6 audition-ma1-6p audition-ma1-6r audition-ma1-7 audition-ma-blues audition-ma-blues-panic exhibit-ma-blade-runner-main-titles audition-ma-eno-ascent-noir audition-ma-nin-hurt-noir audition-ma-blues-ma2-full audition-ma-blade-runner-main-titles-ma2-full audition-ma-nin-hurt-noir-ma2-full audition-ma2-dig audition-ma2-bcs audition-ma-architecture-preview audition-ma-architecture check-core-symbols exhibit warmth warmth-ref ao28-ref viz clean
 
-$(BUILD)/test_ma_pool: test/ma_pool.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+$(BUILD)/test_ma_pool: test/ma_pool.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 
-$(BUILD)/bench_ma_pool: driver/bench_ma_pool.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+$(BUILD)/bench_ma_pool: driver/bench_ma_pool.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/bench_ma3_perf: driver/bench_ma3_perf.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+$(BUILD)/bench_ma3_perf: driver/bench_ma3_perf.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: bench-ma3-perf check-ma3-perf
-$(BUILD)/dump_ma_pcm: driver/dump_ma_pcm.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+$(BUILD)/dump_ma_pcm: driver/dump_ma_pcm.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: dump-ma-pcm
 # Raw float PCM matrix for arithmetic A/B work; compare with driver/pcm_diff.py.
@@ -446,42 +467,42 @@ check-ma3-perf: $(BUILD)/bench_ma3_perf
 	python3 test/ma3_perf_cli.py $(BUILD)/bench_ma3_perf
 test: check-ma3-perf
 
-$(BUILD)/test_ma_source_frame: test/ma_source_frame.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+$(BUILD)/test_ma_source_frame: test/ma_source_frame.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-opt1
 check-ma3-opt1: $(BUILD)/test_ma_source_frame
 	$(BUILD)/test_ma_source_frame
 test: check-ma3-opt1
 
-$(BUILD)/test_ma_waveforms: test/ma_waveforms.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+$(BUILD)/test_ma_waveforms: test/ma_waveforms.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-opt2
 check-ma3-opt2: $(BUILD)/test_ma_waveforms
 	$(BUILD)/test_ma_waveforms
 test: check-ma3-opt2
 
-$(BUILD)/test_ma_fir: test/ma_fir.c src/ma_voice.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+$(BUILD)/test_ma_fir: test/ma_fir.c src/ma_voice.c $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-opt4
 check-ma3-opt4: $(BUILD)/test_ma_fir
 	$(BUILD)/test_ma_fir
 test: check-ma3-opt4
 
-$(BUILD)/test_ma_bcs_lanes: test/ma_bcs_lanes.c src/ma_voice.c src/ma_lanes.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+$(BUILD)/test_ma_bcs_lanes: test/ma_bcs_lanes.c src/ma_voice.c src/ma_lanes.c $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma-bcs-lanes
 check-ma-bcs-lanes: $(BUILD)/test_ma_bcs_lanes
 	$(BUILD)/test_ma_bcs_lanes
 test: check-ma-bcs-lanes
 
-$(BUILD)/test_ma_front_lanes: test/ma_front_lanes.c src/ma_voice.c src/ma_lanes.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+$(BUILD)/test_ma_front_lanes: test/ma_front_lanes.c src/ma_voice.c src/ma_lanes.c $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma-front-lanes
 check-ma-front-lanes: $(BUILD)/test_ma_front_lanes
 	$(BUILD)/test_ma_front_lanes
 test: check-ma-front-lanes
 
-$(BUILD)/test_ma_raster_lanes: test/ma_raster_lanes.c src/ma_voice.c src/ma_lanes.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+$(BUILD)/test_ma_raster_lanes: test/ma_raster_lanes.c src/ma_voice.c src/ma_lanes.c $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma-raster-lanes
 check-ma-raster-lanes: $(BUILD)/test_ma_raster_lanes
@@ -489,7 +510,7 @@ check-ma-raster-lanes: $(BUILD)/test_ma_raster_lanes
 test: check-ma-raster-lanes
 
 # Glas gate: formant bank, Orbita formants, formant grains (ma-constants 10C).
-$(BUILD)/test_ma_glas: test/ma_glas.c src/ma_voice_impl.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/test_ma_glas: test/ma_glas.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma-glas
 check-ma-glas: $(BUILD)/test_ma_glas
@@ -498,20 +519,20 @@ test: check-ma-glas
 
 # MA3-PERF SIMD spike: exact-bit 8-lane AVX2 ladder/FIR vs the scalar voice.
 # Not part of `test`; --bench needs an idle host and taskset.
-$(BUILD)/spike_ma_simd: driver/spike_ma_simd.c src/ma_voice.c src/ma_filter.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_filter.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+$(BUILD)/spike_ma_simd: driver/spike_ma_simd.c src/ma_voice.c src/ma_filter.c $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_filter.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_filter.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: spike-ma-simd
 spike-ma-simd: $(BUILD)/spike_ma_simd
 	$(BUILD)/spike_ma_simd --check
 
 # MA3-PERF oscillator SIMD spike: the per-sample source block as 8 AVX2 lanes.
-$(BUILD)/spike_ma_osc_simd: driver/spike_ma_osc_simd.c src/ma_voice.c src/ma_voice_impl.h src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+$(BUILD)/spike_ma_osc_simd: driver/spike_ma_osc_simd.c src/ma_voice.c $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 # MA3-PERF PMU probe: cache, branch and FP-assist counts per render block.
-$(BUILD)/probe_ma3_pmu: driver/probe_ma3_pmu.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+$(BUILD)/probe_ma3_pmu: driver/probe_ma3_pmu.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 # MA3-PERF stage probe: TSC per vector-render stage (white-box ma_voice/ma_lanes/ma_pool).
-$(BUILD)/probe_ma3_stages: driver/probe_ma3_stages.c src/ma_voice.c src/ma_lanes.c src/ma_voice_impl.h src/ma_pool.c src/ma_raster_table.h src/ma_internal.h src/mamutanalog.h src/tonewheel.h $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o $(BUILD)/ma_pool.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+$(BUILD)/probe_ma3_stages: driver/probe_ma3_stages.c src/ma_voice.c src/ma_lanes.c src/ma_pool.c $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o $(BUILD)/ma_pool.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o $(BUILD)/ma_pool.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: spike-ma-osc-simd
 spike-ma-osc-simd: $(BUILD)/spike_ma_osc_simd
@@ -519,9 +540,9 @@ spike-ma-osc-simd: $(BUILD)/spike_ma_osc_simd
 
 # Orbita offline spike (post-MA5 candidate, docs/ma-orbita-spike-20261107.md).
 # Hosted only, not part of `test`; the core is linked through its public API.
-$(BUILD)/ma_orbita.o: driver/ma_orbita.c driver/ma_orbita.h src/tonewheel.h | $(BUILD)
+$(BUILD)/ma_orbita.o: driver/ma_orbita.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
-$(BUILD)/spike_ma_orbita: driver/spike_ma_orbita.c driver/ma_orbita.h $(BUILD)/ma_orbita.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h src/tonewheel.h | $(BUILD)
+$(BUILD)/spike_ma_orbita: driver/spike_ma_orbita.c $(BUILD)/ma_orbita.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma_orbita.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: spike-ma-orbita audition-ma-orbita
 spike-ma-orbita: $(BUILD)/spike_ma_orbita
@@ -529,7 +550,7 @@ spike-ma-orbita: $(BUILD)/spike_ma_orbita
 audition-ma-orbita: $(BUILD)/spike_ma_orbita
 	$(BUILD)/spike_ma_orbita --render -o $(BUILD)/ma-orbita-spike-20261107
 
-$(BUILD)/exhibit_ma_pool: driver/exhibit_ma_pool.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+$(BUILD)/exhibit_ma_pool: driver/exhibit_ma_pool.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 .PHONY: prepare-ma2-7 bench-ma-pool audition-ma2-7
@@ -558,13 +579,13 @@ $(BUILD)/exhibit_ma_effects: driver/exhibit_ma_effects.c $(MA_RUNTIME_OBJS) $(BU
 audition-ma3-2: $(BUILD)/exhibit_ma_effects
 	$(BUILD)/exhibit_ma_effects --render $(BUILD)/ma3-2
 
-$(BUILD)/ma3_show.o: driver/ma3_show.c driver/ma3_show.h src/mamutanalog.h driver/wav.h | $(BUILD)
+$(BUILD)/ma3_show.o: driver/ma3_show.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
-$(BUILD)/exhibit_ma3_blues: driver/exhibit_ma3_blues.c driver/ma3_blues_material.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/exhibit_ma3_blues: driver/exhibit_ma3_blues.c $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
-$(BUILD)/exhibit_ma3_hurt: driver/exhibit_ma3_hurt.c driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/exhibit_ma3_hurt: driver/exhibit_ma3_hurt.c $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
-$(BUILD)/exhibit_ma3_hurt_orbita: driver/exhibit_ma3_hurt_orbita.c driver/ma3_hurt_material.h driver/ma3_hurt_parts.h driver/ma_orbita.h $(BUILD)/ma_orbita.o $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/exhibit_ma3_hurt_orbita: driver/exhibit_ma3_hurt_orbita.c $(BUILD)/ma_orbita.o $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma_orbita.o $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-hurt-orbita audition-ma3-hurt-orbita
 check-ma3-hurt-orbita: $(BUILD)/exhibit_ma3_hurt_orbita
@@ -572,7 +593,7 @@ check-ma3-hurt-orbita: $(BUILD)/exhibit_ma3_hurt_orbita
 audition-ma3-hurt-orbita: $(BUILD)/exhibit_ma3_hurt_orbita
 	mkdir -p $(BUILD)/ma3-hurt-orbita
 	$(BUILD)/exhibit_ma3_hurt_orbita --render $(BUILD)/ma3-hurt-orbita/hurt_orbita
-$(BUILD)/exhibit_ma3_hurt_industrial: driver/exhibit_ma3_hurt_industrial.c driver/ma3_hurt_material.h driver/ma3_hurt_parts.h driver/ma_orbita.h $(BUILD)/ma_orbita.o $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/exhibit_ma3_hurt_industrial: driver/exhibit_ma3_hurt_industrial.c $(BUILD)/ma_orbita.o $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma_orbita.o $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-hurt-industrial audition-ma3-hurt-industrial
 check-ma3-hurt-industrial: $(BUILD)/exhibit_ma3_hurt_industrial
@@ -580,7 +601,7 @@ check-ma3-hurt-industrial: $(BUILD)/exhibit_ma3_hurt_industrial
 audition-ma3-hurt-industrial: $(BUILD)/exhibit_ma3_hurt_industrial
 	mkdir -p $(BUILD)/ma3-hurt-industrial
 	$(BUILD)/exhibit_ma3_hurt_industrial --render $(BUILD)/ma3-hurt-industrial/hurt_industrial
-$(BUILD)/exhibit_ma3_mourning_palace: driver/exhibit_ma3_mourning_palace.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/exhibit_ma3_mourning_palace: driver/exhibit_ma3_mourning_palace.c $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-mourning-palace audition-ma3-mourning-palace
 check-ma3-mourning-palace: $(BUILD)/exhibit_ma3_mourning_palace
@@ -588,7 +609,7 @@ check-ma3-mourning-palace: $(BUILD)/exhibit_ma3_mourning_palace
 audition-ma3-mourning-palace: $(BUILD)/exhibit_ma3_mourning_palace
 	mkdir -p $(BUILD)/ma3-mourning-palace
 	$(BUILD)/exhibit_ma3_mourning_palace --render $(BUILD)/ma3-mourning-palace/mourning_palace
-$(BUILD)/exhibit_ma3_progenies: driver/exhibit_ma3_progenies.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/exhibit_ma3_progenies: driver/exhibit_ma3_progenies.c $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-progenies audition-ma3-progenies
 check-ma3-progenies: $(BUILD)/exhibit_ma3_progenies
@@ -596,7 +617,7 @@ check-ma3-progenies: $(BUILD)/exhibit_ma3_progenies
 audition-ma3-progenies: $(BUILD)/exhibit_ma3_progenies
 	mkdir -p $(BUILD)/ma3-progenies
 	$(BUILD)/exhibit_ma3_progenies --render $(BUILD)/ma3-progenies/progenies
-$(BUILD)/exhibit_ma3_spellbound: driver/exhibit_ma3_spellbound.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/exhibit_ma3_spellbound: driver/exhibit_ma3_spellbound.c $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-spellbound audition-ma3-spellbound
 check-ma3-spellbound: $(BUILD)/exhibit_ma3_spellbound
@@ -604,7 +625,7 @@ check-ma3-spellbound: $(BUILD)/exhibit_ma3_spellbound
 audition-ma3-spellbound: $(BUILD)/exhibit_ma3_spellbound
 	mkdir -p $(BUILD)/ma3-spellbound
 	$(BUILD)/exhibit_ma3_spellbound --render $(BUILD)/ma3-spellbound/spellbound
-$(BUILD)/exhibit_ma3_masses: driver/exhibit_ma3_masses.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/exhibit_ma3_masses: driver/exhibit_ma3_masses.c $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-masses audition-ma3-masses
 check-ma3-masses: $(BUILD)/exhibit_ma3_masses
@@ -612,7 +633,7 @@ check-ma3-masses: $(BUILD)/exhibit_ma3_masses
 audition-ma3-masses: $(BUILD)/exhibit_ma3_masses
 	mkdir -p $(BUILD)/ma3-masses
 	$(BUILD)/exhibit_ma3_masses --render $(BUILD)/ma3-masses/masses
-$(BUILD)/exhibit_ma3_cry_of_mankind: driver/exhibit_ma3_cry_of_mankind.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/exhibit_ma3_cry_of_mankind: driver/exhibit_ma3_cry_of_mankind.c $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-cry-of-mankind audition-ma3-cry-of-mankind
 check-ma3-cry-of-mankind: $(BUILD)/exhibit_ma3_cry_of_mankind
@@ -620,7 +641,7 @@ check-ma3-cry-of-mankind: $(BUILD)/exhibit_ma3_cry_of_mankind
 audition-ma3-cry-of-mankind: $(BUILD)/exhibit_ma3_cry_of_mankind
 	mkdir -p $(BUILD)/ma3-cry-of-mankind
 	$(BUILD)/exhibit_ma3_cry_of_mankind --render $(BUILD)/ma3-cry-of-mankind/cry_of_mankind
-$(BUILD)/exhibit_ma3_orion: driver/exhibit_ma3_orion.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+$(BUILD)/exhibit_ma3_orion: driver/exhibit_ma3_orion.c $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-orion audition-ma3-orion
 check-ma3-orion: $(BUILD)/exhibit_ma3_orion
@@ -643,3 +664,5 @@ check-ma3-1: $(BUILD)/test_ma3_midi $(BUILD)/render_midi
 
 # The Workbench desk, CLI and (from W0) UI. See docs/workbench-plan.md.
 include workbench/workbench.mk
+
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)

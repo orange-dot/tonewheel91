@@ -13,17 +13,17 @@ WB_LINK := $(WB_DESK_OBJS) $(WB_HOST_OBJS) $(MA_RUNTIME_OBJS) $(CORE_OBJS:$(BUIL
 $(WB_BUILD):
 	mkdir -p $@
 
-$(WB_DESK_OBJS): $(WB_BUILD)/%.o: workbench/desk/%.c $(WB_DESK_HEADERS) driver/ma_patch_file.h driver/smf.h driver/wav.h src/mamutanalog.h | $(WB_BUILD)
+$(WB_DESK_OBJS): $(WB_BUILD)/%.o: workbench/desk/%.c | $(WB_BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DWB_REPO='"$(CURDIR)"' -c $< -o $@
 
-$(BUILD)/wb: workbench/cli/wb_main.c $(WB_LINK) $(WB_DESK_HEADERS) | $(BUILD)
+$(BUILD)/wb: workbench/cli/wb_main.c $(WB_LINK) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) workbench/cli/wb_main.c $(WB_LINK) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/test_workbench: workbench/test/wb_test.c workbench/test/wb_test_w2w3.c $(WB_LINK) $(WB_DESK_HEADERS) | $(BUILD)
+$(BUILD)/test_workbench: workbench/test/wb_test.c workbench/test/wb_test_w2w3.c $(WB_LINK) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) workbench/test/wb_test.c $(WB_LINK) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 WB_FUZZ_MODULES := wb_hash wb_session wb_format
-$(BUILD)/fuzz_mws: workbench/test/fuzz_mws.c $(WB_FUZZ_MODULES:%=workbench/desk/%.c) driver/ma_patch_file.c driver/host_parse.c $(WB_DESK_HEADERS) | $(BUILD)
+$(BUILD)/fuzz_mws: workbench/test/fuzz_mws.c $(WB_FUZZ_MODULES:%=workbench/desk/%.c) driver/ma_patch_file.c driver/host_parse.c | $(BUILD)
 	$(FUZZ_CC) -std=c23 -O1 -g -fsanitize=fuzzer,address,undefined workbench/test/fuzz_mws.c \
 	    $(WB_FUZZ_MODULES:%=workbench/desk/%.c) driver/ma_patch_file.c driver/host_parse.c -lm -o $@
 
@@ -33,10 +33,10 @@ wb: $(BUILD)/wb
 WB_AUDIO_OBJS := $(WB_BUILD)/wb_live.o $(WB_BUILD)/wb_live_rt.o
 WB_AUDIO_HEADERS := $(wildcard workbench/audio/*.h)
 
-$(WB_AUDIO_OBJS): $(WB_BUILD)/%.o: workbench/audio/%.c $(WB_AUDIO_HEADERS) $(WB_DESK_HEADERS) | $(WB_BUILD)
+$(WB_AUDIO_OBJS): $(WB_BUILD)/%.o: workbench/audio/%.c | $(WB_BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/test_live: workbench/test/live_test.c $(WB_AUDIO_OBJS) $(BUILD)/live_io.o $(WB_LINK) $(WB_AUDIO_HEADERS) | $(BUILD)
+$(BUILD)/test_live: workbench/test/live_test.c $(WB_AUDIO_OBJS) $(BUILD)/live_io.o $(WB_LINK) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SDL3_CFLAGS) workbench/test/live_test.c $(WB_AUDIO_OBJS) $(BUILD)/live_io.o $(WB_LINK) \
 	    $(LDFLAGS) -o $@ $(SDL3_LIBS) -lasound -lpthread -lm $(LDLIBS)
 
@@ -65,7 +65,9 @@ parity-hurt-full: $(BUILD)/wb $(BUILD)/export_hurt_orch $(BUILD)/wb-parity/exhib
 	    sh workbench/test/parity_hurt.sh --full
 
 # The CLI test drives a scratch WB_HOME; it never touches the real root.
-test-workbench: $(BUILD)/test_workbench $(BUILD)/wb $(BUILD)/test_live check-workbench-symbols
+# The audio-thread audit runs with the core audit (TEST_EXTRA); sanitizer
+# builds clear both, since their instrumentation adds runtime references.
+test-workbench: $(BUILD)/test_workbench $(BUILD)/wb $(BUILD)/test_live $(if $(TEST_EXTRA),check-workbench-symbols)
 	$(BUILD)/test_workbench
 	$(BUILD)/test_live
 	WB=$(BUILD)/wb sh workbench/test/wb_cli.sh
@@ -87,14 +89,14 @@ WB_UI_MODULES := wb_layout wb_theme wb_jobs wb_views
 WB_UI_OBJS := $(WB_UI_MODULES:%=$(WB_BUILD)/%.o) $(WB_BUILD)/wb_nk_impl.o
 WB_UI_HEADERS := $(wildcard workbench/ui/*.h) $(wildcard workbench/third_party/*.h)
 
-$(WB_UI_MODULES:%=$(WB_BUILD)/%.o): $(WB_BUILD)/%.o: workbench/ui/%.c $(WB_UI_HEADERS) $(WB_DESK_HEADERS) | $(WB_BUILD)
+$(WB_UI_MODULES:%=$(WB_BUILD)/%.o): $(WB_BUILD)/%.o: workbench/ui/%.c | $(WB_BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WB_UI_CFLAGS) -c $< -o $@
 
 # Vendored implementation unit: optimized, warnings off.
-$(WB_BUILD)/wb_nk_impl.o: workbench/ui/wb_nk_impl.c $(WB_UI_HEADERS) | $(WB_BUILD)
+$(WB_BUILD)/wb_nk_impl.o: workbench/ui/wb_nk_impl.c | $(WB_BUILD)
 	$(CC) $(CPPFLAGS) -std=c23 -O2 -w $(WB_UI_CFLAGS) -c $< -o $@
 
-$(BUILD)/workbench: workbench/ui/wb_app.c $(WB_UI_OBJS) $(WB_AUDIO_OBJS) $(BUILD)/live_io.o $(WB_LINK) $(WB_UI_HEADERS) $(WB_DESK_HEADERS) $(WB_AUDIO_HEADERS) $(BUILD)/wb | $(BUILD)
+$(BUILD)/workbench: workbench/ui/wb_app.c $(WB_UI_OBJS) $(WB_AUDIO_OBJS) $(BUILD)/live_io.o $(WB_LINK) $(BUILD)/wb | $(BUILD)
 	@test -n "$(SDL3_LIBS)" || { echo "SDL3 development files not found: install SDL3-devel (pkg-config sdl3)"; exit 1; }
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WB_UI_CFLAGS) workbench/ui/wb_app.c $(WB_UI_OBJS) $(WB_AUDIO_OBJS) $(BUILD)/live_io.o \
 	    $(WB_LINK) $(LDFLAGS) -o $@ $(SDL3_LIBS) -lasound -lpthread -lm $(LDLIBS)
