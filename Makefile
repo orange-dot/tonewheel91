@@ -14,10 +14,11 @@ TEST_EXTRA ?= check-core-symbols
 ARCH_CFLAGS ?= $(if $(findstring x86_64,$(shell $(CC) -dumpmachine)),-march=x86-64-v3)
 override CFLAGS += $(ARCH_CFLAGS)
 
-# Link-time optimization: LTO=1 compiles every object as LTO IR and
-# optimizes each program across modules at link time. -ffp-contract=off and
-# the exact FP semantics hold across the link, so PCM does not change.
-LTO ?= 0
+# Link-time optimization (default since 2026-11-09): every object is LTO IR
+# and each program is optimized across modules at link time. -ffp-contract=off
+# and the exact FP semantics hold across the link, so PCM does not change.
+# LTO=0 builds without it. Evidence: docs/refactor-lto-20261109.md.
+LTO ?= 1
 LTO_CFLAGS := $(if $(filter 1,$(LTO)),-flto=auto)
 override CFLAGS += $(LTO_CFLAGS)
 # The core-symbol audit must link LTO objects through the LTO plugin: a plain

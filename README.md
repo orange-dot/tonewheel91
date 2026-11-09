@@ -55,7 +55,7 @@ hashes included — reproduce bit-for-bit.
 
     ./install-deps.sh   # Fedora: install the build dependencies (asks for sudo)
     make test      # core, hosted-boundary and MIDI-dispatch checks
-    make LTO=1 test     # the same with link-time optimization across modules
+    make LTO=0 test     # the same without link-time optimization (default LTO=1)
     make prepare-ma2-7  # build digital pool tests/exhibit/benchmark; no measurement
     make check-ma3-1 # dry Mamut MIDI/SMF twins and renderer CLI checks
     make check-ma3-2 # shared effects, wet MIDI twins, bypass and tail checks

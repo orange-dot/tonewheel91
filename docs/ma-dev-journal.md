@@ -1559,3 +1559,17 @@ Notes:
   1.002x on the lanes (noise) and 1.008x on the scalar engine; A → K6 is
   1.065x and 1.118x. The FIR gate is now an error bound with a table-symmetry
   check. Pins rebaselined again. `docs/ma3-fir-fold-20261109.md`.
+
+### 2026-11-09 — LTO by default (refactor R0)
+
+- Build: generated header dependencies (`-MMD -MP`) replace the hand lists,
+  which closes the Workbench `WB_AUDIO_OBJS` gap noted on 2026-11-08 (a
+  stale `build/sanitize/wb-obj/wb_live.o` overflowed `test_live`). A
+  `$(BUILD)/.flags` stamp rebuilds a directory once when `CC`, `LTO` or the
+  flags change. `c2b01d3`.
+- `LTO=1` is the default. Quiet-host A/B against `LTO=0`, same source:
+  lanes 1.030× (1.021–1.049×, about 5 % fewer instructions), scalar 0.998×
+  (0.987–1.008×), PCM identical in all 20 pairs.
+  `docs/refactor-lto-20261109.md`.
+- Next: the voice split stopped on 2026-11-07 (oscillators, raster, BCS,
+  decimators) is retried under LTO.
