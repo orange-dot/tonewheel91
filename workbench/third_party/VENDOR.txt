@@ -1,0 +1,13 @@
+Vendored third-party code (unmodified).
+
+Nuklear v4.13.4 (MIT or public domain, see LICENSE.nuklear)
+  https://github.com/Immediate-Mode-UI/Nuklear/tree/v4.13.4
+  nuklear.h                  <- nuklear.h
+  nuklear_sdl3_renderer.h    <- demo/sdl3_renderer/nuklear_sdl3_renderer.h
+  Font baking uses the stb_truetype and stb_rect_pack copies inside
+  nuklear.h (NK_INCLUDE_FONT_BAKING); no separate stb file is vendored.
+
+SHA-256:
+  96f1383bebb3c0a7eb167a79d3b614c1550dc280f6ba810d3a99f6f9f87409c1  nuklear.h
+  52b9f925ce61640c59a28792747c209300ea46364a8a9c53110c1d6a4959c5dd  nuklear_sdl3_renderer.h
+  b7c67c24445f3d5c16b6cd7aea2924d23209a416742a619d61bd38b05cbf64f9  LICENSE.nuklear

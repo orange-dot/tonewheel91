@@ -46,7 +46,9 @@ static void usage(const char *argv0) {
             "  -m  ALSA rawmidi in, e.g. hw:2,0,0 (none = play the demo or idle)\n"
             "  -r  sample rate 44100..192000 (default 48000)\n"
             "  -p  period frames (default 128)   -n  periods (default 3)\n"
-            "  -g  master gain (default 0.0625)  -e  demo chord for N seconds\n",
+            "  -g  master gain (default 0.0625)  -e  demo chord for N seconds\n"
+            "superseded by build/workbench (Play view), whose live path matches this one\n"
+            "bit for bit (workbench/test/live_test.c); kept as the reference\n",
             argv0);
 }
 

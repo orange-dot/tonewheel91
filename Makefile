@@ -640,3 +640,6 @@ audition-ma3-hurt: $(BUILD)/exhibit_ma3_hurt
 check-ma3-1: $(BUILD)/test_ma3_midi $(BUILD)/render_midi
 	$(BUILD)/test_ma3_midi
 	python3 test/ma3_cli.py $(BUILD)/render_midi $(BUILD)/test_ma3_midi
+
+# The Workbench desk, CLI and (from W0) UI. See docs/workbench-plan.md.
+include workbench/workbench.mk

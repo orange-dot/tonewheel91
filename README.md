@@ -53,6 +53,7 @@ core translation unit depends on the EP core, the instrument switch defaults
 to the organ, and the organ's pinned signatures — the whole-song render
 hashes included — reproduce bit-for-bit.
 
+    ./install-deps.sh   # Fedora: install the build dependencies (asks for sudo)
     make test      # core, hosted-boundary and MIDI-dispatch checks
     make prepare-ma2-7  # build digital pool tests/exhibit/benchmark; no measurement
     make check-ma3-1 # dry Mamut MIDI/SMF twins and renderer CLI checks
