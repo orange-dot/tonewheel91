@@ -1580,3 +1580,7 @@ Notes:
 - Pre-existing: `spike-ma-simd` and `spike-ma-osc-simd --check` fail since
   the explicit-FMA commit (their private lane copies predate it); they are
   not part of `make test`.
+- R2: white-box gates link the voice (`087b3fa`), SIMD spikes removed
+  (`2f6fa5c`). R3: `ma_voice_front_b_shared` for scalar and lanes; lanes
+  1.015×, scalar 0.997×, PCM identical. R4: `test/test.c` split into
+  `test_{organ,ep,ma}.c`. Summary: `docs/refactor-20261109.md`.
