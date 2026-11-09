@@ -236,30 +236,6 @@ float ma_safety_curve(float sample) {
     return sample < 0.0f ? -limited : limited;
 }
 
-static void push_oversample_history(float history[31], uint8_t *position,
-                                    float sample) {
-    history[*position] = sample;
-    (*position)++;
-    if (*position == 31) *position = 0;
-}
-
-/* Tap t reads history[position - 1 - t] (mod 31). Each nonzero pair is
- * added first, h[t] (x[t] + x[30 - t]) is fused into the sum, and the centre
- * tap comes last. */
-static float decimate_oversample(const float history[31], uint8_t position) {
-    float output = 0.0f;
-    for (int k = 0; k < OSC_HALFBAND_31_PAIRS; k++) {
-        int tap = OSC_HALFBAND_31_PAIR[k];
-        int near = position - 1 - tap, far = position - 31 + tap;
-        if (near < 0) near += 31;
-        if (far < 0) far += 31;
-        output = ma_fmadd(OSC_HALFBAND_31[tap], history[near] + history[far], output);
-    }
-    int centre = position - 1 - OSC_HALFBAND_31_CENTRE;
-    if (centre < 0) centre += 31;
-    return ma_fmadd(OSC_HALFBAND_31[OSC_HALFBAND_31_CENTRE], history[centre], output);
-}
-
 #if defined(MA_SOURCE_EVIDENCE)
 static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     ma_render_controls controls = next_render_controls(s);
@@ -316,24 +292,24 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
         s->sample_rate_hz);
     for (int at_2x = 0; at_2x < 2; at_2x++) {
         for (int at_4x = 0; at_4x < 2; at_4x++) {
-            push_oversample_history(
+            ma_voice_push_oversample_history(
                 s->oversample_history[0], &s->oversample_history_pos[0],
                 ma_voice_render_source_substep(s, &controls, &source_frame,
                                                base_hz, noise, guard1, guard2));
-            push_oversample_history(
+            ma_voice_push_oversample_history(
                 s->oversample_history[0], &s->oversample_history_pos[0],
                 ma_voice_render_source_substep(s, &controls, &source_frame,
                                                base_hz, noise, guard1, guard2));
-            float sample_4x = decimate_oversample(
+            float sample_4x = ma_voice_decimate_oversample(
                 s->oversample_history[0], s->oversample_history_pos[0]);
-            push_oversample_history(
+            ma_voice_push_oversample_history(
                 s->oversample_history[1], &s->oversample_history_pos[1],
                 sample_4x);
         }
-        float sample_2x = decimate_oversample(
+        float sample_2x = ma_voice_decimate_oversample(
             s->oversample_history[1], s->oversample_history_pos[1]);
 #if defined(MA_SOURCE_EVIDENCE)
-        push_oversample_history(
+        ma_voice_push_oversample_history(
             s->oversample_history[2], &s->oversample_history_pos[2],
             sample_2x);
 #else
@@ -361,7 +337,7 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
 
 #if defined(MA_SOURCE_EVIDENCE)
     float level = s->note_active ? ma_velocity_level(s->velocity) : 0.0f;
-    float analog = decimate_oversample(
+    float analog = ma_voice_decimate_oversample(
         s->oversample_history[2], s->oversample_history_pos[2]);
     float mozaik_gain = s->mozaik.guard_gain;
     float mozaik = render_mozaik(s, &controls, base_hz,
@@ -508,20 +484,20 @@ static void voice_decimate(ma_synth *s, const float source[8],
     int substep = 0;
     for (int step_2x = 0; step_2x < 2; step_2x++) {
         for (int step_4x = 0; step_4x < 2; step_4x++) {
-            push_oversample_history(s->oversample_history[0],
-                                    &s->oversample_history_pos[0],
-                                    source[substep++]);
-            push_oversample_history(s->oversample_history[0],
-                                    &s->oversample_history_pos[0],
-                                    source[substep++]);
-            float sample_4x = decimate_oversample(
+            ma_voice_push_oversample_history(s->oversample_history[0],
+                                             &s->oversample_history_pos[0],
+                                             source[substep++]);
+            ma_voice_push_oversample_history(s->oversample_history[0],
+                                             &s->oversample_history_pos[0],
+                                             source[substep++]);
+            float sample_4x = ma_voice_decimate_oversample(
                 s->oversample_history[0], s->oversample_history_pos[0]);
-            push_oversample_history(s->oversample_history[1],
-                                    &s->oversample_history_pos[1],
-                                    sample_4x);
+            ma_voice_push_oversample_history(s->oversample_history[1],
+                                             &s->oversample_history_pos[1],
+                                             sample_4x);
         }
-        at_2x[step_2x] = decimate_oversample(s->oversample_history[1],
-                                             s->oversample_history_pos[1]);
+        at_2x[step_2x] = ma_voice_decimate_oversample(s->oversample_history[1],
+                                                      s->oversample_history_pos[1]);
     }
 }
 

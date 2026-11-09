@@ -184,8 +184,8 @@ AVX2 static int check_fir(unsigned pushes) {
         fir8_push(&f, _mm256_load_ps(in));
         _mm256_store_ps(simd, fir8_decimate(&f));
         for (int lane = 0; lane < LANES; lane++) {
-            push_oversample_history(history[lane], &position[lane], in[lane]);
-            float scalar = decimate_oversample(history[lane], position[lane]);
+            ma_voice_push_oversample_history(history[lane], &position[lane], in[lane]);
+            float scalar = ma_voice_decimate_oversample(history[lane], position[lane]);
             if (bits_of(scalar) != bits_of(simd[lane]) || position[lane] != f.position) {
                 fprintf(stderr, "fir mismatch at push %u lane %d: scalar %08x simd %08x\n",
                         n, lane, bits_of(scalar), bits_of(simd[lane]));
@@ -263,8 +263,8 @@ static counts trial_fir_scalar(void) {
     counts a = pmu_now();
     for (unsigned n = 0; n < BENCH_CALLS; n++)
         for (int lane = 0; lane < LANES; lane++) {
-            push_oversample_history(history[lane], &position[lane], bench_in[n][lane]);
-            out_scalar[n][lane] = decimate_oversample(history[lane], position[lane]);
+            ma_voice_push_oversample_history(history[lane], &position[lane], bench_in[n][lane]);
+            out_scalar[n][lane] = ma_voice_decimate_oversample(history[lane], position[lane]);
         }
     return since(a);
 }

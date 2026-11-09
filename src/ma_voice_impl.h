@@ -577,9 +577,10 @@ void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
                       ma_voice_front *restrict f);
 #endif
 
-/* The oscillators (ma_osc.c): the guard smoothers, the 8x source frame and
- * one source substep. The scalar tick calls them per frame and per substep;
- * ma_voice_prepare_source_frame reads the guards (the evidence tick). */
+/* The oscillators (ma_osc.c): the guard smoothers, the 8x source frame, one
+ * source substep and the 8x-to-2x halfband. The scalar tick calls them per
+ * frame and per substep; ma_voice_prepare_source_frame reads the guards
+ * (the evidence tick). */
 void ma_voice_set_guard_target(ma_oscillator *oscillator, float target,
                                float sample_rate_hz);
 float ma_voice_next_guard_gain(ma_oscillator *oscillator);
@@ -595,6 +596,9 @@ float ma_voice_render_source_substep(ma_synth *s,
                                      const ma_source_frame *source,
                                      float base_hz, float noise,
                                      float guard1, float guard2);
+void ma_voice_push_oversample_history(float history[31], uint8_t *position,
+                                      float sample);
+float ma_voice_decimate_oversample(const float history[31], uint8_t position);
 
 /* The raster and BCS sources (ma_sources.c), rendered at 2x by the scalar
  * front end. ma_voice_raster_mip is the band-limit choice both share with

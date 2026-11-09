@@ -27,7 +27,7 @@ static void check(const float history[31]) {
             exact += term;
             magnitude += fabs(term);
         }
-        double actual = decimate_oversample(history, position);
+        double actual = ma_voice_decimate_oversample(history, position);
         double bound = 10.0 * 0x1p-24 * magnitude + 10.0 * FLT_TRUE_MIN;
         double error = fabs(actual - exact);
         assert(isfinite(actual) && error <= bound);

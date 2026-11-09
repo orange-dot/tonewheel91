@@ -1,5 +1,6 @@
-/* Mamut Analog oscillators: the BLEP waveforms, the 8x source frame and
- * one oversampled source substep (both VCOs, sync, cross-mod, noise). */
+/* Mamut Analog oscillators: the BLEP waveforms, the 8x source frame, one
+ * oversampled source substep (both VCOs, sync, cross-mod, noise) and the
+ * 31-tap halfband that takes the source from 8x to 2x in two stages. */
 #include "ma_internal.h"
 #include "ma_voice_impl.h"
 
@@ -315,4 +316,28 @@ float ma_voice_render_source_substep(ma_synth *s,
 
     return (guard1 * vco1 + guard2 * controls->vco2_level * vco2
             + controls->noise_level * noise) / source->mixer_divisor;
+}
+
+void ma_voice_push_oversample_history(float history[31], uint8_t *position,
+                                      float sample) {
+    history[*position] = sample;
+    (*position)++;
+    if (*position == 31) *position = 0;
+}
+
+/* Tap t reads history[position - 1 - t] (mod 31). Each nonzero pair is
+ * added first, h[t] (x[t] + x[30 - t]) is fused into the sum, and the centre
+ * tap comes last. */
+float ma_voice_decimate_oversample(const float history[31], uint8_t position) {
+    float output = 0.0f;
+    for (int k = 0; k < OSC_HALFBAND_31_PAIRS; k++) {
+        int tap = OSC_HALFBAND_31_PAIR[k];
+        int near = position - 1 - tap, far = position - 31 + tap;
+        if (near < 0) near += 31;
+        if (far < 0) far += 31;
+        output = ma_fmadd(OSC_HALFBAND_31[tap], history[near] + history[far], output);
+    }
+    int centre = position - 1 - OSC_HALFBAND_31_CENTRE;
+    if (centre < 0) centre += 31;
+    return ma_fmadd(OSC_HALFBAND_31[OSC_HALFBAND_31_CENTRE], history[centre], output);
 }
