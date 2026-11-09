@@ -184,17 +184,17 @@ static ma_render_controls next_render_controls(ma_synth *s) {
 }
 
 #if !defined(MA_SOURCE_EVIDENCE)
-static float filter_envelope_amount(const ma_synth *s,
-                                    const ma_render_controls *controls) {
+float ma_voice_filter_envelope_amount(const ma_synth *s,
+                                      const ma_render_controls *controls) {
     return clamp_signal(controls->filter_env_amount
                         + 0.25f * ma_velocity_filter(s->velocity),
                         0.0f, 1.0f);
 }
 
-static float effective_filter_cutoff(const ma_synth *s,
-                                     const ma_render_controls *controls,
-                                     float envelope_amount,
-                                     float note_position) {
+float ma_voice_effective_filter_cutoff(const ma_synth *s,
+                                       const ma_render_controls *controls,
+                                       float envelope_amount,
+                                       float note_position) {
     float envelope = 1.0f + 0.78f * s->filter_envelope.level
                                   * envelope_amount;
     float keytrack = 1.0f
@@ -273,9 +273,9 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
                           s->sample_rate_hz);
     (void)render_envelope(&s->amp_envelope, amp_adsr,
                           s->sample_rate_hz);
-    float envelope_amount = filter_envelope_amount(s, &controls);
+    float envelope_amount = ma_voice_filter_envelope_amount(s, &controls);
     float filter_modulation = s->filter_envelope.level * envelope_amount;
-    s->filter_cutoff_effective_hz = effective_filter_cutoff(
+    s->filter_cutoff_effective_hz = ma_voice_effective_filter_cutoff(
         s, &controls, envelope_amount, note_position);
     float filter_g = filter_prewarp(s->filter_cutoff_effective_hz,
                                     s->sample_rate_hz);
@@ -428,9 +428,9 @@ static void voice_front_b(ma_synth *restrict s, float bcs, float guard1,
                           s->sample_rate_hz);
     (void)render_envelope(&s->amp_envelope, amp_adsr,
                           s->sample_rate_hz);
-    float envelope_amount = filter_envelope_amount(s, controls);
+    float envelope_amount = ma_voice_filter_envelope_amount(s, controls);
     float filter_modulation = s->filter_envelope.level * envelope_amount;
-    s->filter_cutoff_effective_hz = effective_filter_cutoff(
+    s->filter_cutoff_effective_hz = ma_voice_effective_filter_cutoff(
         s, controls, envelope_amount, note_position);
     f->filter_g = filter_prewarp(s->filter_cutoff_effective_hz,
                                  s->sample_rate_hz);

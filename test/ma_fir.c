@@ -5,7 +5,7 @@
  * the exact 31-tap sum (u = 2^-24): one rounding per pair sum and one per
  * fused step, eight steps. Precondition, as in the engine: |x| <= FLT_MAX/2,
  * so a pair sum cannot overflow (oscillator samples are clamped to 1.25). */
-#include "../src/ma_voice.c"
+#include "../src/ma_voice_impl.h"
 #include <assert.h>
 #include <math.h>
 #include <stdint.h>

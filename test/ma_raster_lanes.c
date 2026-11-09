@@ -4,7 +4,6 @@
  * included), warps and phases (near 0 and near wrap). Both outputs, the
  * phase and the mip compared bit for bit; lanes outside the set must read 0.
  * Skips without AVX2. */
-#include "../src/ma_voice.c"
 #include "../src/ma_lanes.c"
 #include <assert.h>
 #include <stdio.h>

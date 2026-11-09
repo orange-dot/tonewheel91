@@ -570,11 +570,18 @@ static inline float mix_source_2x(const ma_render_controls *controls, float anal
 
 /* Out-of-line functions defined in ma_voice.c. The control code
  * (ma_controls.c) snaps the mozaik slope; the vector lanes (ma_lanes.c) run
- * front end part A. */
+ * front end part A; the front-lane gate checks the filter envelope and
+ * cutoff against the lane math. */
 uint32_t ma_voice_mozaik_slope_q32(float control);
 #if !defined(MA_SOURCE_EVIDENCE)
 void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
                       ma_voice_front *restrict f);
+float ma_voice_filter_envelope_amount(const ma_synth *s,
+                                      const ma_render_controls *controls);
+float ma_voice_effective_filter_cutoff(const ma_synth *s,
+                                       const ma_render_controls *controls,
+                                       float envelope_amount,
+                                       float note_position);
 #endif
 
 /* The oscillators (ma_osc.c): the guard smoothers, the 8x source frame, one

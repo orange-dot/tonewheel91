@@ -482,29 +482,29 @@ check-ma3-opt2: $(BUILD)/test_ma_waveforms
 	$(BUILD)/test_ma_waveforms
 test: check-ma3-opt2
 
-$(BUILD)/test_ma_fir: test/ma_fir.c src/ma_voice.c $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/test_ma_fir: test/ma_fir.c $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma3-opt4
 check-ma3-opt4: $(BUILD)/test_ma_fir
 	$(BUILD)/test_ma_fir
 test: check-ma3-opt4
 
-$(BUILD)/test_ma_bcs_lanes: test/ma_bcs_lanes.c src/ma_voice.c src/ma_lanes.c $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/test_ma_bcs_lanes: test/ma_bcs_lanes.c $(filter-out $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma-bcs-lanes
 check-ma-bcs-lanes: $(BUILD)/test_ma_bcs_lanes
 	$(BUILD)/test_ma_bcs_lanes
 test: check-ma-bcs-lanes
 
-$(BUILD)/test_ma_front_lanes: test/ma_front_lanes.c src/ma_voice.c src/ma_lanes.c $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/test_ma_front_lanes: test/ma_front_lanes.c $(filter-out $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma-front-lanes
 check-ma-front-lanes: $(BUILD)/test_ma_front_lanes
 	$(BUILD)/test_ma_front_lanes
 test: check-ma-front-lanes
 
-$(BUILD)/test_ma_raster_lanes: test/ma_raster_lanes.c src/ma_voice.c src/ma_lanes.c $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+$(BUILD)/test_ma_raster_lanes: test/ma_raster_lanes.c $(filter-out $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma-raster-lanes
 check-ma-raster-lanes: $(BUILD)/test_ma_raster_lanes
 	$(BUILD)/test_ma_raster_lanes

@@ -4,7 +4,6 @@
  * paths the pool twin rarely reaches: poly pressure, card character, extreme
  * pitches, every interval, cross-mod off and on, zero waveform levels and
  * zero guards. Every output field compared bit for bit. Skips without AVX2. */
-#include "../src/ma_voice.c"
 #include "../src/ma_lanes.c"
 #include <assert.h>
 #include <stdio.h>
@@ -69,9 +68,9 @@ int main(void) {
                                                              : uniform(8.0f, 4200.0f);
             g1[l] = sometimes_zero(0.0f, 1.0f);
             g2[l] = sometimes_zero(0.0f, 1.0f);
-            float amount = filter_envelope_amount(s, c);
+            float amount = ma_voice_filter_envelope_amount(s, c);
             float modulation = s->filter_envelope.level * amount;
-            expected_cutoff[l] = effective_filter_cutoff(s, c, amount, front[l].note_position);
+            expected_cutoff[l] = ma_voice_effective_filter_cutoff(s, c, amount, front[l].note_position);
             expected_g[l] = filter_prewarp(expected_cutoff[l], s->sample_rate_hz);
             expected[l] = ma_voice_prepare_source_frame_guarded(s, c, front[l].base_hz, modulation, g1[l], g2[l]);
             ml_front_gather(&fx, l, s, &front[l], g1[l], g2[l]);
