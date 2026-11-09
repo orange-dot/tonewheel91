@@ -73,7 +73,7 @@ int main(void) {
             float modulation = s->filter_envelope.level * amount;
             expected_cutoff[l] = effective_filter_cutoff(s, c, amount, front[l].note_position);
             expected_g[l] = filter_prewarp(expected_cutoff[l], s->sample_rate_hz);
-            expected[l] = prepare_source_frame_guarded(s, c, front[l].base_hz, modulation, g1[l], g2[l]);
+            expected[l] = ma_voice_prepare_source_frame_guarded(s, c, front[l].base_hz, modulation, g1[l], g2[l]);
             ml_front_gather(&fx, l, s, &front[l], g1[l], g2[l]);
             crossmod_off += c->crossmod_amount == 0.0f;
             poly += c->poly_pressure > 0.0f;

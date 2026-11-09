@@ -2,7 +2,7 @@
  * block of synth_tick run eight voices as eight AVX2 lanes, bit-exact?
  *
  * The block, as synth_tick runs it once per output sample per voice:
- *   set_guard_target(VCO2), 8 x render_source_substep, next_guard_gain x 2.
+ *   ma_voice_set_guard_target(VCO2), 8 x render_source_substep, next_guard_gain x 2.
  * Every path is lane-masked: sparse/full previews, sine, cross-mod, hard-sync
  * events, guard transitions and triangle initialisation. A path is only
  * evaluated when some lane needs it; its result is masked either way.
@@ -368,12 +368,12 @@ AVX2 static void block8(osc8 *o1, osc8 *o2, const lanes_in *in, float out[SUBSTE
 
 static void block_scalar(ma_synth *s, ma_render_controls *c, const ma_source_frame *f,
                          float base, float noise, float g1, float g2, float out[SUBSTEPS]) {
-    set_guard_target(&s->oscillator2, f->vco2_hz < 0.45f * s->sample_rate_hz ? 1.0f : 0.0f,
+    ma_voice_set_guard_target(&s->oscillator2, f->vco2_hz < 0.45f * s->sample_rate_hz ? 1.0f : 0.0f,
                      s->sample_rate_hz);
     for (int k = 0; k < SUBSTEPS; k++)
-        out[k] = render_source_substep(s, c, f, base, noise, g1, g2);
-    (void)next_guard_gain(&s->oscillator1);
-    (void)next_guard_gain(&s->oscillator2);
+        out[k] = ma_voice_render_source_substep(s, c, f, base, noise, g1, g2);
+    (void)ma_voice_next_guard_gain(&s->oscillator1);
+    (void)ma_voice_next_guard_gain(&s->oscillator2);
 }
 
 /* ---------------- state transfer and comparison ---------------- */
@@ -480,7 +480,7 @@ AVX2 static int check(unsigned samples) {
             base[l] = note_position_hz(note[l]) * (rng() % 64 == 0 ? uniform(1.0f, 40.0f) : 1.0f);
             g1[l] = s->oscillator1.guard_gain; g2[l] = s->oscillator2.guard_gain;
             noise[l] = next_noise(&s->noise_state);
-            f[l] = prepare_source_frame(s, &c[l], base[l], uniform(-2.0f, 2.0f));
+            f[l] = ma_voice_prepare_source_frame(s, &c[l], base[l], uniform(-2.0f, 2.0f));
             gather(&in, l, &c[l], &f[l], base[l], noise[l], g1[l], g2[l]);
             crossmod += c[l].crossmod_amount != 0.0f;
             sparse += f[l].vco1_active != WAVE_ALL || f[l].vco2_active != WAVE_ALL;
@@ -570,7 +570,7 @@ static void record(int patch) {
             float base = note_position_hz(chord[l]);
             float g1 = s->oscillator1.guard_gain, g2 = s->oscillator2.guard_gain;
             float noise = next_noise(&s->noise_state);
-            ma_source_frame f = prepare_source_frame(s, &c, base, 0.3f * tw_sin_turns((float)(n % 480) / 480.0f));
+            ma_source_frame f = ma_voice_prepare_source_frame(s, &c, base, 0.3f * tw_sin_turns((float)(n % 480) / 480.0f));
             rec_c[n][l] = c; rec_f[n][l] = f; rec_base[n][l] = base; rec_noise[n][l] = noise;
             rec_g1[n][l] = g1; rec_g2[n][l] = g2;
             gather(&rec_in[n], l, &c, &f, base, noise, g1, g2);

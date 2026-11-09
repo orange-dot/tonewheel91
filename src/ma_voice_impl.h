@@ -577,6 +577,25 @@ void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
                       ma_voice_front *restrict f);
 #endif
 
+/* The oscillators (ma_osc.c): the guard smoothers, the 8x source frame and
+ * one source substep. The scalar tick calls them per frame and per substep;
+ * ma_voice_prepare_source_frame reads the guards (the evidence tick). */
+void ma_voice_set_guard_target(ma_oscillator *oscillator, float target,
+                               float sample_rate_hz);
+float ma_voice_next_guard_gain(ma_oscillator *oscillator);
+ma_source_frame ma_voice_prepare_source_frame_guarded(
+    const ma_synth *s, const ma_render_controls *controls, float base_hz,
+    float filter_modulation, float guard1_gain, float guard2_gain);
+ma_source_frame ma_voice_prepare_source_frame(const ma_synth *s,
+                                              const ma_render_controls *controls,
+                                              float base_hz,
+                                              float filter_modulation);
+float ma_voice_render_source_substep(ma_synth *s,
+                                     const ma_render_controls *controls,
+                                     const ma_source_frame *source,
+                                     float base_hz, float noise,
+                                     float guard1, float guard2);
+
 /* Glas (ma_glas.c, ma-constants.md 10C). The scalar tick calls
  * ma_glas_prepare once per frame while ma_glas_active, then the bank. The
  * vector lanes call ma_glas_prepare_controls, then pulse/launch per lane and

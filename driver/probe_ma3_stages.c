@@ -145,7 +145,7 @@ static void lanes_tick_timed(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
     u = tsc(); stage[ST_FE_CUTOFF] += u - t; t = u;
     EACH front[l].noise = next_noise(&voice[l]->noise_state);
     u = tsc(); stage[ST_FE_NOISE] += u - t; t = u;
-    EACH front[l].source = prepare_source_frame_guarded(voice[l], &front[l].controls, front[l].base_hz,
+    EACH front[l].source = ma_voice_prepare_source_frame_guarded(voice[l], &front[l].controls, front[l].base_hz,
                                                         filter_modulation[l], front[l].guard1, front[l].guard2);
     u = tsc(); stage[ST_FE_SOURCE] += u - t; t = u;
     /* mozaik and raster: disjoint state, so mozaik's two steps may precede raster's */
