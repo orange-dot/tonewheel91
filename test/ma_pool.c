@@ -382,8 +382,8 @@ static void engine_twin(void) {
 int main(void) {
     config(); allocation(); group_priority(); event_stress(); sleep_wake(); stereo_gain(); hostile(); engine_twin();
     const uint64_t expected[] = {
-        UINT64_C(0x2c206213837a270a), UINT64_C(0xd402914722e82788),
-        UINT64_C(0x4ea5ffa926293c6c), UINT64_C(0x12f2eeef7f4f009e),
+        UINT64_C(0x4946fd6b8aa8a5d5), UINT64_C(0x4cf48dbe261e8c40),
+        UINT64_C(0xa68d44f296ff0a63), UINT64_C(0xd805ee48df95e9bc),
     };
     unsigned index = 0;
     for (unsigned u = 1; u <= 8; u *= 2) {

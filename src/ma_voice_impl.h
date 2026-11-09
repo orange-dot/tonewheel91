@@ -103,10 +103,12 @@ static constexpr float OSC_HALFBAND_31[31] = {
     7.100922987e-03f, 0.0f, -2.230306389e-03f, 0.0f,
     4.103266983e-04f, 0.0f, 0.0f,
 };
-/* Its nonzero taps. A zero tap adds 0 x to the sum: nothing for finite x. */
-enum { OSC_HALFBAND_31_NONZERO = 15 };
-static constexpr uint8_t OSC_HALFBAND_31_TAP[OSC_HALFBAND_31_NONZERO] = {
-    2, 4, 6, 8, 10, 12, 14, 15, 16, 18, 20, 22, 24, 26, 28,
+/* Symmetric, h[t] = h[30 - t], with zero odd taps: the decimators sum the
+ * seven nonzero pairs t, 30 - t (smallest coefficient first) and then the
+ * centre tap 15 (docs/ma3-fir-fold-20261109.md). */
+enum { OSC_HALFBAND_31_PAIRS = 7, OSC_HALFBAND_31_CENTRE = 15 };
+static constexpr uint8_t OSC_HALFBAND_31_PAIR[OSC_HALFBAND_31_PAIRS] = {
+    2, 4, 6, 8, 10, 12, 14,
 };
 
 #if !defined(MA_SOURCE_EVIDENCE)
@@ -114,8 +116,9 @@ static constexpr float FILTER_HALFBAND_7[7] = {
    -4.674123600e-02f, 0.0f, 2.967412472e-01f, 5.0e-01f,
     2.967412472e-01f, 0.0f, -4.674123600e-02f,
 };
-enum { FILTER_HALFBAND_7_NONZERO = 5 };
-static constexpr uint8_t FILTER_HALFBAND_7_TAP[FILTER_HALFBAND_7_NONZERO] = { 0, 2, 3, 4, 6 };
+/* Pairs 0/6 and 2/4, then the centre tap 3. */
+enum { FILTER_HALFBAND_7_PAIRS = 2, FILTER_HALFBAND_7_CENTRE = 3 };
+static constexpr uint8_t FILTER_HALFBAND_7_PAIR[FILTER_HALFBAND_7_PAIRS] = { 0, 2 };
 #endif
 
 static constexpr float PREWARP_CHEB[7] = {

@@ -558,15 +558,21 @@ static void push_oversample_history(float history[31], uint8_t *position,
     if (*position == 31) *position = 0;
 }
 
-/* The 15 nonzero taps (2, 4, ..., 14, 15, 16, ..., 28), fused, in tap order. */
+/* Tap t reads history[position - 1 - t] (mod 31). Each nonzero pair is
+ * added first, h[t] (x[t] + x[30 - t]) is fused into the sum, and the centre
+ * tap comes last. */
 static float decimate_oversample(const float history[31], uint8_t position) {
     float output = 0.0f;
-    for (int k = 0; k < OSC_HALFBAND_31_NONZERO; k++) {
-        int tap = OSC_HALFBAND_31_TAP[k], index = position - 1 - tap;
-        if (index < 0) index += 31;
-        output = ma_fmadd(OSC_HALFBAND_31[tap], history[index], output);
+    for (int k = 0; k < OSC_HALFBAND_31_PAIRS; k++) {
+        int tap = OSC_HALFBAND_31_PAIR[k];
+        int near = position - 1 - tap, far = position - 31 + tap;
+        if (near < 0) near += 31;
+        if (far < 0) far += 31;
+        output = ma_fmadd(OSC_HALFBAND_31[tap], history[near] + history[far], output);
     }
-    return output;
+    int centre = position - 1 - OSC_HALFBAND_31_CENTRE;
+    if (centre < 0) centre += 31;
+    return ma_fmadd(OSC_HALFBAND_31[OSC_HALFBAND_31_CENTRE], history[centre], output);
 }
 
 static uint8_t raster_mip(float phase_step, float warp, float *blend) {

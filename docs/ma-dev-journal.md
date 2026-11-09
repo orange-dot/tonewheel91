@@ -1552,3 +1552,10 @@ Notes:
 - Rebaselined: OPT1, OPT2, the two MA anchors in `test/test.c`, pool, SMF
   twin, wet MIDI twin; the FIR gate now allows only a different sign of zero.
   `docs/ma3-fma-20261109.md`.
+- K6, folded halfband decimators: pairs x[t] + x[30 − t] are added, then
+  fused, then the centre tap (31-tap); likewise pairs 0/6 and 2/4 (7-tap).
+  Scalar and lanes stay bit-identical. Error against the exact sum is
+  −148.3 dB, against −142.8 dB for K5 and −142.5 dB for A. Speed against K5:
+  1.002x on the lanes (noise) and 1.008x on the scalar engine; A → K6 is
+  1.065x and 1.118x. The FIR gate is now an error bound with a table-symmetry
+  check. Pins rebaselined again. `docs/ma3-fir-fold-20261109.md`.

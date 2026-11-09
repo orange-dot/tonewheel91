@@ -189,7 +189,7 @@ static void midi_twin(void) {
         assert(memcmp(expected, pcm, sizeof pcm) == 0);
     }
     uint64_t hash = tw_fnv1a64(pcm, sizeof pcm, 0);
-    assert(hash == UINT64_C(0x2fdc0bb31127de20));
+    assert(hash == UINT64_C(0xe95149977684d494));
     printf("ma3-2 MIDI/direct wet twin=%016" PRIx64 "\n", hash);
 }
 

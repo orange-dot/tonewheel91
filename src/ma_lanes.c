@@ -536,26 +536,36 @@ ML_TARGET static inline void ml_push31(float history[31][MA_LANES], uint8_t *pos
     if (++*position == 31) *position = 0;
 }
 ML_TARGET static inline ml_f ml_decimate31(const float history[31][MA_LANES], uint8_t position) {
-    ml_f output = _mm256_setzero_ps();
-    for (int k = 0; k < OSC_HALFBAND_31_NONZERO; k++) {
-        int tap = OSC_HALFBAND_31_TAP[k], index = position - 1 - tap;
-        if (index < 0) index += 31;
-        output = ml_fmadd(ML_F(OSC_HALFBAND_31[tap]), ml_ld(history[index]), output);
+    ml_f output = _mm256_setzero_ps();                /* decimate_oversample */
+    for (int k = 0; k < OSC_HALFBAND_31_PAIRS; k++) {
+        int tap = OSC_HALFBAND_31_PAIR[k];
+        int near = position - 1 - tap, far = position - 31 + tap;
+        if (near < 0) near += 31;
+        if (far < 0) far += 31;
+        output = ml_fmadd(ML_F(OSC_HALFBAND_31[tap]),
+                          ml_add(ml_ld(history[near]), ml_ld(history[far])), output);
     }
-    return output;
+    int centre = position - 1 - OSC_HALFBAND_31_CENTRE;
+    if (centre < 0) centre += 31;
+    return ml_fmadd(ML_F(OSC_HALFBAND_31[OSC_HALFBAND_31_CENTRE]), ml_ld(history[centre]), output);
 }
 ML_TARGET static inline void ml_push7(float history[7][MA_LANES], uint8_t *position, ml_f x) {
     _mm256_storeu_ps(history[*position], x);
     if (++*position == 7) *position = 0;
 }
 ML_TARGET static inline ml_f ml_decimate7(const float history[7][MA_LANES], uint8_t position) {
-    ml_f output = _mm256_setzero_ps();
-    for (int k = 0; k < FILTER_HALFBAND_7_NONZERO; k++) {
-        int tap = FILTER_HALFBAND_7_TAP[k], index = position - 1 - tap;
-        if (index < 0) index += 7;
-        output = ml_fmadd(ML_F(FILTER_HALFBAND_7[tap]), ml_ld(history[index]), output);
+    ml_f output = _mm256_setzero_ps();                /* decimate_filter */
+    for (int k = 0; k < FILTER_HALFBAND_7_PAIRS; k++) {
+        int tap = FILTER_HALFBAND_7_PAIR[k];
+        int near = position - 1 - tap, far = position - 7 + tap;
+        if (near < 0) near += 7;
+        if (far < 0) far += 7;
+        output = ml_fmadd(ML_F(FILTER_HALFBAND_7[tap]),
+                          ml_add(ml_ld(history[near]), ml_ld(history[far])), output);
     }
-    return output;
+    int centre = position - 1 - FILTER_HALFBAND_7_CENTRE;
+    if (centre < 0) centre += 7;
+    return ml_fmadd(ML_F(FILTER_HALFBAND_7[FILTER_HALFBAND_7_CENTRE]), ml_ld(history[centre]), output);
 }
 
 /* mix_source_2x, eight lanes */

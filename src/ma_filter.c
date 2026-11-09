@@ -63,15 +63,21 @@ static void push_filter_history(ma_ladder *ladder, float sample) {
     if (ladder->output_pos == 7) ladder->output_pos = 0;
 }
 
-/* The five nonzero taps (0, 2, 3, 4, 6), fused, in tap order. */
+/* Pairs 0/6 and 2/4 added first and fused, then the centre tap 3. */
 static float decimate_filter(const ma_ladder *ladder) {
+    const float *x = ladder->output_history;
+    int position = ladder->output_pos;
     float output = 0.0f;
-    for (int k = 0; k < FILTER_HALFBAND_7_NONZERO; k++) {
-        int tap = FILTER_HALFBAND_7_TAP[k], index = ladder->output_pos - 1 - tap;
-        if (index < 0) index += 7;
-        output = ma_fmadd(FILTER_HALFBAND_7[tap], ladder->output_history[index], output);
+    for (int k = 0; k < FILTER_HALFBAND_7_PAIRS; k++) {
+        int tap = FILTER_HALFBAND_7_PAIR[k];
+        int near = position - 1 - tap, far = position - 7 + tap;
+        if (near < 0) near += 7;
+        if (far < 0) far += 7;
+        output = ma_fmadd(FILTER_HALFBAND_7[tap], x[near] + x[far], output);
     }
-    return output;
+    int centre = position - 1 - FILTER_HALFBAND_7_CENTRE;
+    if (centre < 0) centre += 7;
+    return ma_fmadd(FILTER_HALFBAND_7[FILTER_HALFBAND_7_CENTRE], x[centre], output);
 }
 
 ma_frame ma_voice_render_output(ma_synth *s,
