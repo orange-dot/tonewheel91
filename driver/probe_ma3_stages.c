@@ -135,9 +135,9 @@ static void lanes_tick_timed(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
     float filter_modulation[MA_LANES];
     EACH {
         ma_synth *sv = voice[l]; ma_voice_front *f = &front[l];
-        float envelope_amount = filter_envelope_amount(sv, &f->controls);
+        float envelope_amount = ma_voice_filter_envelope_amount(sv, &f->controls);
         filter_modulation[l] = sv->filter_envelope.level * envelope_amount;
-        sv->filter_cutoff_effective_hz = effective_filter_cutoff(sv, &f->controls, envelope_amount, f->note_position);
+        sv->filter_cutoff_effective_hz = ma_voice_effective_filter_cutoff(sv, &f->controls, envelope_amount, f->note_position);
         f->filter_g = filter_prewarp(sv->filter_cutoff_effective_hz, sv->sample_rate_hz);
         f->guard1 = b->guard_gain[0][l];
         f->guard2 = b->guard_gain[1][l];
