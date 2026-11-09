@@ -196,7 +196,7 @@ static void smf_twin(const char *prefix) {
     assert(renderer.next_event == smf.event_count);
     assert(renderer.midi.stats.note_ons == 3 && renderer.midi.stats.note_offs == 3);
     uint64_t hash = tw_fnv1a64(pcm, sizeof pcm, 0);
-    assert(hash == UINT64_C(0xfbe7ee8dede78c92));
+    assert(hash == UINT64_C(0x7af6ce1d2a2c3bdb));
     printf("ma3-1-smf-twin hash=%016" PRIx64 "\n", hash);
     if (prefix) {
         char path[1024];

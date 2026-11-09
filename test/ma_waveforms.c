@@ -61,10 +61,10 @@ static uint64_t render(float rate, bool sync) {
 int main(void) {
     const float rates[] = { 44100, 48000, 96000, 192000 };
     static const uint64_t expected[4][2] = {
-        { UINT64_C(0x7295de482d99f345), UINT64_C(0x136eee40a0327864) },
-        { UINT64_C(0x7da1e292c9c4baa7), UINT64_C(0x3edc6acbdecfa2f9) },
-        { UINT64_C(0x167a58c97fbc2d53), UINT64_C(0x3c0dcddaf008802d) },
-        { UINT64_C(0x256ac9b06a4c7d5d), UINT64_C(0xf96809b3a851811b) },
+        { UINT64_C(0x8861300084896b3b), UINT64_C(0xc0b794772841ba95) },
+        { UINT64_C(0xe6f172a59ee52b52), UINT64_C(0x0c306d7ae173e160) },
+        { UINT64_C(0xb621ae120b1c1e54), UINT64_C(0x71577c8e072c106c) },
+        { UINT64_C(0x0d5162af06817ef8), UINT64_C(0x33cb1e0b17d42e69) },
     };
     unsigned failures = 0;
     for (unsigned r = 0; r < 4; r++) {

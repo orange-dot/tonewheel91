@@ -1,4 +1,8 @@
-/* White-box exactness gate: all circular positions against the old traversal. */
+/* White-box exactness gate: all circular positions against the full 31-tap
+ * traversal, fused like the engine (2026-11-09). Skipping the zero taps
+ * changes no bit for finite histories, with one exception: when the fused sum
+ * rounds a tiny negative value to -0, a later zero tap (fma(0, x, -0) = +0)
+ * would have turned it into +0. Only that sign of zero may differ. */
 #include "../src/ma_voice.c"
 #include <assert.h>
 #include <stdint.h>
@@ -10,7 +14,7 @@ static float reference_decimate(const float history[31], uint8_t position) {
     int index = position;
     for (int tap = 0; tap < 31; tap++) {
         if (--index < 0) index = 30;
-        output += OSC_HALFBAND_31[tap] * history[index];
+        output = ma_fmadd(OSC_HALFBAND_31[tap], history[index], output);
     }
     return output;
 }
@@ -22,13 +26,17 @@ static uint32_t float_bits(float value) {
     return bits;
 }
 
+static unsigned zero_sign_only;
 static void check(const float history[31]) {
     float saved[31];
     memcpy(saved, history, sizeof saved);
     for (uint8_t position = 0; position < 31; position++) {
         float expected = reference_decimate(history, position);
         float actual = decimate_oversample(history, position);
-        assert(float_bits(actual) == float_bits(expected));
+        if (float_bits(actual) != float_bits(expected)) {
+            assert(actual == 0.0f && expected == 0.0f);
+            zero_sign_only++;
+        }
         assert(memcmp(saved, history, sizeof saved) == 0);
     }
 }
@@ -69,6 +77,7 @@ int main(void) {
         }
         check(history);
     }
-    puts("31-tap FIR: all positions match original float bits; history unchanged");
+    printf("31-tap FIR: 15 nonzero taps match the fused 31-tap traversal at all positions "
+           "(%u differ only in the sign of zero); history unchanged\n", zero_sign_only);
     return 0;
 }

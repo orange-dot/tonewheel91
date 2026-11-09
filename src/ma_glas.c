@@ -229,11 +229,11 @@ static float render_grains(ma_glas *g, float f0, float render_rate_hz) {
             float attack = 1.0f;
             if (q->attack_pos < 1.0f) {
                 /* .5(1 - cos(pi a)) = .5(1 - sin(2 pi (.25 - a/2))) */
-                attack = 0.5f * (1.0f - tw_sin_turns(
+                attack = 0.5f * (1.0f - ma_sin_turns(
                     wrap_phase(0.25f - 0.5f * q->attack_pos)));
                 q->attack_pos += q->attack_step;
             }
-            y += q->gain * attack * q->envelope * tw_sin_turns(q->phase);
+            y = ma_fmadd(q->gain * attack * q->envelope, ma_sin_turns(q->phase), y);
             q->phase += q->step;
             if (q->phase >= 1.0f) q->phase -= 1.0f;
             q->envelope *= q->decay;
@@ -286,12 +286,12 @@ float ma_glas_formant(ma_synth *s, float x) {
     for (int i = 0; i < MA_FORMANTS; i++) {
         ma_formant_svf *v = &g->svf[i];
         float gi = g->g[i], ki = g->k[i];
-        float hp = (x - (ki + gi) * v->s1 - v->s2) / (1.0f + gi * (gi + ki));
-        float bp = gi * hp + v->s1;
-        v->s1 = gi * hp + bp;
-        float lp = gi * bp + v->s2;
-        v->s2 = gi * bp + lp;
-        bank += GLAS_GAIN[i] * ki * bp;
+        float hp = (ma_fnmadd(ki + gi, v->s1, x) - v->s2) / ma_fmadd(gi, gi + ki, 1.0f);
+        float bp = ma_fmadd(gi, hp, v->s1);
+        v->s1 = ma_fmadd(gi, hp, bp);
+        float lp = ma_fmadd(gi, bp, v->s2);
+        v->s2 = ma_fmadd(gi, bp, lp);
+        bank = ma_fmadd(GLAS_GAIN[i] * ki, bp, bank);
     }
     bank *= FORMANT_MAKEUP;
     if (!(bank >= -FLT_MAX && bank <= FLT_MAX)) {

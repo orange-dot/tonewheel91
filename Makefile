@@ -7,9 +7,10 @@ TEST_EXTRA ?= check-core-symbols
 
 # x86-64 requires AVX2 (x86-64-v3: AVX2, FMA, BMI; Haswell 2013 and later),
 # operator decision 2026-11-08: SIMD is first class. -ffp-contract=off still
-# forbids implicit FMA, so PCM stays bit-exact. ARCH_CFLAGS= builds the old
-# baseline for A/B measurements. Applied with override so the sanitize and
-# analyze CFLAGS overrides keep it.
+# forbids implicit FMA: Mamut Analog fuses only where its source calls
+# ma_fmadd (2026-11-09), so scalar and lane PCM stay bit-identical. Mamut
+# Analog needs hardware FMA, so ARCH_CFLAGS= no longer builds it. Applied
+# with override so the sanitize and analyze CFLAGS overrides keep it.
 ARCH_CFLAGS ?= $(if $(findstring x86_64,$(shell $(CC) -dumpmachine)),-march=x86-64-v3)
 override CFLAGS += $(ARCH_CFLAGS)
 
@@ -431,6 +432,13 @@ $(BUILD)/bench_ma_pool: driver/bench_ma_pool.c $(MA_RUNTIME_OBJS) src/mamutanalo
 $(BUILD)/bench_ma3_perf: driver/bench_ma3_perf.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: bench-ma3-perf check-ma3-perf
+$(BUILD)/dump_ma_pcm: driver/dump_ma_pcm.c $(MA_RUNTIME_OBJS) src/mamutanalog.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: dump-ma-pcm
+# Raw float PCM matrix for arithmetic A/B work; compare with driver/pcm_diff.py.
+dump-ma-pcm: $(BUILD)/dump_ma_pcm
+	mkdir -p $(BUILD)/ma-pcm
+	$(BUILD)/dump_ma_pcm $(BUILD)/ma-pcm
 bench-ma3-perf: $(BUILD)/bench_ma3_perf
 	$(BUILD)/bench_ma3_perf --run
 

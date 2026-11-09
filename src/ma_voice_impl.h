@@ -7,6 +7,17 @@
 
 #include "ma_internal.h"
 
+/* Explicit fused multiply-add (operator decision 2026-11-09, docs/ma3-fma-20261109.md).
+ * fma is exactly specified by IEEE 754 (one rounding), so scalar code and
+ * the lanes (_mm256_fmadd_ps) still agree bit for bit, on any host with
+ * hardware FMA. -ffp-contract=off stays: nothing fuses unless written here.
+ * The core has no libm, so hardware FMA is required. */
+#if !defined(__FMA__) && !defined(__ARM_FEATURE_FMA) && !defined(__FP_FAST_FMAF)
+#error "Mamut Analog needs hardware FMA (x86-64: -march=x86-64-v3)"
+#endif
+static inline float ma_fmadd(float a, float b, float c) { return __builtin_fmaf(a, b, c); }  /* a b + c */
+static inline float ma_fnmadd(float a, float b, float c) { return __builtin_fmaf(-a, b, c); } /* c - a b */
+
 static constexpr uint64_t NOISE_SEED = UINT64_C(0x4d414e4f49534531);
 #if !defined(MA_SOURCE_EVIDENCE)
 static constexpr float LN1000 = 6.907755278982137f;
@@ -92,12 +103,19 @@ static constexpr float OSC_HALFBAND_31[31] = {
     7.100922987e-03f, 0.0f, -2.230306389e-03f, 0.0f,
     4.103266983e-04f, 0.0f, 0.0f,
 };
+/* Its nonzero taps. A zero tap adds 0 x to the sum: nothing for finite x. */
+enum { OSC_HALFBAND_31_NONZERO = 15 };
+static constexpr uint8_t OSC_HALFBAND_31_TAP[OSC_HALFBAND_31_NONZERO] = {
+    2, 4, 6, 8, 10, 12, 14, 15, 16, 18, 20, 22, 24, 26, 28,
+};
 
 #if !defined(MA_SOURCE_EVIDENCE)
 static constexpr float FILTER_HALFBAND_7[7] = {
    -4.674123600e-02f, 0.0f, 2.967412472e-01f, 5.0e-01f,
     2.967412472e-01f, 0.0f, -4.674123600e-02f,
 };
+enum { FILTER_HALFBAND_7_NONZERO = 5 };
+static constexpr uint8_t FILTER_HALFBAND_7_TAP[FILTER_HALFBAND_7_NONZERO] = { 0, 2, 3, 4, 6 };
 #endif
 
 static constexpr float PREWARP_CHEB[7] = {
@@ -249,7 +267,22 @@ static inline float phase_turns(uint64_t phase_q48) {
 }
 
 static inline float smoothstep5(float x) {
-    return x * x * x * (10.0f + x * (-15.0f + 6.0f * x));
+    return x * x * x * ma_fmadd(x, ma_fmadd(6.0f, x, -15.0f), 10.0f);
+}
+
+/* tw_sin_turns and tw_sat with FMA. The organ and EP keep the tw_ forms. */
+static inline float ma_sin_turns(float p) {
+    float t = (p < 0.25f) ? p : (p < 0.75f) ? 0.5f - p : p - 1.0f;
+    float s = t * t;
+    float poly = ma_fmadd(s, 42.0586939f, -76.7058597f);
+    poly = ma_fmadd(s, poly, 81.6052493f);
+    poly = ma_fmadd(s, poly, -41.3417022f);
+    poly = ma_fmadd(s, poly, 6.28318531f);
+    return t * poly;
+}
+static inline float ma_sat(float x) {
+    x = (x > 3.0f) ? 3.0f : (x < -3.0f) ? -3.0f : x;
+    return x * ma_fmadd(x, x, 27.0f) / ma_fmadd(9.0f * x, x, 27.0f);
 }
 
 static inline float octave_ratio_small(float octaves) {

@@ -1529,3 +1529,26 @@ Notes:
   everywhere.
 - Glas fat vocal, pinned: 92.9 s scalar against 50.2 s on the lanes
   (1.85×, two runs each).
+
+### 2026-11-09 — Explicit FMA
+
+- Operator decision: bit determinism against the pre-FMA PCM may relax, so
+  Mamut Analog fuses multiply-adds, explicitly and kernel by kernel. Tag
+  `ma-pre-fma-20261109` marks the last FMA-free state.
+- `ma_fmadd`/`ma_fnmadd` (scalar) and `ml_fmadd`/`ml_fnmadd` (lanes); fma is
+  exactly specified, so scalar and lanes stay bit-identical, as do GCC and
+  Clang. `-ffp-contract=off` stays. The core needs hardware FMA (`#error`
+  otherwise); the organ and EP keep `tw_sat`/`tw_sin_turns`.
+- Steps: zero-tap FIRs (exact, all old signatures held), then fused FIR,
+  ladder and saturator, BCS RK4, oscillator polynomials and wave mix, Glas
+  SVF.
+- Quiet-host A/B, 7 binaries × 10 cases × 3 epochs: 1.060x on the lanes,
+  1.105x on the scalar engine. Most of it is the zero taps (1.027x/1.047x)
+  and the oscillator (1.021x/1.029x); the fused FIR and BCS are neutral.
+  Lane worst case 1.630 M cycles.
+- PCM against the old: −83 to −136 dB (6 s matrix, 48 cases); Hurt industrial
+  stems −96 to −111 dB, third-octave spectrum unchanged. With BCS the
+  difference grows over a held note: its oscillator phase drifts.
+- Rebaselined: OPT1, OPT2, the two MA anchors in `test/test.c`, pool, SMF
+  twin, wet MIDI twin; the FIR gate now allows only a different sign of zero.
+  `docs/ma3-fma-20261109.md`.

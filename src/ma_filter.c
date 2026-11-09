@@ -7,7 +7,7 @@
 static float apply_mixer_pressure(float source, float pressure) {
     if (pressure == 0.0f) return source;
     float gain = 1.0f + 5.0f * pressure;
-    float shaped = tw_sat(gain * source) / tw_sat(gain);
+    float shaped = ma_sat(gain * source) / ma_sat(gain);
     return source + pressure * (shaped - source);
 }
 
@@ -29,10 +29,11 @@ static float render_ladder_2x(ma_synth *s,
                      * controls->filter_drive;
     float feedback = 4.65f * controls->filter_resonance;
     for (int iteration = 0; iteration < 2; iteration++) {
-        float u = tw_sat(input_gain * input - feedback * y4_guess);
+        float u = ma_sat(ma_fnmadd(feedback, y4_guess, input_gain * input));
         for (int stage = 0; stage < 4; stage++) {
-            v[stage] = (tw_sat(u) - ladder->state[stage]) * filter_g;
-            y[stage] = v[stage] + ladder->state[stage];
+            float d = ma_sat(u) - ladder->state[stage];
+            v[stage] = d * filter_g;
+            y[stage] = ma_fmadd(d, filter_g, ladder->state[stage]);
             u = y[stage];
         }
         y4_guess = y[3];
@@ -62,12 +63,13 @@ static void push_filter_history(ma_ladder *ladder, float sample) {
     if (ladder->output_pos == 7) ladder->output_pos = 0;
 }
 
+/* The five nonzero taps (0, 2, 3, 4, 6), fused, in tap order. */
 static float decimate_filter(const ma_ladder *ladder) {
     float output = 0.0f;
-    int index = ladder->output_pos;
-    for (int tap = 0; tap < 7; tap++) {
-        if (--index < 0) index = 6;
-        output += FILTER_HALFBAND_7[tap] * ladder->output_history[index];
+    for (int k = 0; k < FILTER_HALFBAND_7_NONZERO; k++) {
+        int tap = FILTER_HALFBAND_7_TAP[k], index = ladder->output_pos - 1 - tap;
+        if (index < 0) index += 7;
+        output = ma_fmadd(FILTER_HALFBAND_7[tap], ladder->output_history[index], output);
     }
     return output;
 }

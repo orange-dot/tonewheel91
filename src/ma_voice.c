@@ -97,10 +97,10 @@ static float mamut_sine(float phase) {
     static constexpr float DRIVE = 1.45f;
     static constexpr float SECOND_LEVEL = 0.07f;
     static constexpr float PEAK_NORMALIZATION = 0.95591217f;
-    float fundamental = tw_sin_turns(phase);
-    float warm = tw_sat(DRIVE * fundamental) / tw_sat(DRIVE);
-    float second = tw_sin_turns(wrap_phase(2.0f * phase + 0.07f));
-    return PEAK_NORMALIZATION * (warm + SECOND_LEVEL * second);
+    float fundamental = ma_sin_turns(phase);
+    float warm = ma_sat(DRIVE * fundamental) / ma_sat(DRIVE);
+    float second = ma_sin_turns(wrap_phase(2.0f * phase + 0.07f));
+    return PEAK_NORMALIZATION * ma_fmadd(SECOND_LEVEL, second, warm);
 }
 
 static float waveform_divisor(ma_vco_controls controls) {
@@ -114,10 +114,10 @@ static float raw_wave_mix(float phase, ma_vco_controls controls,
     float saw = 2.0f * phase - 1.0f;
     float pulse = phase < controls.pulse_width ? 1.0f : -1.0f;
     float triangle = raw_triangle(phase);
-    float sample = controls.saw_level * saw + controls.pulse_level * pulse
-                 + controls.triangle_level * triangle;
+    float sample = ma_fmadd(controls.triangle_level, triangle,
+                            ma_fmadd(controls.pulse_level, pulse, controls.saw_level * saw));
     if (controls.sine_level > 0.0f)
-        sample += controls.sine_level * mamut_sine(phase);
+        sample = ma_fmadd(controls.sine_level, mamut_sine(phase), sample);
     return sample / divisor;
 }
 
@@ -135,12 +135,13 @@ static float preview_oscillator(const ma_oscillator *oscillator,
     float triangle = oscillator->triangle_initialized
                    ? clamp_signal(oscillator->triangle, -1.0f, 1.0f)
                    : raw_triangle(phase);
-    float sample = controls.saw_level * saw_sample(phase, blep)
-                 + controls.pulse_level * pulse_sample_with_blep(
-                     phase, controls.pulse_width, step, blep)
-                 + controls.triangle_level * triangle;
+    float sample = ma_fmadd(controls.triangle_level, triangle,
+                            ma_fmadd(controls.pulse_level,
+                                     pulse_sample_with_blep(phase, controls.pulse_width,
+                                                            step, blep),
+                                     controls.saw_level * saw_sample(phase, blep)));
     if (controls.sine_level > 0.0f)
-        sample += controls.sine_level * mamut_sine(phase);
+        sample = ma_fmadd(controls.sine_level, mamut_sine(phase), sample);
     return sample / divisor;
 }
 
@@ -161,10 +162,10 @@ static float preview_sparse_oscillator(const ma_oscillator *oscillator,
                  : raw_triangle(phase);
     /* Only preview work is optional. render_oscillator still advances its
      * triangle integrator even when the triangle contribution is zero. */
-    float sample = controls.saw_level * saw + controls.pulse_level * pulse
-                 + controls.triangle_level * triangle;
+    float sample = ma_fmadd(controls.triangle_level, triangle,
+                            ma_fmadd(controls.pulse_level, pulse, controls.saw_level * saw));
     if (controls.sine_level > 0.0f)
-        sample += controls.sine_level * mamut_sine(phase);
+        sample = ma_fmadd(controls.sine_level, mamut_sine(phase), sample);
     return sample / divisor;
 }
 
@@ -179,9 +180,8 @@ static float render_oscillator(ma_oscillator *oscillator,
     float sample = preview + oscillator->sync_residual + sync_correction;
     oscillator->sync_residual = 0.0f;
     oscillator->triangle = clamp_signal(
-        oscillator->triangle
-            + pulse_sample(phase_turns(oscillator->phase_q48), 0.5f, step)
-                * 4.0f * step,
+        ma_fmadd(pulse_sample(phase_turns(oscillator->phase_q48), 0.5f, step) * 4.0f,
+                 step, oscillator->triangle),
         -1.25f, 1.25f);
     return clamp_signal(sample, -1.25f, 1.25f);
 }
@@ -538,10 +538,9 @@ static float render_source_substep(ma_synth *s,
         float sync_reset_phase = phase_turns(sync_reset_phase_q48);
         s->oscillator2.triangle = raw_triangle(sync_reset_phase);
         s->oscillator2.triangle = clamp_signal(
-            s->oscillator2.triangle
-                + pulse_sample(sync_reset_phase, 0.5f,
-                               vco2_step * remaining)
-                    * 4.0f * vco2_step * remaining,
+            ma_fmadd(pulse_sample(sync_reset_phase, 0.5f, vco2_step * remaining)
+                         * 4.0f * vco2_step,
+                     remaining, s->oscillator2.triangle),
             -1.25f, 1.25f);
         s->oscillator2.triangle_initialized = true;
     } else {
@@ -559,12 +558,13 @@ static void push_oversample_history(float history[31], uint8_t *position,
     if (*position == 31) *position = 0;
 }
 
+/* The 15 nonzero taps (2, 4, ..., 14, 15, 16, ..., 28), fused, in tap order. */
 static float decimate_oversample(const float history[31], uint8_t position) {
     float output = 0.0f;
-    int index = position;
-    for (int tap = 0; tap < 31; tap++) {
-        if (--index < 0) index = 30;
-        output += OSC_HALFBAND_31[tap] * history[index];
+    for (int k = 0; k < OSC_HALFBAND_31_NONZERO; k++) {
+        int tap = OSC_HALFBAND_31_TAP[k], index = position - 1 - tap;
+        if (index < 0) index += 31;
+        output = ma_fmadd(OSC_HALFBAND_31[tap], history[index], output);
     }
     return output;
 }
@@ -602,8 +602,7 @@ static float render_raster(ma_synth *s, const ma_render_controls *controls,
     float step = phase_step(frequency_hz, render_rate_hz);
     uint64_t step_q48 = phase_step_q48(step);
     float phase = phase_turns(s->raster.phase_q48);
-    float warped = phase
-                 + 0.12f * controls->raster_warp * tw_sin_turns(phase);
+    float warped = ma_fmadd(0.12f * controls->raster_warp, ma_sin_turns(phase), phase);
     if (warped < 0.0f) warped += 1.0f;
     if (warped >= 1.0f) warped -= 1.0f;
 
@@ -663,10 +662,10 @@ static ma_bcs_parameters bcs_parameters(float regime) {
 static ma_bcs_vector bcs_derivative(ma_bcs_vector state,
                                     ma_bcs_parameters parameters,
                                     float omega, float external_drive) {
-    float radius2 = state.hopf_re * state.hopf_re
-                  + state.hopf_im * state.hopf_im;
-    float radial = parameters.hopf_mu
-                 - parameters.hopf_nonlinearity * radius2;
+    float radius2 = ma_fmadd(state.hopf_re, state.hopf_re,
+                             state.hopf_im * state.hopf_im);
+    float radial = ma_fnmadd(parameters.hopf_nonlinearity, radius2,
+                             parameters.hopf_mu);
     float duffing_omega = omega * parameters.duffing_frequency_ratio;
     float square = state.duffing_x * state.duffing_x;
     float edge_damping = (parameters.duffing_edge
@@ -675,25 +674,25 @@ static ma_bcs_vector bcs_derivative(ma_bcs_vector state,
                             * duffing_omega * square;
     float cubic = parameters.duffing_cubic_stiffness * duffing_omega
                 * square * state.duffing_x;
-    float drive = parameters.duffing_drive * state.hopf_re + external_drive;
+    float drive = ma_fmadd(parameters.duffing_drive, state.hopf_re, external_drive);
+    float spring = ma_fnmadd(duffing_omega, state.duffing_x,
+                             (edge_damping - nonlinear_damping) * state.duffing_v);
     return (ma_bcs_vector){
-        .hopf_re = radial * state.hopf_re - omega * state.hopf_im
-                 + parameters.duffing_feedback * omega * state.duffing_x,
-        .hopf_im = omega * state.hopf_re + radial * state.hopf_im,
+        .hopf_re = ma_fmadd(parameters.duffing_feedback * omega, state.duffing_x,
+                            ma_fnmadd(omega, state.hopf_im, radial * state.hopf_re)),
+        .hopf_im = ma_fmadd(omega, state.hopf_re, radial * state.hopf_im),
         .duffing_x = duffing_omega * state.duffing_v,
-        .duffing_v = (edge_damping - nonlinear_damping) * state.duffing_v
-                   - duffing_omega * state.duffing_x - cubic
-                   + duffing_omega * drive,
+        .duffing_v = ma_fmadd(duffing_omega, drive, spring - cubic),
     };
 }
 
 static ma_bcs_vector bcs_advance(ma_bcs_vector state,
                                  ma_bcs_vector derivative, float scale) {
     return (ma_bcs_vector){
-        .hopf_re = state.hopf_re + scale * derivative.hopf_re,
-        .hopf_im = state.hopf_im + scale * derivative.hopf_im,
-        .duffing_x = state.duffing_x + scale * derivative.duffing_x,
-        .duffing_v = state.duffing_v + scale * derivative.duffing_v,
+        .hopf_re = ma_fmadd(scale, derivative.hopf_re, state.hopf_re),
+        .hopf_im = ma_fmadd(scale, derivative.hopf_im, state.hopf_im),
+        .duffing_x = ma_fmadd(scale, derivative.duffing_x, state.duffing_x),
+        .duffing_v = ma_fmadd(scale, derivative.duffing_v, state.duffing_v),
     };
 }
 
@@ -737,18 +736,15 @@ static float render_bcs(ma_synth *s, float frequency_hz, float amount,
         ma_bcs_vector k4 = bcs_derivative(
             bcs_advance(state, k3, step), parameters, omega,
             external_drive);
-        state.hopf_re += (step / 6.0f)
-                       * (k1.hopf_re + 2.0f * k2.hopf_re
-                          + 2.0f * k3.hopf_re + k4.hopf_re);
-        state.hopf_im += (step / 6.0f)
-                       * (k1.hopf_im + 2.0f * k2.hopf_im
-                          + 2.0f * k3.hopf_im + k4.hopf_im);
-        state.duffing_x += (step / 6.0f)
-                         * (k1.duffing_x + 2.0f * k2.duffing_x
-                            + 2.0f * k3.duffing_x + k4.duffing_x);
-        state.duffing_v += (step / 6.0f)
-                         * (k1.duffing_v + 2.0f * k2.duffing_v
-                            + 2.0f * k3.duffing_v + k4.duffing_v);
+        float sixth = step / 6.0f;
+        state.hopf_re = ma_fmadd(sixth, k1.hopf_re + 2.0f * k2.hopf_re
+                                 + 2.0f * k3.hopf_re + k4.hopf_re, state.hopf_re);
+        state.hopf_im = ma_fmadd(sixth, k1.hopf_im + 2.0f * k2.hopf_im
+                                 + 2.0f * k3.hopf_im + k4.hopf_im, state.hopf_im);
+        state.duffing_x = ma_fmadd(sixth, k1.duffing_x + 2.0f * k2.duffing_x
+                                   + 2.0f * k3.duffing_x + k4.duffing_x, state.duffing_x);
+        state.duffing_v = ma_fmadd(sixth, k1.duffing_v + 2.0f * k2.duffing_v
+                                   + 2.0f * k3.duffing_v + k4.duffing_v, state.duffing_v);
     }
     float maximum = 0.0f;
     if (!bcs_state_is_safe(state, &maximum)) {
@@ -760,8 +756,8 @@ static float render_bcs(ma_synth *s, float frequency_hz, float amount,
     s->bcs.duffing_x = state.duffing_x;
     s->bcs.duffing_v = state.duffing_v;
     if (maximum > s->bcs.maximum_state) s->bcs.maximum_state = maximum;
-    s->bcs.output = tw_sat((parameters.hopf_mix * state.hopf_re
-                            + parameters.duffing_mix * state.duffing_x)
+    s->bcs.output = ma_sat(ma_fmadd(parameters.hopf_mix, state.hopf_re,
+                                    parameters.duffing_mix * state.duffing_x)
                            * parameters.output_gain);
     return s->bcs.output;
 }
