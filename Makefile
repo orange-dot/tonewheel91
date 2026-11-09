@@ -17,7 +17,7 @@ override CFLAGS += $(ARCH_CFLAGS)
 # Link-time optimization (default since 2026-11-09): every object is LTO IR
 # and each program is optimized across modules at link time. -ffp-contract=off
 # and the exact FP semantics hold across the link, so PCM does not change.
-# LTO=0 builds without it. Evidence: docs/refactor-lto-20261109.md.
+# LTO=0 builds without it. Evidence: docs/refactor-20261109.md.
 LTO ?= 1
 LTO_CFLAGS := $(if $(filter 1,$(LTO)),-flto=auto)
 override CFLAGS += $(LTO_CFLAGS)

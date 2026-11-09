@@ -1570,6 +1570,13 @@ Notes:
 - `LTO=1` is the default. Quiet-host A/B against `LTO=0`, same source:
   lanes 1.030× (1.021–1.049×, about 5 % fewer instructions), scalar 0.998×
   (0.987–1.008×), PCM identical in all 20 pairs.
-  `docs/refactor-lto-20261109.md`.
+  `docs/refactor-20261109.md`.
 - Next: the voice split stopped on 2026-11-07 (oscillators, raster, BCS,
   decimators) is retried under LTO.
+- R1 under LTO: oscillators and the 8x-to-2x halfband to `ma_osc.c`, raster
+  and BCS to `ma_sources.c`, `ML_TARGET` dropped (identical machine code).
+  `ma_voice.c` 1,068 → 536 lines. A/B against `1c0e0da`: lanes 0.999×,
+  scalar 0.996×, equal instruction counts, PCM identical.
+- Pre-existing: `spike-ma-simd` and `spike-ma-osc-simd --check` fail since
+  the explicit-FMA commit (their private lane copies predate it); they are
+  not part of `make test`.
