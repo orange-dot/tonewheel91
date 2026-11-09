@@ -400,14 +400,13 @@ void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
     f->base_hz = base_hz;
 }
 
-/* Front end, part B: the BCS output's effect on the controls (when BCS ran),
- * envelopes, prewarp, noise, the source frame, mozaik and raster. */
-static void voice_front_b(ma_synth *restrict s, float bcs, float guard1,
-                          float guard2, ma_voice_front *restrict f) {
+/* Front end, part B, shared by the scalar tick and the lanes: the BCS
+ * output's effect on the controls (when BCS ran), envelopes, guards, noise
+ * and both mozaik steps. What follows reads only the envelope level, the
+ * controls, the guards and its own state, never the mozaik state. */
+void ma_voice_front_b_shared(ma_synth *restrict s, float bcs, float guard1,
+                             float guard2, ma_voice_front *restrict f) {
     ma_render_controls *controls = &f->controls;
-    float character = f->character;
-    float note_position = f->note_position;
-    float base_hz = f->base_hz;
     if (controls->bcs_amount > 0.0f) {
         float crossmod_depth = 0.10f + 0.20f * controls->bcs_regime;
         float resonance_depth = 0.08f + 0.08f * controls->bcs_regime;
@@ -421,35 +420,42 @@ static void voice_front_b(ma_synth *restrict s, float bcs, float guard1,
             0.0f, 1.0f);
     }
     ma_adsr filter_adsr = character_adsr(s->filter_adsr,
-        s->character.filter_time_bias, character);
+        s->character.filter_time_bias, f->character);
     ma_adsr amp_adsr = character_adsr(s->amp_adsr,
-        s->character.amp_time_bias, character);
-    (void)render_envelope(&s->filter_envelope, filter_adsr,
-                          s->sample_rate_hz);
-    (void)render_envelope(&s->amp_envelope, amp_adsr,
-                          s->sample_rate_hz);
-    float envelope_amount = ma_voice_filter_envelope_amount(s, controls);
-    float filter_modulation = s->filter_envelope.level * envelope_amount;
-    s->filter_cutoff_effective_hz = ma_voice_effective_filter_cutoff(
-        s, controls, envelope_amount, note_position);
-    f->filter_g = filter_prewarp(s->filter_cutoff_effective_hz,
-                                 s->sample_rate_hz);
+        s->character.amp_time_bias, f->character);
+    (void)render_envelope(&s->filter_envelope, filter_adsr, s->sample_rate_hz);
+    (void)render_envelope(&s->amp_envelope, amp_adsr, s->sample_rate_hz);
     f->guard1 = guard1;
     f->guard2 = guard2;
     f->noise = next_noise(&s->noise_state);
-    f->source = ma_voice_prepare_source_frame_guarded(s, controls, base_hz,
-                                                      filter_modulation,
-                                                      guard1, guard2);
     for (int at_2x = 0; at_2x < 2; at_2x++) {
         f->mozaik_gain[at_2x] = s->mozaik.guard_gain;
-        f->mozaik[at_2x] = render_mozaik(s, controls, base_hz,
+        f->mozaik[at_2x] = render_mozaik(s, controls, f->base_hz,
                                          2.0f * s->sample_rate_hz);
         (void)next_mozaik_guard_gain(&s->mozaik);
+    }
+}
+
+/* Front end, part B, scalar: the shared part, then cutoff, prewarp, the
+ * source frame and raster (the lanes run these eight wide). */
+static void voice_front_b(ma_synth *restrict s, float bcs, float guard1,
+                          float guard2, ma_voice_front *restrict f) {
+    ma_voice_front_b_shared(s, bcs, guard1, guard2, f);
+    const ma_render_controls *controls = &f->controls;
+    float envelope_amount = ma_voice_filter_envelope_amount(s, controls);
+    float filter_modulation = s->filter_envelope.level * envelope_amount;
+    s->filter_cutoff_effective_hz = ma_voice_effective_filter_cutoff(
+        s, controls, envelope_amount, f->note_position);
+    f->filter_g = filter_prewarp(s->filter_cutoff_effective_hz,
+                                 s->sample_rate_hz);
+    f->source = ma_voice_prepare_source_frame_guarded(s, controls, f->base_hz,
+                                                      filter_modulation,
+                                                      guard1, guard2);
+    for (int at_2x = 0; at_2x < 2; at_2x++)
         f->raster[at_2x] = controls->raster_mix > 0.0f
-                         ? ma_voice_render_raster(s, controls, base_hz,
+                         ? ma_voice_render_raster(s, controls, f->base_hz,
                                                   2.0f * s->sample_rate_hz)
                          : 0.0f;
-    }
 }
 
 /* The scalar front end: part A, BCS when enabled, part B. */

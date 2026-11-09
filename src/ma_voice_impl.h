@@ -576,6 +576,8 @@ uint32_t ma_voice_mozaik_slope_q32(float control);
 #if !defined(MA_SOURCE_EVIDENCE)
 void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
                       ma_voice_front *restrict f);
+void ma_voice_front_b_shared(ma_synth *restrict s, float bcs, float guard1,
+                             float guard2, ma_voice_front *restrict f);
 float ma_voice_filter_envelope_amount(const ma_synth *s,
                                       const ma_render_controls *controls);
 float ma_voice_effective_filter_cutoff(const ma_synth *s,

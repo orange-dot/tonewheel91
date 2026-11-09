@@ -797,44 +797,15 @@ static void ml_bcs(ma_synth *const voice[MA_LANES],
     }
 }
 
-/* Front end, part B, for a lane: the scalar parts of voice_front_b (BCS
- * effect, envelopes, noise, mozaik) and the plain lane inputs, written
- * directly. Raster follows eight lanes wide in ml_raster; it reads only its
- * own state, base_hz and the raster controls, none of which this touches,
- * so moving it after mozaik changes nothing. Cutoff, prewarp and the source
- * frame follow in ml_front_math; they read only the envelope level, the
- * controls and the guards. */
+/* Front end, part B, for a lane: the shared part (ma_voice_front_b_shared)
+ * and the plain lane inputs, written directly. Raster follows eight lanes
+ * wide in ml_raster; cutoff, prewarp and the source frame follow in
+ * ml_front_math. */
 static void voice_front_b_lane(ma_synth *restrict s, float bcs, float guard1,
                                float guard2, ma_voice_front *restrict f,
                                ml_in *in, unsigned l) {
-    ma_render_controls *controls = &f->controls;
-    if (controls->bcs_amount > 0.0f) {
-        float crossmod_depth = 0.10f + 0.20f * controls->bcs_regime;
-        float resonance_depth = 0.08f + 0.08f * controls->bcs_regime;
-        controls->crossmod_amount = clamp_signal(
-            controls->crossmod_amount
-                + controls->bcs_amount * crossmod_depth * bcs,
-            0.0f, 1.0f);
-        controls->filter_resonance = clamp_signal(
-            controls->filter_resonance
-                + controls->bcs_amount * resonance_depth * bcs,
-            0.0f, 1.0f);
-    }
-    ma_adsr filter_adsr = character_adsr(s->filter_adsr,
-        s->character.filter_time_bias, f->character);
-    ma_adsr amp_adsr = character_adsr(s->amp_adsr,
-        s->character.amp_time_bias, f->character);
-    (void)render_envelope(&s->filter_envelope, filter_adsr, s->sample_rate_hz);
-    (void)render_envelope(&s->amp_envelope, amp_adsr, s->sample_rate_hz);
-    f->guard1 = guard1;
-    f->guard2 = guard2;
-    f->noise = next_noise(&s->noise_state);
-    for (int at_2x = 0; at_2x < 2; at_2x++) {
-        f->mozaik_gain[at_2x] = s->mozaik.guard_gain;
-        f->mozaik[at_2x] = render_mozaik(s, controls, f->base_hz,
-                                         2.0f * s->sample_rate_hz);
-        (void)next_mozaik_guard_gain(&s->mozaik);
-    }
+    ma_voice_front_b_shared(s, bcs, guard1, guard2, f);
+    const ma_render_controls *controls = &f->controls;
     in->base[l] = f->base_hz;
     in->noise[l] = f->noise;
     in->g1[l] = guard1;
