@@ -162,7 +162,7 @@ static void lanes_tick_timed(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
         ma_synth *sv = voice[l]; ma_voice_front *f = &front[l];
         for (int at_2x = 0; at_2x < 2; at_2x++)
             f->raster[at_2x] = f->controls.raster_mix > 0.0f
-                             ? render_raster(sv, &f->controls, f->base_hz, 2.0f * sv->sample_rate_hz) : 0.0f;
+                             ? ma_voice_render_raster(sv, &f->controls, f->base_hz, 2.0f * sv->sample_rate_hz) : 0.0f;
     }
     u = tsc(); stage[ST_FE_RASTER] += u - t; t = u;
     ml_benign(&in);

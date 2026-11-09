@@ -596,6 +596,15 @@ float ma_voice_render_source_substep(ma_synth *s,
                                      float base_hz, float noise,
                                      float guard1, float guard2);
 
+/* The raster and BCS sources (ma_sources.c), rendered at 2x by the scalar
+ * front end. ma_voice_raster_mip is the band-limit choice both share with
+ * the vector raster's exactness gate. */
+uint8_t ma_voice_raster_mip(float phase_step, float warp, float *blend);
+float ma_voice_render_raster(ma_synth *s, const ma_render_controls *controls,
+                             float frequency_hz, float render_rate_hz);
+float ma_voice_render_bcs(ma_synth *s, float frequency_hz, float amount,
+                          float regime, float feedback_sample);
+
 /* Glas (ma_glas.c, ma-constants.md 10C). The scalar tick calls
  * ma_glas_prepare once per frame while ma_glas_active, then the bank. The
  * vector lanes call ma_glas_prepare_controls, then pulse/launch per lane and

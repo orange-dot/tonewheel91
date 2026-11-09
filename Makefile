@@ -48,11 +48,11 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
 # The Mamut Analog line is a sibling core. Keep it out of the organ and EP
 # products; the aggregate core test and symbol audit are its first hosts.
-MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_osc.o $(BUILD)/ma_filter.o $(BUILD)/ma_controls.o $(BUILD)/ma_patches.o $(BUILD)/ma_lanes.o $(BUILD)/ma_raster_table.o $(BUILD)/ma_glas.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o
+MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_osc.o $(BUILD)/ma_sources.o $(BUILD)/ma_filter.o $(BUILD)/ma_controls.o $(BUILD)/ma_patches.o $(BUILD)/ma_lanes.o $(BUILD)/ma_raster_table.o $(BUILD)/ma_glas.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o
 MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
 # The voice modules share ma_voice_impl.h; MA_EVIDENCE_OBJS is the same set
 # built with -DMA_SOURCE_EVIDENCE (see the evidence rule below).
-MA_VOICE_MODULES := ma_voice ma_osc ma_filter ma_controls ma_patches ma_lanes ma_raster_table ma_glas
+MA_VOICE_MODULES := ma_voice ma_osc ma_sources ma_filter ma_controls ma_patches ma_lanes ma_raster_table ma_glas
 MA_VOICE_OBJS := $(MA_VOICE_MODULES:%=$(BUILD)/%.o)
 MA_EVIDENCE_OBJS := $(MA_VOICE_MODULES:%=$(BUILD)/evidence/%.o)
 MA_HOST_OBJS := $(BUILD)/ma_midi_map.o $(BUILD)/ma_midi_render.o

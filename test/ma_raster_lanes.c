@@ -60,12 +60,12 @@ int main(void) {
             if (!(on >> l & 1u)) continue;
             float blend = 0.0f;
             float step = phase_step(front[l].base_hz, 2.0f * scalar[l].sample_rate_hz);
-            uint8_t mip = raster_mip(step, front[l].controls.raster_warp, &blend);
+            uint8_t mip = ma_voice_raster_mip(step, front[l].controls.raster_warp, &blend);
             blended += blend > 0.0f;
             top_mip += mip == MA_RASTER_MIPS - 1;
             for (int k = 0; k < 2; k++)
-                expected[k][l] = render_raster(&scalar[l], &front[l].controls, front[l].base_hz,
-                                               2.0f * scalar[l].sample_rate_hz);
+                expected[k][l] = ma_voice_render_raster(&scalar[l], &front[l].controls, front[l].base_hz,
+                                                        2.0f * scalar[l].sample_rate_hz);
         }
         ml_in in;
         ml_benign(&in);

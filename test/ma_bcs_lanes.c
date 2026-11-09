@@ -60,8 +60,8 @@ int main(void) {
         for (unsigned l = 0; l < MA_LANES; l++) {
             expected[l] = 0.0f;
             if (on >> l & 1u)
-                expected[l] = render_bcs(&scalar[l], front[l].base_hz, front[l].controls.bcs_amount,
-                                         front[l].controls.bcs_regime, y4[l]);
+                expected[l] = ma_voice_render_bcs(&scalar[l], front[l].base_hz, front[l].controls.bcs_amount,
+                                                  front[l].controls.bcs_regime, y4[l]);
         }
         ml_bcs(voice, front, y4, on, actual);
         for (unsigned l = 0; l < MA_LANES; l++) {
