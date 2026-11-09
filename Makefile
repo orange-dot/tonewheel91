@@ -128,8 +128,17 @@ $(BUILD)/ep_midi_map.o: driver/ep_midi_map.c | $(BUILD)
 $(BUILD)/viz.o: driver/viz.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/test: test/test.c $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) test/test.c $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+# The core suite is four translation units, compiled one by one so that each
+# writes its own dependency file.
+CORE_TEST_OBJS := $(patsubst %,$(BUILD)/test-obj/%.o,test test_organ test_ep test_ma)
+$(BUILD)/test-obj:
+	mkdir -p $@
+
+$(CORE_TEST_OBJS): $(BUILD)/test-obj/%.o: test/%.c | $(BUILD)/test-obj
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/test: $(CORE_TEST_OBJS) $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS) | $(BUILD)
+	$(CC) $(CFLAGS) $(CORE_TEST_OBJS) $(CORE_OBJS) $(EP_OBJS) $(MA_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 $(BUILD)/test_hosted: test/hosted.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) test/hosted.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/host_parse.o $(BUILD)/ma_patch_file.o $(BUILD)/live_io.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lasound $(LDLIBS)

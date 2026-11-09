@@ -48,7 +48,7 @@ check-workbench-symbols: $(WB_BUILD)/wb_live_rt.o
 
 # Operator parity tools: the Hurt orchestra exhibit's patches as .mapatch,
 # and the exhibit itself, both built from this tree (plan §9).
-WB_EXHIBIT_LINK := driver/ma3_show.c $(BUILD)/ma_dark_lead.o $(BUILD)/smf.o $(BUILD)/wav.o \
+WB_EXHIBIT_LINK := $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/smf.o $(BUILD)/wav.o \
     $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS)
 $(BUILD)/export_hurt_orch: workbench/tools/export_hurt_orch.c driver/exhibit_ma3_hurt_orch.c $(BUILD)/ma_patch_file.o $(WB_EXHIBIT_LINK) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Wno-unused-function workbench/tools/export_hurt_orch.c \
