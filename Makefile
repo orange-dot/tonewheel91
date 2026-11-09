@@ -518,26 +518,12 @@ check-ma-glas: $(BUILD)/test_ma_glas
 	$(BUILD)/test_ma_glas
 test: check-ma-glas
 
-# MA3-PERF SIMD spike: exact-bit 8-lane AVX2 ladder/FIR vs the scalar voice.
-# Not part of `test`; --bench needs an idle host and taskset.
-$(BUILD)/spike_ma_simd: driver/spike_ma_simd.c src/ma_voice.c src/ma_filter.c $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_filter.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_filter.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
-.PHONY: spike-ma-simd
-spike-ma-simd: $(BUILD)/spike_ma_simd
-	$(BUILD)/spike_ma_simd --check
-
-# MA3-PERF oscillator SIMD spike: the per-sample source block as 8 AVX2 lanes.
-$(BUILD)/spike_ma_osc_simd: driver/spike_ma_osc_simd.c src/ma_voice.c $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 # MA3-PERF PMU probe: cache, branch and FP-assist counts per render block.
 $(BUILD)/probe_ma3_pmu: driver/probe_ma3_pmu.c $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 # MA3-PERF stage probe: TSC per vector-render stage (white-box ma_voice/ma_lanes/ma_pool).
 $(BUILD)/probe_ma3_stages: driver/probe_ma3_stages.c src/ma_voice.c src/ma_lanes.c src/ma_pool.c $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o $(BUILD)/ma_pool.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_voice.o $(BUILD)/ma_lanes.o $(BUILD)/ma_pool.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
-.PHONY: spike-ma-osc-simd
-spike-ma-osc-simd: $(BUILD)/spike_ma_osc_simd
-	$(BUILD)/spike_ma_osc_simd --check
 
 # Orbita offline spike (post-MA5 candidate, docs/ma-orbita-spike-20261107.md).
 # Hosted only, not part of `test`; the core is linked through its public API.

@@ -15,6 +15,11 @@ these two stages. This is a kernel spike: no shipping code changed.
 
 ## Method
 
+Removed on 2026-11-09 (refactor R2): the lanes in `src/ma_lanes.c` replaced
+this spike, with their own exactness gates in `test/`, and its private
+lane copy stopped matching the scalar voice with the explicit-FMA change.
+The last tree with `driver/spike_ma_simd.c` and `make spike-ma-simd` is `087b3fa`.
+
 `driver/spike_ma_simd.c` (target `make spike-ma-simd`, not part of `test`)
 includes `src/ma_voice.c` white-box and uses its scalar functions as the
 reference. The AVX2 kernels follow the scalar code's float operations in the

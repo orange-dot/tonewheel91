@@ -17,6 +17,11 @@ has not been done, and no shipping code changed.
 
 ## Method
 
+Removed on 2026-11-09 (refactor R2): the lanes in `src/ma_lanes.c` replaced
+this spike, with their own exactness gates in `test/`, and its private
+lane copy stopped matching the scalar voice with the explicit-FMA change.
+The last tree with `driver/spike_ma_osc_simd.c` and `make spike-ma-osc-simd` is `087b3fa`.
+
 `driver/spike_ma_osc_simd.c` (target `make spike-ma-osc-simd`, not part of
 `test`) includes `src/ma_voice.c` white-box. Its scalar functions are the
 reference. Only the vector functions are `target("avx2")`, without FMA.
