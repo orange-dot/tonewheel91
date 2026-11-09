@@ -580,6 +580,54 @@ check-ma3-hurt-industrial: $(BUILD)/exhibit_ma3_hurt_industrial
 audition-ma3-hurt-industrial: $(BUILD)/exhibit_ma3_hurt_industrial
 	mkdir -p $(BUILD)/ma3-hurt-industrial
 	$(BUILD)/exhibit_ma3_hurt_industrial --render $(BUILD)/ma3-hurt-industrial/hurt_industrial
+$(BUILD)/exhibit_ma3_mourning_palace: driver/exhibit_ma3_mourning_palace.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-mourning-palace audition-ma3-mourning-palace
+check-ma3-mourning-palace: $(BUILD)/exhibit_ma3_mourning_palace
+	$(BUILD)/exhibit_ma3_mourning_palace --check
+audition-ma3-mourning-palace: $(BUILD)/exhibit_ma3_mourning_palace
+	mkdir -p $(BUILD)/ma3-mourning-palace
+	$(BUILD)/exhibit_ma3_mourning_palace --render $(BUILD)/ma3-mourning-palace/mourning_palace
+$(BUILD)/exhibit_ma3_progenies: driver/exhibit_ma3_progenies.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-progenies audition-ma3-progenies
+check-ma3-progenies: $(BUILD)/exhibit_ma3_progenies
+	$(BUILD)/exhibit_ma3_progenies --check
+audition-ma3-progenies: $(BUILD)/exhibit_ma3_progenies
+	mkdir -p $(BUILD)/ma3-progenies
+	$(BUILD)/exhibit_ma3_progenies --render $(BUILD)/ma3-progenies/progenies
+$(BUILD)/exhibit_ma3_spellbound: driver/exhibit_ma3_spellbound.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-spellbound audition-ma3-spellbound
+check-ma3-spellbound: $(BUILD)/exhibit_ma3_spellbound
+	$(BUILD)/exhibit_ma3_spellbound --check
+audition-ma3-spellbound: $(BUILD)/exhibit_ma3_spellbound
+	mkdir -p $(BUILD)/ma3-spellbound
+	$(BUILD)/exhibit_ma3_spellbound --render $(BUILD)/ma3-spellbound/spellbound
+$(BUILD)/exhibit_ma3_masses: driver/exhibit_ma3_masses.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-masses audition-ma3-masses
+check-ma3-masses: $(BUILD)/exhibit_ma3_masses
+	$(BUILD)/exhibit_ma3_masses --check
+audition-ma3-masses: $(BUILD)/exhibit_ma3_masses
+	mkdir -p $(BUILD)/ma3-masses
+	$(BUILD)/exhibit_ma3_masses --render $(BUILD)/ma3-masses/masses
+$(BUILD)/exhibit_ma3_cry_of_mankind: driver/exhibit_ma3_cry_of_mankind.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-cry-of-mankind audition-ma3-cry-of-mankind
+check-ma3-cry-of-mankind: $(BUILD)/exhibit_ma3_cry_of_mankind
+	$(BUILD)/exhibit_ma3_cry_of_mankind --check
+audition-ma3-cry-of-mankind: $(BUILD)/exhibit_ma3_cry_of_mankind
+	mkdir -p $(BUILD)/ma3-cry-of-mankind
+	$(BUILD)/exhibit_ma3_cry_of_mankind --render $(BUILD)/ma3-cry-of-mankind/cry_of_mankind
+$(BUILD)/exhibit_ma3_orion: driver/exhibit_ma3_orion.c driver/ma3_show.h driver/ma3_hurt_material.h driver/ma3_hurt_parts.h $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/ma3_show.o $(BUILD)/ma_dark_lead.o $(BUILD)/host_parse.o $(BUILD)/smf.o $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma3-orion audition-ma3-orion
+check-ma3-orion: $(BUILD)/exhibit_ma3_orion
+	$(BUILD)/exhibit_ma3_orion --check
+audition-ma3-orion: $(BUILD)/exhibit_ma3_orion
+	mkdir -p $(BUILD)/ma3-orion
+	$(BUILD)/exhibit_ma3_orion --render $(BUILD)/ma3-orion/orion
 .PHONY: check-ma3-shows audition-ma3-blues audition-ma3-hurt
 check-ma3-shows: $(BUILD)/exhibit_ma3_blues $(BUILD)/exhibit_ma3_hurt
 	$(BUILD)/exhibit_ma3_blues --check

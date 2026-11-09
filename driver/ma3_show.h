@@ -3,7 +3,7 @@
 #define MA3_SHOW_H
 #include "../src/mamutanalog.h"
 
-enum { MA3_RATE=48000, MA3_PARTS=10, MA3_STEMS=6, MA3_EVENTS=16000 };
+enum { MA3_RATE=48000, MA3_PARTS=10, MA3_STEMS=6, MA3_EVENTS=24000 };
 typedef struct {
     const char *name;
     ma_patch patch;
