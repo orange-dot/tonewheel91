@@ -1611,3 +1611,20 @@ Notes:
   `build/ma-source-fix-20261110/`, verdict open.
   `docs/ma-source-fix-20261110.md`.
 
+
+### 2026-11-10 — one source for the scalar and lane DSP
+
+- Operator decision: stop writing each DSP stage twice. `ma_lane_ops.h`
+  is a width layer (`ML_W` 1 or 8; ordinary C arithmetic on `float` or
+  `__m256`, named selects, masks and u64 phase ops). Four kernels hold every
+  stage once: oscillators and decimation, filter, raster and BCS, Glas.
+  `ma_osc.c`, `ma_filter.c`, `ma_sources.c` and `ma_glas.c` instantiate them
+  at width one, `ma_lanes.c` at width eight.
+- PCM unchanged: all pins, the white-box gates (now width eight against
+  width one), and 49 of 49 dumps and evidence outputs byte-identical to
+  `c2bcf1e`.
+- Speed against `c2bcf1e`: lanes 1.029× (8 % fewer instructions), scalar
+  1.087× (8–24 % fewer). A first full run left the lanes at 0.995×: GCC had
+  stopped inlining `ml_preview` once `ma_lanes.c` grew; it is now
+  `[[gnu::always_inline]]`.
+- `docs/ma-single-source-20261110.md`.

@@ -136,10 +136,6 @@ static constexpr uint64_t PHASE_MASK_Q48 = (UINT64_C(1) << 48) - 1;
  * that run every edge within a zone behind the phase was crossed after the
  * reset. */
 static constexpr uint64_t SYNC_RUN_LIMIT_Q48 = UINT64_C(1) << 47;
-static inline uint64_t sync_run_limit(uint64_t step_q48) {
-    uint64_t limit = 8 * step_q48;
-    return limit < SYNC_RUN_LIMIT_Q48 ? limit : SYNC_RUN_LIMIT_Q48;
-}
 
 /* The two smoothed edges of a half period take 1.25 * edge of the 50% pulse's
  * area, so the triangle integrator runs 1 / (1 - 1.25 * edge) faster
@@ -275,29 +271,6 @@ static inline float clamp_signal(float value, float low, float high) {
     return value < low ? low : value > high ? high : value;
 }
 
-static inline float raw_triangle(float phase) {
-    return 1.0f - 4.0f * tw_fabsf(phase - 0.5f);
-}
-
-/* The triangle integrator's gain for a phase step, and its increment for a
- * unit pulse. */
-static inline float triangle_gain_for(float step) {
-    float edge = 8.0f * step;
-    if (edge > 0.49f) edge = 0.49f;
-    return 1.0f / ma_fnmadd(TRIANGLE_EDGE_LOSS, edge, 1.0f);
-}
-
-static inline float triangle_step_for(float step, float gain) {
-    return 4.0f * step * gain;
-}
-
-/* Where the integrator's steady trajectory is at a phase, outside the edges.
- * The state at a substep holds the pulse summed up to that substep's start,
- * which trails the triangle by half a step. */
-static inline float triangle_seed(float phase, float step, float gain) {
-    return clamp_signal(gain * raw_triangle(phase - 0.5f * step), -1.0f, 1.0f);
-}
-
 static inline float wrap_phase(float phase) {
     if (phase >= 1.0f) phase -= 1.0f;
     if (phase < 0.0f) phase += 1.0f;
@@ -308,31 +281,6 @@ static inline float phase_turns(uint64_t phase_q48) {
     return (float)(uint32_t)(phase_q48 >> 16) * 0x1p-32f;
 }
 
-static inline float smoothstep5(float x) {
-    return x * x * x * ma_fmadd(x, ma_fmadd(6.0f, x, -15.0f), 10.0f);
-}
-
-/* tw_sin_turns and tw_sat with FMA. The organ and EP keep the tw_ forms. */
-static inline float ma_sin_turns(float p) {
-    float t = (p < 0.25f) ? p : (p < 0.75f) ? 0.5f - p : p - 1.0f;
-    float s = t * t;
-    float poly = ma_fmadd(s, 42.0586939f, -76.7058597f);
-    poly = ma_fmadd(s, poly, 81.6052493f);
-    poly = ma_fmadd(s, poly, -41.3417022f);
-    poly = ma_fmadd(s, poly, 6.28318531f);
-    return t * poly;
-}
-static inline float ma_sat(float x) {
-    x = (x > 3.0f) ? 3.0f : (x < -3.0f) ? -3.0f : x;
-    return x * ma_fmadd(x, x, 27.0f) / ma_fmadd(9.0f * x, x, 27.0f);
-}
-
-static inline float octave_ratio_small(float octaves) {
-    octaves = clamp_signal(octaves, -0.25f, 0.25f);
-    float value = EXP2_SMALL[5];
-    for (int i = 4; i >= 0; i--) value = value * octaves + EXP2_SMALL[i];
-    return value;
-}
 
 static inline float phase_step(float frequency_hz, float sample_rate_hz) {
     float step = frequency_hz / sample_rate_hz;
@@ -563,18 +511,6 @@ static inline void set_bypass_smoother_target(ma_smoother *smoother, float targe
     set_smoother_target(smoother, target, sample_rate_hz);
 }
 
-static inline float filter_prewarp(float cutoff_hz, float sample_rate_hz) {
-    float x = cutoff_hz / (2.0f * sample_rate_hz);
-    float z = 2.0f * x * (1.0f / 0.42f) - 1.0f;
-    float b1 = 0.0f;
-    float b2 = 0.0f;
-    for (int k = 6; k >= 1; k--) {
-        float b = 2.0f * z * b1 - b2 + PREWARP_CHEB[k];
-        b2 = b1;
-        b1 = b;
-    }
-    return x * (z * b1 - b2 + PREWARP_CHEB[0]);
-}
 
 static inline float mix_source_2x(const ma_render_controls *controls, float analog,
                                   float guard1, float guard2,
@@ -625,13 +561,14 @@ float ma_voice_effective_filter_cutoff(const ma_synth *s,
                                        float note_position);
 #endif
 
-/* The oscillators (ma_osc.c): the guard smoothers, the 8x source frame, one
- * source substep and the 8x-to-2x halfband. The scalar tick calls them per
- * frame and per substep; ma_voice_prepare_source_frame reads the guards
- * (the evidence tick). */
-void ma_voice_set_guard_target(ma_oscillator *oscillator, float target,
-                               float sample_rate_hz);
-float ma_voice_next_guard_gain(ma_oscillator *oscillator);
+/* 2^octaves for |octaves| <= 1/4 (ma_osc.c), and the ladder's g for a
+ * cutoff (ma_filter.c): the kernels' forms at width one. */
+float ma_octave_ratio_small(float octaves);
+float ma_filter_prewarp(float cutoff_hz, float sample_rate_hz);
+
+/* The oscillators (ma_osc.c): the 8x source frame, the oscillator kernel
+ * (ma_osc_kernel.h) for one voice, and the 8x-to-2x halfband.
+ * ma_voice_prepare_source_frame reads the guards (the evidence tick). */
 ma_source_frame ma_voice_prepare_source_frame_guarded(
     const ma_synth *s, const ma_render_controls *controls, float base_hz,
     float filter_modulation, float guard1_gain, float guard2_gain);
@@ -639,14 +576,23 @@ ma_source_frame ma_voice_prepare_source_frame(const ma_synth *s,
                                               const ma_render_controls *controls,
                                               float base_hz,
                                               float filter_modulation);
-/* Gives a triangle with no state yet its seed; once per frame, before the
- * frame's substeps. */
+/* One frame's eight 8x source samples: VCO2's guard target, the triangle
+ * seeds, the substeps and both guard steps. */
+void ma_voice_render_source_block(ma_synth *s, const ma_render_controls *controls,
+                                  const ma_source_frame *source, float base_hz,
+                                  float noise, float guard1, float guard2,
+                                  float out[8]);
+/* The block's parts, for white-box gates: the seeds of triangles with no
+ * state yet, and one substep. */
 void ma_voice_seed_triangles(ma_synth *s, const ma_source_frame *source);
 float ma_voice_render_source_substep(ma_synth *s,
                                      const ma_render_controls *controls,
                                      const ma_source_frame *source,
                                      float base_hz, float noise,
                                      float guard1, float guard2);
+/* 8x -> 4x -> 2x through the voice's two halfband rings. */
+void ma_voice_decimate_source(ma_synth *s, const float source[8], float at_2x[2]);
+/* One halfband ring, for the evidence tick and the FIR gate. */
 void ma_voice_push_oversample_history(float history[31], uint8_t *position,
                                       float sample);
 float ma_voice_decimate_oversample(const float history[31], uint8_t position);

@@ -533,7 +533,7 @@ void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
     ma_glas_init(&s->glas, value.formant_mix, value.formant_vowel,
                  value.formant_shift, value.formant_orbita, value.grain_mix);
     reset_mozaik(&s->mozaik, effective_phason_q32(s));
-    s->filter_g = filter_prewarp(s->filter_cutoff_hz, s->sample_rate_hz);
+    s->filter_g = ma_filter_prewarp(s->filter_cutoff_hz, s->sample_rate_hz);
     tw_drive_init(&s->output.body, s->sample_rate_hz);
     s->output.dc_coefficient = tw_one_pole_coeff(
         DC_BLOCK_10_HZ / s->sample_rate_hz);
@@ -663,7 +663,7 @@ void ma_synth_set_filter(ma_synth *s, float cutoff_hz, float resonance,
     float cutoff_max = 0.42f * s->sample_rate_hz;
     if (cutoff_max > 20000.0f) cutoff_max = 20000.0f;
     s->filter_cutoff_hz = clamp_control(cutoff_hz, 20.0f, cutoff_max, 900.0f);
-    s->filter_g = filter_prewarp(s->filter_cutoff_hz, s->sample_rate_hz);
+    s->filter_g = ma_filter_prewarp(s->filter_cutoff_hz, s->sample_rate_hz);
     s->filter_cutoff_effective_hz = s->filter_cutoff_hz;
     s->filter_resonance = clamp_control(resonance, 0.0f, 1.0f, 0.18f);
     s->filter_drive = clamp_control(drive, 0.0f, 1.0f, 0.12f);

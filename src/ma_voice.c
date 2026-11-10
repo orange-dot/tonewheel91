@@ -64,7 +64,7 @@ static float note_position_hz(float note) {
     note = clamp_signal(note, 0.0f, 127.0f);
     uint8_t floor_note = (uint8_t)note;
     float fraction = note - floor_note;
-    return NOTE_HZ[floor_note] * octave_ratio_small(fraction / 12.0f);
+    return NOTE_HZ[floor_note] * ma_octave_ratio_small(fraction / 12.0f);
 }
 
 static float next_glide_note(ma_synth *s) {
@@ -183,36 +183,6 @@ static ma_render_controls next_render_controls(ma_synth *s) {
     return c;
 }
 
-#if !defined(MA_SOURCE_EVIDENCE)
-float ma_voice_filter_envelope_amount(const ma_synth *s,
-                                      const ma_render_controls *controls) {
-    return clamp_signal(controls->filter_env_amount
-                        + 0.25f * ma_velocity_filter(s->velocity),
-                        0.0f, 1.0f);
-}
-
-float ma_voice_effective_filter_cutoff(const ma_synth *s,
-                                       const ma_render_controls *controls,
-                                       float envelope_amount,
-                                       float note_position) {
-    float envelope = 1.0f + 0.78f * s->filter_envelope.level
-                                  * envelope_amount;
-    float keytrack = 1.0f
-                   + (note_position - 60.0f) * (1.0f / 48.0f)
-                   * controls->filter_keytrack * 0.42f;
-    keytrack = clamp_signal(keytrack, 0.55f, 1.35f);
-    float cutoff = controls->filter_cutoff_hz * envelope * keytrack;
-    if (controls->poly_pressure > 0.0f)
-        cutoff *= octave_ratio_small(0.25f * controls->poly_pressure);
-    if (s->character.smoother.current > 0.0f)
-        cutoff *= octave_ratio_small(s->character.smoother.current
-                                     * s->character.cutoff_octaves);
-    float cutoff_max = 0.42f * s->sample_rate_hz;
-    if (cutoff_max > 20000.0f) cutoff_max = 20000.0f;
-    return clamp_signal(cutoff, 20.0f, cutoff_max);
-}
-#endif
-
 float ma_note_frequency_hz(uint8_t note) {
     return note < 128 ? NOTE_HZ[note] : 0.0f;
 }
@@ -244,11 +214,11 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     float pitch_delta = controls.pitch_bend_semitones + next_lfo(s, &controls);
     float base_hz = note_position_hz(note_position);
     if (detune_cents != 0.0f)
-        base_hz *= octave_ratio_small(detune_cents / 1200.0f);
+        base_hz *= ma_octave_ratio_small(detune_cents / 1200.0f);
     if (pitch_delta != 0.0f)
-        base_hz *= octave_ratio_small(pitch_delta / 12.0f);
+        base_hz *= ma_octave_ratio_small(pitch_delta / 12.0f);
     if (character > 0.0f)
-        base_hz *= octave_ratio_small(character
+        base_hz *= ma_octave_ratio_small(character
             * (s->character.vco1_cents + s->character.walk_cents) / 1200.0f);
     if (controls.bcs_amount > 0.0f) {
         float bcs = ma_voice_render_bcs(s, base_hz, controls.bcs_amount,
@@ -264,79 +234,20 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
                 + controls.bcs_amount * resonance_depth * bcs,
             0.0f, 1.0f);
     }
-#if !defined(MA_SOURCE_EVIDENCE)
-    ma_adsr filter_adsr = character_adsr(s->filter_adsr,
-        s->character.filter_time_bias, character);
-    ma_adsr amp_adsr = character_adsr(s->amp_adsr,
-        s->character.amp_time_bias, character);
-    (void)render_envelope(&s->filter_envelope, filter_adsr,
-                          s->sample_rate_hz);
-    (void)render_envelope(&s->amp_envelope, amp_adsr,
-                          s->sample_rate_hz);
-    float envelope_amount = ma_voice_filter_envelope_amount(s, &controls);
-    float filter_modulation = s->filter_envelope.level * envelope_amount;
-    s->filter_cutoff_effective_hz = ma_voice_effective_filter_cutoff(
-        s, &controls, envelope_amount, note_position);
-    float filter_g = filter_prewarp(s->filter_cutoff_effective_hz,
-                                    s->sample_rate_hz);
-#else
-    float filter_modulation = 0.0f;
-#endif
     float guard1 = s->oscillator1.guard_gain;
     float guard2 = s->oscillator2.guard_gain;
     float noise = next_noise(&s->noise_state);
     ma_source_frame source_frame = ma_voice_prepare_source_frame(
-        s, &controls, base_hz, filter_modulation);
-    ma_voice_set_guard_target(&s->oscillator2,
-        source_frame.vco2_hz < 0.45f * s->sample_rate_hz ? 1.0f : 0.0f,
-        s->sample_rate_hz);
-    ma_voice_seed_triangles(s, &source_frame);
-    for (int at_2x = 0; at_2x < 2; at_2x++) {
-        for (int at_4x = 0; at_4x < 2; at_4x++) {
-            ma_voice_push_oversample_history(
-                s->oversample_history[0], &s->oversample_history_pos[0],
-                ma_voice_render_source_substep(s, &controls, &source_frame,
-                                               base_hz, noise, guard1, guard2));
-            ma_voice_push_oversample_history(
-                s->oversample_history[0], &s->oversample_history_pos[0],
-                ma_voice_render_source_substep(s, &controls, &source_frame,
-                                               base_hz, noise, guard1, guard2));
-            float sample_4x = ma_voice_decimate_oversample(
-                s->oversample_history[0], s->oversample_history_pos[0]);
-            ma_voice_push_oversample_history(
-                s->oversample_history[1], &s->oversample_history_pos[1],
-                sample_4x);
-        }
-        float sample_2x = ma_voice_decimate_oversample(
-            s->oversample_history[1], s->oversample_history_pos[1]);
-#if defined(MA_SOURCE_EVIDENCE)
-        ma_voice_push_oversample_history(
-            s->oversample_history[2], &s->oversample_history_pos[2],
-            sample_2x);
-#else
-        float mozaik_gain = s->mozaik.guard_gain;
-        float mozaik = render_mozaik(s, &controls, base_hz,
-                                     2.0f * s->sample_rate_hz);
-        (void)next_mozaik_guard_gain(&s->mozaik);
-        float raster = controls.raster_mix > 0.0f
-                     ? ma_voice_render_raster(s, &controls, base_hz,
-                                              2.0f * s->sample_rate_hz)
-                     : 0.0f;
-        float source = mix_source_2x(&controls, sample_2x, guard1, guard2,
-                                     mozaik_gain, mozaik, raster);
-        float pressured = apply_mixer_pressure(source,
-                                                controls.mixer_pressure);
-        s->ladder.pressure_input = source;
-        s->ladder.pressure_output = pressured;
-        push_filter_history(&s->ladder,
-                            render_ladder_2x(s, &controls, pressured,
-                                             filter_g));
-#endif
-    }
-    (void)ma_voice_next_guard_gain(&s->oscillator1);
-    (void)ma_voice_next_guard_gain(&s->oscillator2);
+        s, &controls, base_hz, 0.0f);
+    float source_8x[8], at_2x[2];
+    ma_voice_render_source_block(s, &controls, &source_frame, base_hz, noise,
+                                 guard1, guard2, source_8x);
+    ma_voice_decimate_source(s, source_8x, at_2x);
+    for (int step = 0; step < 2; step++)
+        ma_voice_push_oversample_history(s->oversample_history[2],
+                                         &s->oversample_history_pos[2],
+                                         at_2x[step]);
 
-#if defined(MA_SOURCE_EVIDENCE)
     float level = s->note_active ? ma_velocity_level(s->velocity) : 0.0f;
     float analog = ma_voice_decimate_oversample(
         s->oversample_history[2], s->oversample_history_pos[2]);
@@ -349,22 +260,12 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
                  : 0.0f;
     float output = mix_source_2x(&controls, analog, guard1, guard2,
                                  mozaik_gain, mozaik, raster) * level;
-#else
-    float velocity_gain = 0.25f + 0.75f * ma_velocity_level(s->velocity);
-    float output = decimate_filter(&s->ladder)
-                 * s->amp_envelope.level * velocity_gain;
-#endif
     if (controls.poly_pressure > 0.0f)
         output *= 1.0f + 0.10f * controls.poly_pressure;
     if (character > 0.0f)
         output *= 1.0f + character * s->character.vca_bias;
-#if defined(MA_SOURCE_EVIDENCE)
     (void)raw;
     return (ma_frame){ .left = output, .right = output };
-#else
-    if (raw) return (ma_frame){ .left = output, .right = output };
-    return ma_voice_render_output(s, &controls, output);
-#endif
 }
 #else
 /* Staged voice tick (2026-11-06). Every voice performs the same float
@@ -390,11 +291,11 @@ void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
     float pitch_delta = controls->pitch_bend_semitones + next_lfo(s, controls);
     float base_hz = note_position_hz(note_position);
     if (detune_cents != 0.0f)
-        base_hz *= octave_ratio_small(detune_cents / 1200.0f);
+        base_hz *= ma_octave_ratio_small(detune_cents / 1200.0f);
     if (pitch_delta != 0.0f)
-        base_hz *= octave_ratio_small(pitch_delta / 12.0f);
+        base_hz *= ma_octave_ratio_small(pitch_delta / 12.0f);
     if (character > 0.0f)
-        base_hz *= octave_ratio_small(character
+        base_hz *= ma_octave_ratio_small(character
             * (s->character.vco1_cents + s->character.walk_cents) / 1200.0f);
     f->character = character;
     f->note_position = note_position;
@@ -447,7 +348,7 @@ static void voice_front_b(ma_synth *restrict s, float bcs, float guard1,
     float filter_modulation = s->filter_envelope.level * envelope_amount;
     s->filter_cutoff_effective_hz = ma_voice_effective_filter_cutoff(
         s, controls, envelope_amount, f->note_position);
-    f->filter_g = filter_prewarp(s->filter_cutoff_effective_hz,
+    f->filter_g = ma_filter_prewarp(s->filter_cutoff_effective_hz,
                                  s->sample_rate_hz);
     f->source = ma_voice_prepare_source_frame_guarded(s, controls, f->base_hz,
                                                       filter_modulation,
@@ -471,51 +372,14 @@ static void voice_front_end(ma_synth *restrict s, float detune_cents,
     voice_front_b(s, bcs, guard1, guard2, f);
 }
 
-/* The VCO2 guard target, eight 8x source substeps, and both guard steps. */
-static void voice_oscillator_block(ma_synth *s, const ma_voice_front *f,
-                                   float source[8]) {
-    ma_voice_set_guard_target(&s->oscillator2,
-        f->source.vco2_hz < 0.45f * s->sample_rate_hz ? 1.0f : 0.0f,
-        s->sample_rate_hz);
-    ma_voice_seed_triangles(s, &f->source);
-    for (int substep = 0; substep < 8; substep++)
-        source[substep] = ma_voice_render_source_substep(s, &f->controls, &f->source,
-                                                         f->base_hz, f->noise,
-                                                         f->guard1, f->guard2);
-    (void)ma_voice_next_guard_gain(&s->oscillator1);
-    (void)ma_voice_next_guard_gain(&s->oscillator2);
-}
-
-/* 8x -> 4x -> 2x, in the former push/decimate order. */
-static void voice_decimate(ma_synth *s, const float source[8],
-                           float at_2x[2]) {
-    int substep = 0;
-    for (int step_2x = 0; step_2x < 2; step_2x++) {
-        for (int step_4x = 0; step_4x < 2; step_4x++) {
-            ma_voice_push_oversample_history(s->oversample_history[0],
-                                             &s->oversample_history_pos[0],
-                                             source[substep++]);
-            ma_voice_push_oversample_history(s->oversample_history[0],
-                                             &s->oversample_history_pos[0],
-                                             source[substep++]);
-            float sample_4x = ma_voice_decimate_oversample(
-                s->oversample_history[0], s->oversample_history_pos[0]);
-            ma_voice_push_oversample_history(s->oversample_history[1],
-                                             &s->oversample_history_pos[1],
-                                             sample_4x);
-        }
-        at_2x[step_2x] = ma_voice_decimate_oversample(s->oversample_history[1],
-                                                      s->oversample_history_pos[1]);
-    }
-}
-
 static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     ma_voice_front f;
     float source[8], at_2x[2];
     voice_front_end(s, detune_cents, s->ladder.y4_guess,
                     s->oscillator1.guard_gain, s->oscillator2.guard_gain, &f);
-    voice_oscillator_block(s, &f, source);
-    voice_decimate(s, source, at_2x);
+    ma_voice_render_source_block(s, &f.controls, &f.source, f.base_hz, f.noise,
+                                 f.guard1, f.guard2, source);
+    ma_voice_decimate_source(s, source, at_2x);
     bool glas = ma_glas_active(&s->glas);
     s->glas.frame_grain_mix = glas ? ma_glas_prepare(s, f.base_hz) : 0.0f;
     float filtered = ma_voice_filter(s, &f, at_2x);

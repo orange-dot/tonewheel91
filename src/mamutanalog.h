@@ -567,7 +567,9 @@ void ma_card_bank_set_output(ma_card_bank *bank, float body_drive,
 enum { MA_POOL_CAPACITY = 64 };
 #define MA_POOL_DEFAULT_SEED UINT64_C(0x4d41504f4f4c3031)
 /* Render engine. AUTO renders eight voices per AVX2 vector when the CPU and
- * OS support AVX2 on x86-64, else scalar; both produce identical bits. */
+ * OS support AVX2 on x86-64, else one voice at a time; SCALAR always renders
+ * one voice at a time. Both run the same DSP kernels and produce identical
+ * bits. */
 typedef enum : uint8_t { MA_POOL_ENGINE_AUTO = 0, MA_POOL_ENGINE_SCALAR = 1 } ma_pool_engine;
 typedef struct {
     uint8_t limit;                 /* 1..64, divisible by unison_count */

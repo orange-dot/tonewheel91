@@ -102,10 +102,10 @@ static void lanes_tick_timed(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
         float note_position = next_glide_note(sv);
         float pitch_delta = controls->pitch_bend_semitones + next_lfo(sv, controls);
         float base_hz = note_position_hz(note_position);
-        if (detune[l] != 0.0f) base_hz *= octave_ratio_small(detune[l] / 1200.0f);
-        if (pitch_delta != 0.0f) base_hz *= octave_ratio_small(pitch_delta / 12.0f);
+        if (detune[l] != 0.0f) base_hz *= ma_octave_ratio_small(detune[l] / 1200.0f);
+        if (pitch_delta != 0.0f) base_hz *= ma_octave_ratio_small(pitch_delta / 12.0f);
         if (character > 0.0f)
-            base_hz *= octave_ratio_small(character
+            base_hz *= ma_octave_ratio_small(character
                 * (sv->character.vco1_cents + sv->character.walk_cents) / 1200.0f);
         f->character = character; f->note_position = note_position; f->base_hz = base_hz;
     }
@@ -140,7 +140,7 @@ static void lanes_tick_timed(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
         float envelope_amount = ma_voice_filter_envelope_amount(sv, &f->controls);
         filter_modulation[l] = sv->filter_envelope.level * envelope_amount;
         sv->filter_cutoff_effective_hz = ma_voice_effective_filter_cutoff(sv, &f->controls, envelope_amount, f->note_position);
-        f->filter_g = filter_prewarp(sv->filter_cutoff_effective_hz, sv->sample_rate_hz);
+        f->filter_g = ma_filter_prewarp(sv->filter_cutoff_effective_hz, sv->sample_rate_hz);
         f->guard1 = b->guard_gain[0][l];
         f->guard2 = b->guard_gain[1][l];
     }

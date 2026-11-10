@@ -1,83 +1,38 @@
-/* Mamut Analog scalar filter stage: mixer pressure, the 2x ladder, the
- * 7-tap output decimator and the output render. The vector lanes run
- * their own copy (ml_kernel in ma_lanes.c). */
+/* Mamut Analog filter for one voice: the ladder prewarp, the filter kernel
+ * (ma_filter_kernel.h) at width one, and the output render. */
 #include "ma_voice_impl.h"
+#define ML_W 1
+#include "ma_lane_ops.h"
+
+float ma_filter_prewarp(float cutoff_hz, float sample_rate_hz) {
+    return ml_prewarp(cutoff_hz, sample_rate_hz);
+}
 
 #if !defined(MA_SOURCE_EVIDENCE)
-static float apply_mixer_pressure(float source, float pressure) {
-    if (pressure == 0.0f) return source;
-    float gain = 1.0f + 5.0f * pressure;
-    float shaped = ma_sat(gain * source) / ma_sat(gain);
-    return source + pressure * (shaped - source);
+#include "ma_filter_kernel.h"
+
+float ma_voice_filter_envelope_amount(const ma_synth *s,
+                                      const ma_render_controls *controls) {
+    return ml_filter_envelope_amount(controls->filter_env_amount,
+                                     ma_velocity_filter(s->velocity));
 }
 
-static void reset_ladder(ma_ladder *ladder) {
-    for (int stage = 0; stage < 4; stage++) ladder->state[stage] = 0.0f;
-    ladder->y4_guess = 0.0f;
-    ladder->reset_count++;
-}
-
-static float render_ladder_2x(ma_synth *s,
-                              const ma_render_controls *controls,
-                              float input, float filter_g) {
-    ma_ladder *ladder = &s->ladder;
-    float y[4] = { 0 };
-    float v[4] = { 0 };
-    float next_state[4] = { 0 };
-    float y4_guess = ladder->y4_guess;
-    float input_gain = 1.0f + 3.0f * controls->filter_drive
-                     * controls->filter_drive;
-    float feedback = 4.65f * controls->filter_resonance;
-    for (int iteration = 0; iteration < 2; iteration++) {
-        float u = ma_sat(ma_fnmadd(feedback, y4_guess, input_gain * input));
-        for (int stage = 0; stage < 4; stage++) {
-            float d = ma_sat(u) - ladder->state[stage];
-            v[stage] = d * filter_g;
-            y[stage] = ma_fmadd(d, filter_g, ladder->state[stage]);
-            u = y[stage];
-        }
-        y4_guess = y[3];
-    }
-    bool finite = y4_guess >= -FLT_MAX && y4_guess <= FLT_MAX;
-    for (int stage = 0; stage < 4; stage++) {
-        next_state[stage] = y[stage] + v[stage];
-        finite = finite
-              && y[stage] >= -FLT_MAX && y[stage] <= FLT_MAX
-              && v[stage] >= -FLT_MAX && v[stage] <= FLT_MAX
-              && next_state[stage] >= -FLT_MAX
-              && next_state[stage] <= FLT_MAX;
-    }
-    if (!finite) {
-        reset_ladder(ladder);
-        return 0.0f;
-    }
-    for (int stage = 0; stage < 4; stage++)
-        ladder->state[stage] = next_state[stage];
-    ladder->y4_guess = y4_guess;
-    return y[3];
-}
-
-static void push_filter_history(ma_ladder *ladder, float sample) {
-    ladder->output_history[ladder->output_pos] = sample;
-    ladder->output_pos++;
-    if (ladder->output_pos == 7) ladder->output_pos = 0;
-}
-
-/* Pairs 0/6 and 2/4 added first and fused, then the centre tap 3. */
-static float decimate_filter(const ma_ladder *ladder) {
-    const float *x = ladder->output_history;
-    int position = ladder->output_pos;
-    float output = 0.0f;
-    for (int k = 0; k < FILTER_HALFBAND_7_PAIRS; k++) {
-        int tap = FILTER_HALFBAND_7_PAIR[k];
-        int near = position - 1 - tap, far = position - 7 + tap;
-        if (near < 0) near += 7;
-        if (far < 0) far += 7;
-        output = ma_fmadd(FILTER_HALFBAND_7[tap], x[near] + x[far], output);
-    }
-    int centre = position - 1 - FILTER_HALFBAND_7_CENTRE;
-    if (centre < 0) centre += 7;
-    return ma_fmadd(FILTER_HALFBAND_7[FILTER_HALFBAND_7_CENTRE], x[centre], output);
+float ma_voice_effective_filter_cutoff(const ma_synth *s,
+                                       const ma_render_controls *controls,
+                                       float envelope_amount,
+                                       float note_position) {
+    const ml_cutoff_in x = {
+        .envelope_level = s->filter_envelope.level,
+        .envelope_amount = envelope_amount,
+        .note_position = note_position,
+        .filter_keytrack = controls->filter_keytrack,
+        .filter_cutoff_hz = controls->filter_cutoff_hz,
+        .poly_pressure = controls->poly_pressure,
+        .character = s->character.smoother.current,
+        .cutoff_octaves = s->character.cutoff_octaves,
+        .sample_rate_hz = s->sample_rate_hz,
+    };
+    return ml_effective_cutoff(&x);
 }
 
 ma_frame ma_voice_render_output(ma_synth *s,
@@ -90,21 +45,40 @@ ma_frame ma_voice_render_output(ma_synth *s,
 /* Two 2x mix/pressure/ladder steps and the 7-tap output decimator. */
 float ma_voice_filter(ma_synth *s, const ma_voice_front *f,
                       const float at_2x[2]) {
-    for (int step = 0; step < 2; step++) {
-        float source = mix_source_2x(&f->controls, at_2x[step], f->guard1,
-                                     f->guard2, f->mozaik_gain[step],
-                                     f->mozaik[step], f->raster[step]);
-        float grain_mix = s->glas.frame_grain_mix;
-        if (grain_mix > 0.0f)
-            source += grain_mix * (s->glas.grain_out[step] - source);
-        float pressured = apply_mixer_pressure(source,
-                                                f->controls.mixer_pressure);
-        s->ladder.pressure_input = source;
-        s->ladder.pressure_output = pressured;
-        push_filter_history(&s->ladder,
-                            render_ladder_2x(s, &f->controls, pressured,
-                                             f->filter_g));
-    }
-    return decimate_filter(&s->ladder);
+    ma_ladder *ladder = &s->ladder;
+    const ma_render_controls *c = &f->controls;
+    ml_ladder l = {
+        .state = { ladder->state[0], ladder->state[1], ladder->state[2],
+                   ladder->state[3] },
+        .y4_guess = ladder->y4_guess,
+        .pressure_input = ladder->pressure_input,
+        .pressure_output = ladder->pressure_output,
+        .output_history = ladder->output_history,
+        .output_pos = &ladder->output_pos,
+        .reset_count = &ladder->reset_count,
+    };
+    const ml_filter_in in = {
+        .guard1 = f->guard1,
+        .guard2 = f->guard2,
+        .vco2_level = c->vco2_level,
+        .noise_level = c->noise_level,
+        .raster_mix = c->raster_mix,
+        .mozaik_mix = c->mozaik_mix,
+        .mozaik_gain = { f->mozaik_gain[0], f->mozaik_gain[1] },
+        .mozaik = { f->mozaik[0], f->mozaik[1] },
+        .raster = { f->raster[0], f->raster[1] },
+        .grain_mix = s->glas.frame_grain_mix,
+        .grain = { s->glas.grain_out[0], s->glas.grain_out[1] },
+        .mixer_pressure = c->mixer_pressure,
+        .filter_g = f->filter_g,
+        .filter_drive = c->filter_drive,
+        .filter_resonance = c->filter_resonance,
+    };
+    float output = ml_filter_block(&l, &in, at_2x);
+    for (int stage = 0; stage < 4; stage++) ladder->state[stage] = l.state[stage];
+    ladder->y4_guess = l.y4_guess;
+    ladder->pressure_input = l.pressure_input;
+    ladder->pressure_output = l.pressure_output;
+    return output;
 }
 #endif

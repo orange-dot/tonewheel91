@@ -1,7 +1,11 @@
 /* Glas: formant bank, Orbita formants and formant grains for one voice.
- * Constants and contracts: docs/ma-constants.md 10C. Scalar only; the pool
- * renders scalar while Glas is active. */
+ * Constants and contracts: docs/ma-constants.md 10C. The grain step and the
+ * formant bank are the Glas kernel (ma_glas_kernel.h) at width one; the
+ * vector lanes run the same kernel and call the per-voice parts here. */
 #include "ma_voice_impl.h"
+#define ML_W 1
+#include "ma_lane_ops.h"
+#include "ma_glas_kernel.h"
 
 static constexpr float GLAS_VOWEL[5][MA_FORMANTS] = {
     { 300.0f,  870.0f, 2240.0f, 3300.0f },  /* u */
@@ -119,7 +123,7 @@ void ma_glas_snap_controls(ma_glas *g) {
 static void glas_tick(ma_glas *g, float f0, float sample_rate_hz) {
     float vowel = g->vowel_smoother.current;
     float shift = g->shift_smoother.current;
-    float r = octave_ratio_small(0.25f * shift);
+    float r = ma_octave_ratio_small(0.25f * shift);
     float scale = r * r;
     float d = g->formant_orbita;
     float rate = ORBITA_RATE * d * d;
@@ -173,9 +177,9 @@ static void glas_tick(ma_glas *g, float f0, float sample_rate_hz) {
         }
         float centre = clamp_signal(f0 * m->ratio, FORMANT_MIN_HZ, top);
         g->centre_hz[i] = centre;
-        /* filter_prewarp is pinned for the 2x ladder: it maps c to
+        /* ma_filter_prewarp is pinned for the 2x ladder: it maps c to
          * tan(pi c / (2 fs)), so 2F gives the 1x coefficient. */
-        float G = filter_prewarp(2.0f * centre, sample_rate_hz);
+        float G = ma_filter_prewarp(2.0f * centre, sample_rate_hz);
         g->g[i] = G / (1.0f - G);
         g->k[i] = clamp_signal(GLAS_BANDWIDTH[i] / centre, FORMANT_K_MIN,
                                FORMANT_K_MAX);
@@ -225,19 +229,16 @@ static float render_grains(ma_glas *g, float f0, float render_rate_hz) {
     for (int i = 0; i < MA_FORMANTS; i++) {
         for (int j = 0; j < MA_GRAINS_PER_FORMANT; j++) {
             ma_grain *q = &g->grain[i][j];
-            if (!q->active) continue;
-            float attack = 1.0f;
-            if (q->attack_pos < 1.0f) {
-                /* .5(1 - cos(pi a)) = .5(1 - sin(2 pi (.25 - a/2))) */
-                attack = 0.5f * (1.0f - ma_sin_turns(
-                    wrap_phase(0.25f - 0.5f * q->attack_pos)));
-                q->attack_pos += q->attack_step;
-            }
-            y = ma_fmadd(q->gain * attack * q->envelope, ma_sin_turns(q->phase), y);
-            q->phase += q->step;
-            if (q->phase >= 1.0f) q->phase -= 1.0f;
-            q->envelope *= q->decay;
-            if (q->envelope < GRAIN_FLOOR) q->active = false;
+            ml_grain grain = {
+                .phase = q->phase, .step = q->step, .envelope = q->envelope,
+                .decay = q->decay, .attack_pos = q->attack_pos,
+                .attack_step = q->attack_step, .gain = q->gain, .active = q->active,
+            };
+            y = ml_grain_step(&grain, true, y);
+            q->phase = grain.phase;
+            q->envelope = grain.envelope;
+            q->attack_pos = grain.attack_pos;
+            q->active = grain.active;
         }
     }
     return GRAIN_NORM * y;
@@ -280,23 +281,17 @@ float ma_glas_prepare(ma_synth *s, float f0) {
 /* The formant bank on the ladder's 1x output. */
 float ma_glas_formant(ma_synth *s, float x) {
     ma_glas *g = &s->glas;
-    float mix = g->mix_smoother.current;
-    if (mix == 0.0f) return x;
-    float bank = 0.0f;
+    float s1[MA_FORMANTS] = {}, s2[MA_FORMANTS] = {};
     for (int i = 0; i < MA_FORMANTS; i++) {
-        ma_formant_svf *v = &g->svf[i];
-        float gi = g->g[i], ki = g->k[i];
-        float hp = (ma_fnmadd(ki + gi, v->s1, x) - v->s2) / ma_fmadd(gi, gi + ki, 1.0f);
-        float bp = ma_fmadd(gi, hp, v->s1);
-        v->s1 = ma_fmadd(gi, hp, bp);
-        float lp = ma_fmadd(gi, bp, v->s2);
-        v->s2 = ma_fmadd(gi, bp, lp);
-        bank = ma_fmadd(GLAS_GAIN[i] * ki, bp, bank);
+        s1[i] = g->svf[i].s1;
+        s2[i] = g->svf[i].s2;
     }
-    bank *= FORMANT_MAKEUP;
-    if (!(bank >= -FLT_MAX && bank <= FLT_MAX)) {
-        ma_glas_reset_state(g);
-        return x;
+    bool bad = false;
+    float y = ml_formant_bank(s1, s2, g->g, g->k, x, g->mix_smoother.current, true, &bad);
+    for (int i = 0; i < MA_FORMANTS; i++) {
+        g->svf[i].s1 = s1[i];
+        g->svf[i].s2 = s2[i];
     }
-    return x + mix * (bank - x);
+    if (bad) ma_glas_reset_state(g);
+    return y;
 }
