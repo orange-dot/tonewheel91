@@ -185,7 +185,7 @@ command on `e3d2ce2` (`old-`) and on this change (`new-`):
 
 The last figure is not a level change (RMS 0.00633 both): under cross-mod
 VCO2's waveform steers VCO1's phase, so the two renders drift apart in
-phase. The operator's verdict on these pairs is open.
+phase.
 
 ## Not done
 

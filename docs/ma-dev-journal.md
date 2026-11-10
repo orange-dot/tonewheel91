@@ -1608,7 +1608,7 @@ Notes:
   substep), scalar 0.973×, which is outside the refactor gate and open.
 - Re-pinned: OPT1, OPT2, the four pool hashes, the two MA anchors, the SMF
   twin and the wet MIDI twin. Listening pairs in
-  `build/ma-source-fix-20261110/`, verdict open.
+  `build/ma-source-fix-20261110/`.
   `docs/ma-source-fix-20261110.md`.
 
 
