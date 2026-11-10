@@ -131,6 +131,21 @@ static constexpr uint64_t PHASE_ONE_Q48 = UINT64_C(1) << 48;
 
 static constexpr uint64_t PHASE_MASK_Q48 = (UINT64_C(1) << 48) - 1;
 
+/* A sync reset is tracked until VCO2 has run one edge zone (eight steps)
+ * past it, and never beyond half a turn: no zone is wider than 0.49. Past
+ * that run every edge within a zone behind the phase was crossed after the
+ * reset. */
+static constexpr uint64_t SYNC_RUN_LIMIT_Q48 = UINT64_C(1) << 47;
+static inline uint64_t sync_run_limit(uint64_t step_q48) {
+    uint64_t limit = 8 * step_q48;
+    return limit < SYNC_RUN_LIMIT_Q48 ? limit : SYNC_RUN_LIMIT_Q48;
+}
+
+/* The two smoothed edges of a half period take 1.25 * edge of the 50% pulse's
+ * area, so the triangle integrator runs 1 / (1 - 1.25 * edge) faster
+ * (ma-constants.md 3.1). */
+static constexpr float TRIANGLE_EDGE_LOSS = 1.25f;
+
 static constexpr ma_adsr AMP_ADSR_DEFAULT = {
     .attack_ms = 600.0f,
     .decay_ms = 1600.0f,
@@ -158,9 +173,14 @@ typedef struct {
     float vco1_hz;
     float vco1_step;
     uint64_t vco1_step_q48;
+    float vco1_seed_step;           /* the unmodulated step, cross-mod or not */
+    float vco1_triangle_gain;
+    float vco1_triangle_step;
     float vco2_hz;
     float vco2_step;
     uint64_t vco2_step_q48;
+    float vco2_triangle_gain;
+    float vco2_triangle_step;
     float envelope_ratio;
     float sync;
 } ma_source_frame;
@@ -257,6 +277,25 @@ static inline float clamp_signal(float value, float low, float high) {
 
 static inline float raw_triangle(float phase) {
     return 1.0f - 4.0f * tw_fabsf(phase - 0.5f);
+}
+
+/* The triangle integrator's gain for a phase step, and its increment for a
+ * unit pulse. */
+static inline float triangle_gain_for(float step) {
+    float edge = 8.0f * step;
+    if (edge > 0.49f) edge = 0.49f;
+    return 1.0f / ma_fnmadd(TRIANGLE_EDGE_LOSS, edge, 1.0f);
+}
+
+static inline float triangle_step_for(float step, float gain) {
+    return 4.0f * step * gain;
+}
+
+/* Where the integrator's steady trajectory is at a phase, outside the edges.
+ * The state at a substep holds the pulse summed up to that substep's start,
+ * which trails the triangle by half a step. */
+static inline float triangle_seed(float phase, float step, float gain) {
+    return clamp_signal(gain * raw_triangle(phase - 0.5f * step), -1.0f, 1.0f);
 }
 
 static inline float wrap_phase(float phase) {
@@ -600,6 +639,9 @@ ma_source_frame ma_voice_prepare_source_frame(const ma_synth *s,
                                               const ma_render_controls *controls,
                                               float base_hz,
                                               float filter_modulation);
+/* Gives a triangle with no state yet its seed; once per frame, before the
+ * frame's substeps. */
+void ma_voice_seed_triangles(ma_synth *s, const ma_source_frame *source);
 float ma_voice_render_source_substep(ma_synth *s,
                                      const ma_render_controls *controls,
                                      const ma_source_frame *source,

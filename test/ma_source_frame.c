@@ -56,11 +56,15 @@ static uint64_t render(float rate, bool bcs) {
 
 int main(void) {
     const float rates[] = { 44100, 48000, 96000, 192000 };
+    /* Re-pinned 2026-11-10 for the triangle integrator gain and the sync
+     * step (docs/ma-source-fix-20261110.md). Before: 197bf00474500c71
+     * 7513c44321960fde, 6e79bf558ae579a1 49eaf39b776f0150, c1d0b84e9a28b3e0
+     * af0262cd65f4ed48, 0c4310bcbe45c9d6 08887958c05709b5. */
     static const uint64_t expected[4][2] = {
-        { UINT64_C(0x197bf00474500c71), UINT64_C(0x7513c44321960fde) },
-        { UINT64_C(0x6e79bf558ae579a1), UINT64_C(0x49eaf39b776f0150) },
-        { UINT64_C(0xc1d0b84e9a28b3e0), UINT64_C(0xaf0262cd65f4ed48) },
-        { UINT64_C(0x0c4310bcbe45c9d6), UINT64_C(0x08887958c05709b5) },
+        { UINT64_C(0xe999ae4321336917), UINT64_C(0x6dfd5f8740e18c56) },
+        { UINT64_C(0xc608dafee46ee308), UINT64_C(0xd3f54225c69ed872) },
+        { UINT64_C(0x56de8b379780b876), UINT64_C(0x9537c7b60913e413) },
+        { UINT64_C(0xa272d407f942c0d0), UINT64_C(0xdd27c0eefa95d9f6) },
     };
     unsigned failures = 0;
     for (unsigned r = 0; r < 4; r++) {

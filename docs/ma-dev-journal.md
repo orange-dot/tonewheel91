@@ -1584,3 +1584,30 @@ Notes:
   (`2f6fa5c`). R3: `ma_voice_front_b_shared` for scalar and lanes; lanes
   1.015×, scalar 0.997×, PCM identical. R4: `test/test.c` split into
   `test_{organ,ep,ma}.c`. Summary: `docs/refactor-20261109.md`.
+
+### 2026-11-10 — sync step and triangle integrator
+
+- Two source errors found while tracing `ma_osc.c` and fixed by operator
+  decision. A sync reset near phase zero also got the correction of a wrap
+  that had not happened (8x output −0.27, **+0.37**, −0.22 where −0.27, −1
+  was due). The triangle spanned `2 − 20 d` with an offset of `−10 d`
+  (3520 Hz: high +0.816, mean −0.092).
+- Triangle: the integrator runs at `4 d / (1 − 1.25 e)` and starts on its
+  steady trajectory. Sync: the half of a correction that follows an edge
+  runs on the distance since that edge was really crossed, and the step is
+  measured on the smoothed output. Contract: `ma-constants.md` 3.1, 3.2.
+- A first design simply dropped the following half after any reset. It
+  turned the rest of a real wrap's smoothing into a sharp step whenever a
+  weak sync reset just after the wrap, which is where Lead sits above about
+  800 Hz. Carried edge distances replaced it.
+- Gate `check-ma-sync`; scalar and lanes bit-identical with two new
+  hard-sync variants in `test/ma_pool.c`. Error against the ideal synced
+  waveform falls by 0.4 to 6.5 dB in every full-sync case; partial sync
+  that touches no edge zone is unchanged.
+- Speed against `e3d2ce2`: lanes 1.018× (seed tested once per frame, not per
+  substep), scalar 0.973×, which is outside the refactor gate and open.
+- Re-pinned: OPT1, OPT2, the four pool hashes, the two MA anchors, the SMF
+  twin and the wet MIDI twin. Listening pairs in
+  `build/ma-source-fix-20261110/`, verdict open.
+  `docs/ma-source-fix-20261110.md`.
+

@@ -189,7 +189,9 @@ static void midi_twin(void) {
         assert(memcmp(expected, pcm, sizeof pcm) == 0);
     }
     uint64_t hash = tw_fnv1a64(pcm, sizeof pcm, 0);
-    assert(hash == UINT64_C(0xe95149977684d494));
+    /* Re-pinned 2026-11-10 for the triangle integrator gain (was
+     * e95149977684d494; docs/ma-source-fix-20261110.md). */
+    assert(hash == UINT64_C(0xeca2f01ea356eda1));
     printf("ma3-2 MIDI/direct wet twin=%016" PRIx64 "\n", hash);
 }
 

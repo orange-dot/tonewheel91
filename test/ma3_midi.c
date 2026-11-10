@@ -196,7 +196,9 @@ static void smf_twin(const char *prefix) {
     assert(renderer.next_event == smf.event_count);
     assert(renderer.midi.stats.note_ons == 3 && renderer.midi.stats.note_offs == 3);
     uint64_t hash = tw_fnv1a64(pcm, sizeof pcm, 0);
-    assert(hash == UINT64_C(0x8cbb995144bc5270));
+    /* Re-pinned 2026-11-10 for the triangle integrator gain (was
+     * 8cbb995144bc5270; docs/ma-source-fix-20261110.md). */
+    assert(hash == UINT64_C(0x77b6939786ac9661));
     printf("ma3-1-smf-twin hash=%016" PRIx64 "\n", hash);
     if (prefix) {
         char path[1024];

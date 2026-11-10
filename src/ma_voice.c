@@ -290,6 +290,7 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     ma_voice_set_guard_target(&s->oscillator2,
         source_frame.vco2_hz < 0.45f * s->sample_rate_hz ? 1.0f : 0.0f,
         s->sample_rate_hz);
+    ma_voice_seed_triangles(s, &source_frame);
     for (int at_2x = 0; at_2x < 2; at_2x++) {
         for (int at_4x = 0; at_4x < 2; at_4x++) {
             ma_voice_push_oversample_history(
@@ -476,6 +477,7 @@ static void voice_oscillator_block(ma_synth *s, const ma_voice_front *f,
     ma_voice_set_guard_target(&s->oscillator2,
         f->source.vco2_hz < 0.45f * s->sample_rate_hz ? 1.0f : 0.0f,
         s->sample_rate_hz);
+    ma_voice_seed_triangles(s, &f->source);
     for (int substep = 0; substep < 8; substep++)
         source[substep] = ma_voice_render_source_substep(s, &f->controls, &f->source,
                                                          f->base_hz, f->noise,

@@ -498,6 +498,14 @@ check-ma3-opt4: $(BUILD)/test_ma_fir
 	$(BUILD)/test_ma_fir
 test: check-ma3-opt4
 
+# Hard-sync step and triangle integrator (docs/ma-source-fix-20261110.md).
+$(BUILD)/test_ma_sync: test/ma_sync.c $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma-sync
+check-ma-sync: $(BUILD)/test_ma_sync
+	$(BUILD)/test_ma_sync
+test: check-ma-sync
+
 $(BUILD)/test_ma_bcs_lanes: test/ma_bcs_lanes.c $(filter-out $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD)/ma_lanes.o,$(MA_RUNTIME_OBJS)) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 .PHONY: check-ma-bcs-lanes

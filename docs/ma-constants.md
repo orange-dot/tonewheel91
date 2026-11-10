@@ -125,17 +125,38 @@ pulse(p,w,d) = clamp(raw(p,w) + blep(p,d)
 raw(p,w) = p < w ? +1 : -1
 ```
 
-Pulse width clamps to `[0.05, 0.95]`. Triangle initializes to
-`1 - 4 * abs(p - 0.5)`, returns its current state clamped to `[-1,1]`, then
-integrates the bandlimited 50% pulse:
+Pulse width clamps to `[0.05, 0.95]`. The triangle returns its current
+state clamped to `[-1,1]`, then integrates the bandlimited 50% pulse at an
+edge-compensated rate [ALGORITHM REVISION 2026-11-10,
+`docs/ma-source-fix-20261110.md`]:
 
 ```text
-triangle_state = clamp(triangle_state + pulse(p,.5,d) * 4d,
+gain(d) = 1 / (1 - 1.25*e)                         e = min(8*d, .49)
+triangle_state = clamp(triangle_state + pulse(p,.5,d) * 4d * gain(d),
                        -1.25, 1.25)
+seed(p,d) = clamp(gain(d) * (1 - 4 * abs(p - d/2 - 0.5)), -1, 1)
 ```
 
 [DONOR: triangle mechanism from `mamut-dsp/src/bandlimited.rs`; accepted
 edge kernel from the MA1-2 evidence loop].
+
+The smoothed pulse is `2S - 1` on each side of an edge instead of `+-1`.
+One side of one edge therefore removes `2e * integral(2(1 - S(x)), x = 1/2..1)
+= 0.3125 e` of phase from the integral, and a half period has two such
+sides: `0.625 e` out of `0.5`, a fraction `1.25 e` [DERIVED;
+`integral(1 - S) = 5/64`]. Without the gain the triangle spans `2 - 2.5 e`
+(`2 - 20 d`) and carries an offset of up to `10 d`, both rising with pitch.
+
+The state initializes to `seed` at the note's start phase and after a sync
+reset. The half-step shift is the integrator's own: the state at a substep
+holds the pulse summed up to that substep's start. The one-voice synth
+starts at phase zero with state `-1`, which is the seed there. A voice with
+no triangle state yet is seeded once, before the first substep of its first
+frame.
+
+Under cross-mod VCO1's step changes every substep. Its increment is then
+`pulse * 4d * gain(d0)` and its seed is `seed(p, d0)`, with `d0` the frame's
+unmodulated step [DECISION: the gain follows the note, not the modulation].
 
 For each VCO, waveform weights are nonnegative. Both add the Mamut sine
 [DECISION]:
@@ -163,15 +184,15 @@ effective_sync = sync * clamp(1 - 0.75 * sync_softness, 0, 1)
 new_phase = old_phase * (1 - effective_sync)
 ```
 
-and its triangle state resets to the raw triangle at `new_phase` [DONOR:
+and its triangle state resets to `seed(new_phase, d)` (3.1) [DONOR:
 `mamut-engine/src/engine/macro_state.rs` and `mamut-dsp/src/phase.rs`].
-MA1's causal two-sample PolyBLEP residual is scaled by the actual raw
-pre/post waveform jump for saw and both pulse edges [DECISION]. A zero sync
+MA1's causal two-sample PolyBLEP residual is scaled by the step the output
+takes at the reset [DECISION; ALGORITHM REVISION 2026-11-10]. A zero sync
 amount skips the reset and correction exactly.
 
 For a master wrap at fraction `u` of the current oversampled interval and
-an actual mixed-wave jump `j`, the matching C2 step residual is [DERIVED
-from the two PolyBLEP branches in 3.1]:
+an output step `j`, the matching C2 step residual is [DERIVED from the two
+PolyBLEP branches in 3.1]:
 
 ```text
 current correction = j * S((1-u)/2)
@@ -179,10 +200,56 @@ next correction    = j * (S(1-u/2) - 1)
 ```
 
 The wrap is known from current phase and step before either corrected sample
-is returned, so the implementation stays causal. Partial sync measures `j`
-at the phase immediately before and after the partial reset. The triangle
-integrator resets at the post-reset phase and advances through the remaining
-fraction of the sample.
+is returned, so the implementation stays causal. The triangle integrator
+resets at the post-reset phase and advances through the remaining fraction
+of the sample.
+
+A reset moves the phase, not the edges VCO2 has already passed [ALGORITHM
+REVISION 2026-11-10, `docs/ma-source-fix-20261110.md`]. Section 3.1 reads
+both halves of an edge correction off the phase. After a reset that stays
+right for the half that precedes an edge, which predicts a crossing. It goes
+wrong for the half that follows one: near phase zero it would smooth a wrap
+that never happened, and just after a real wrap it would restart that wrap's
+smoothing. For one edge zone after such a reset the following half therefore
+runs on the distance travelled since its edge was really crossed. VCO2 keeps
+one Q48 word and three f32 distances, for the wrap, the pulse edge at `w`
+and the edge at `0.5` of the triangle's 50% pulse:
+
+```text
+at a reset        carry[k]  = behind_k at the event
+                  sync_run  = 1 + (phase advanced after the reset)   if tracked
+                              0                                      otherwise
+each substep      sync_run  = sync_run + step, then 0 once
+                              sync_run > min(8 * step, 2^47)
+since             = (sync_run - 1) as turns, or 1 when sync_run = 0
+behind_k          = x_k               if x_k < since   (crossed after the reset)
+                    since + carry[k]  otherwise
+following half    = 2 * (S((behind_k / e + 1) / 2) - 1)   if behind_k < e
+```
+
+`x_k` is the phase distance past edge `k`: `p`, `wrap(p - w)` and
+`wrap(p - 0.5)`. With `sync_run = 0` every `behind_k` is `x_k` and 3.1 holds
+unchanged. A reset is tracked only if it needs to be: some `carry[k] < e`
+(an edge's smoothing is still running) or some `x_k(new_phase) < e` (the
+reset landed in a zone that follows an edge). Otherwise the phase alone is
+right from the next substep on. Tracking ends after one zone of run: by then
+every edge within `e` behind the phase was crossed after the reset. One
+exception at the event: a reset from within `e` before the wrap to within
+`e` after it takes that wrap, `carry[wrap] = new_phase`, so the smoothing
+already begun continues.
+
+The step is measured on what the output does, with the carried distances
+the same on both sides:
+
+```text
+j = W(new_phase;   since = 0, carry as just set, triangle = seed(new_phase, d))
+  - W(event phase; since and carry as tracked,  triangle advanced through u)
+```
+
+`W` is the smoothed waveform mix of 3.1. Before this revision `j` was the
+raw jump, and the half that follows the wrap also fired whenever a reset
+landed within `e` of phase zero. That lifted the output by up to 1 for
+eight substeps.
 
 VCO2 modulates VCO1 instantaneous frequency [DECISION direction, DONOR
 depth]:

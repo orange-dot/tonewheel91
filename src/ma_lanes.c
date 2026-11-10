@@ -51,6 +51,8 @@ void ma_lanes_gather(ma_voice_lanes *b, unsigned lane, const ma_synth *s) {
         for (int j = 0; j < 31; j++)
             b->history[k][j][lane] = s->oversample_history[k][(own + j) % 31];
     }
+    b->sync_run_q48[lane] = s->oscillator2.sync_run_q48;
+    for (int k = 0; k < 3; k++) b->sync_carry[k][lane] = s->oscillator2.sync_carry[k];
     uint8_t own = s->ladder.output_pos;
     b->own_output_pos[lane] = own;
     for (int j = 0; j < 7; j++)
@@ -99,6 +101,8 @@ void ma_lanes_scatter(const ma_voice_lanes *b, unsigned lane, ma_synth *s) {
             s->oversample_history[k][(own + j) % 31] = b->history[k][j][lane];
         s->oversample_history_pos[k] = (uint8_t)((own + b->history_pos[k]) % 31);
     }
+    s->oscillator2.sync_run_q48 = b->sync_run_q48[lane];
+    for (int k = 0; k < 3; k++) s->oscillator2.sync_carry[k] = b->sync_carry[k][lane];
     uint8_t own = b->own_output_pos[lane];
     for (int j = 0; j < 7; j++)
         s->ladder.output_history[(own + j) % 7] = b->output_history[j][lane];
@@ -140,6 +144,9 @@ typedef struct {
     alignas(32) float c1[5][MA_LANES], c2[5][MA_LANES];   /* saw pulse tri sine pw */
     alignas(32) float div1[MA_LANES], div2[MA_LANES], mixdiv[MA_LANES], rate[MA_LANES];
     alignas(32) float v1hz[MA_LANES], v1step[MA_LANES], v2hz[MA_LANES], v2step[MA_LANES];
+    /* triangle integrator gain and unit-pulse increment */
+    alignas(32) float v1tg[MA_LANES], v1ts[MA_LANES], v2tg[MA_LANES], v2ts[MA_LANES];
+    alignas(32) float v1seed[MA_LANES];                   /* unmodulated VCO1 step */
     alignas(32) float envr[MA_LANES], sync[MA_LANES], base[MA_LANES], noise[MA_LANES];
     alignas(32) float g1[MA_LANES], g2[MA_LANES], crossmod[MA_LANES], v2level[MA_LANES];
     alignas(32) float noiselevel[MA_LANES], guard_hz[MA_LANES], guard_frames_f[MA_LANES];
@@ -182,6 +189,11 @@ static void ml_benign(ml_in *in) {
     in->v1hz[l] = f->source.vco1_hz;
     in->v1step[l] = f->source.vco1_step;
     in->v1q[l] = f->source.vco1_step_q48;
+    in->v1seed[l] = f->source.vco1_seed_step;
+    in->v1tg[l] = f->source.vco1_triangle_gain;
+    in->v1ts[l] = f->source.vco1_triangle_step;
+    in->v2tg[l] = f->source.vco2_triangle_gain;
+    in->v2ts[l] = f->source.vco2_triangle_step;
     in->v2hz[l] = f->source.vco2_hz;
     in->v2step[l] = f->source.vco2_step;
     in->v2q[l] = f->source.vco2_step_q48;
@@ -271,6 +283,10 @@ static inline ml_f ml_u64_ge(ml_u64 a, uint64_t bound) {   /* both < 2^62 */
     return _mm256_castsi256_ps(ml_u64_low32((ml_u64){
         _mm256_cmpgt_epi64(a.lo, b.lo), _mm256_cmpgt_epi64(a.hi, b.hi) }));
 }
+static inline ml_f ml_u64_gt(ml_u64 a, ml_u64 b) {          /* both < 2^62 */
+    return _mm256_castsi256_ps(ml_u64_low32((ml_u64){
+        _mm256_cmpgt_epi64(a.lo, b.lo), _mm256_cmpgt_epi64(a.hi, b.hi) }));
+}
 /* (float)(uint32_t)u exactly: two exact 16-bit halves, one rounding */
 static inline ml_f ml_u32_to_f(ml_i u) {
     ml_f hi = _mm256_cvtepi32_ps(_mm256_srli_epi32(u, 16));
@@ -329,6 +345,23 @@ static inline ml_f ml_poly_blep(ml_f phase, ml_f step) {
     return _mm256_or_ps(ml_and(low, ml_mul(ML_F(2.0f), ml_sub(ml_smooth5(xl), ML_F(1.0f)))),
                         ml_and(high, ml_mul(ML_F(2.0f), ml_smooth5(xh))));
 }
+/* poly_blep_since and behind_edge */
+static inline ml_f ml_behind_edge(ml_f phase, ml_f since, ml_f carry) {
+    return ml_sel(ml_add(since, carry), phase, ml_lt(phase, since));
+}
+static inline ml_f ml_poly_blep_since(ml_f phase, ml_f step, ml_f since, ml_f carry) {
+    ml_f valid = ml_gt(step, ML_F(FLT_EPSILON));
+    ml_f edge = ml_mul(ML_F(8.0f), step);
+    edge = ml_sel(edge, ML_F(0.49f), ml_gt(edge, ML_F(0.49f)));
+    ml_f behind = ml_behind_edge(phase, since, carry);
+    ml_f low = ml_and(ml_lt(behind, edge), valid);
+    ml_f high = ml_and(ml_gt(phase, ml_sub(ML_F(1.0f), edge)), valid);
+    if (!ml_any(_mm256_or_ps(low, high))) return _mm256_setzero_ps();
+    ml_f xl = ml_mul(ML_F(0.5f), ml_add(ml_div(behind, edge), ML_F(1.0f)));
+    ml_f xh = ml_mul(ML_F(0.5f), ml_add(ml_div(ml_sub(phase, ML_F(1.0f)), edge), ML_F(1.0f)));
+    return ml_add(ml_and(low, ml_mul(ML_F(2.0f), ml_sub(ml_smooth5(xl), ML_F(1.0f)))),
+                  ml_and(high, ml_mul(ML_F(2.0f), ml_smooth5(xh))));
+}
 static inline ml_f ml_saw(ml_f phase, ml_f blep) {
     return ml_clamp(ml_sub(ml_sub(ml_mul(ML_F(2.0f), phase), ML_F(1.0f)), blep), -1.25f, 1.25f);
 }
@@ -341,8 +374,28 @@ static inline ml_f ml_pulse_with_blep(ml_f phase, ml_f width, ml_f step, ml_f bl
 static inline ml_f ml_pulse(ml_f phase, ml_f width, ml_f step) {
     return ml_pulse_with_blep(phase, width, step, ml_poly_blep(phase, step));
 }
+static inline ml_f ml_pulse_since(ml_f phase, ml_f width, ml_f step, ml_f since,
+                                  ml_f wrap_carry, ml_f width_carry) {
+    ml_f sample = ml_sel(ML_F(-1.0f), ML_F(1.0f), ml_lt(phase, width));
+    sample = ml_add(sample, ml_poly_blep_since(phase, step, since, wrap_carry));
+    sample = ml_sub(sample, ml_poly_blep_since(ml_wrap(ml_sub(phase, width)), step, since,
+                                               width_carry));
+    return ml_clamp(sample, -1.25f, 1.25f);
+}
 static inline ml_f ml_raw_triangle(ml_f p) {
     return ml_sub(ML_F(1.0f), ml_mul(ML_F(4.0f), ml_abs(ml_sub(p, ML_F(0.5f)))));
+}
+static inline ml_f ml_triangle_gain(ml_f step) {            /* triangle_gain_for */
+    ml_f edge = ml_mul(ML_F(8.0f), step);
+    edge = ml_sel(edge, ML_F(0.49f), ml_gt(edge, ML_F(0.49f)));
+    return ml_div(ML_F(1.0f), ml_fnmadd(ML_F(TRIANGLE_EDGE_LOSS), edge, ML_F(1.0f)));
+}
+static inline ml_f ml_triangle_step(ml_f step, ml_f gain) { /* triangle_step_for */
+    return ml_mul(ml_mul(ML_F(4.0f), step), gain);
+}
+static inline ml_f ml_triangle_seed(ml_f phase, ml_f step, ml_f gain) {
+    return ml_clamp(ml_mul(gain, ml_raw_triangle(ml_sub(phase, ml_mul(ML_F(0.5f), step)))),
+                    -1.0f, 1.0f);
 }
 static inline ml_f ml_sin_turns(ml_f p) {
     ml_f t = ml_sel(ml_sel(ml_sub(p, ML_F(1.0f)), ml_sub(ML_F(0.5f), p), ml_lt(p, ML_F(0.75f))),
@@ -369,11 +422,30 @@ typedef struct { ml_f saw, pulse, tri, sine, pw; } ml_vco;
 static inline ml_vco ml_vco_ld(const float c[5][MA_LANES]) {
     return (ml_vco){ ml_ld(c[0]), ml_ld(c[1]), ml_ld(c[2]), ml_ld(c[3]), ml_ld(c[4]) };
 }
-static inline ml_f ml_raw_wave_mix(ml_f phase, const ml_vco *c, ml_f divisor) {
-    ml_f saw = ml_sub(ml_mul(ML_F(2.0f), phase), ML_F(1.0f));
-    ml_f pulse = ml_sel(ML_F(-1.0f), ML_F(1.0f), ml_lt(phase, c->pw));
-    ml_f sample = ml_fmadd(c->tri, ml_raw_triangle(phase),
-                           ml_fmadd(c->pulse, pulse, ml_mul(c->saw, saw)));
+typedef struct { ml_f saw, pulse, tri; } ml_shapes;
+static inline ml_shapes ml_shapes_on(const int32_t active[MA_LANES]) {
+    ml_i act = _mm256_loadu_si256((const ml_i *)active);
+    return (ml_shapes){
+        _mm256_castsi256_ps(_mm256_cmpeq_epi32(
+            _mm256_and_si256(act, _mm256_set1_epi32(WAVE_SAW)), _mm256_set1_epi32(WAVE_SAW))),
+        _mm256_castsi256_ps(_mm256_cmpeq_epi32(
+            _mm256_and_si256(act, _mm256_set1_epi32(WAVE_PULSE)), _mm256_set1_epi32(WAVE_PULSE))),
+        _mm256_castsi256_ps(_mm256_cmpeq_epi32(
+            _mm256_and_si256(act, _mm256_set1_epi32(WAVE_TRIANGLE)), _mm256_set1_epi32(WAVE_TRIANGLE))) };
+}
+/* wave_mix_since */
+static inline ml_f ml_wave_mix_since(ml_f phase, const ml_vco *c, ml_f step, ml_f divisor,
+                                     const int32_t active[MA_LANES], ml_f since,
+                                     ml_f wrap_carry, ml_f width_carry, ml_f triangle) {
+    ml_shapes on = ml_shapes_on(active);
+    ml_f blep = ml_poly_blep_since(phase, step, since, wrap_carry);
+    ml_f saw = ml_and(on.saw, ml_saw(phase, blep));
+    ml_f pulse = ml_add(ml_sel(ML_F(-1.0f), ML_F(1.0f), ml_lt(phase, c->pw)), blep);
+    pulse = ml_sub(pulse, ml_poly_blep_since(ml_wrap(ml_sub(phase, c->pw)), step, since,
+                                             width_carry));
+    pulse = ml_and(on.pulse, ml_clamp(pulse, -1.25f, 1.25f));
+    ml_f tri = ml_and(on.tri, ml_clamp(triangle, -1.0f, 1.0f));
+    ml_f sample = ml_fmadd(c->tri, tri, ml_fmadd(c->pulse, pulse, ml_mul(c->saw, saw)));
     ml_f sine = ml_gt(c->sine, _mm256_setzero_ps());
     if (ml_any(sine))
         sample = ml_sel(sample, ml_fmadd(c->sine, ml_mamut_sine(phase), sample), sine);
@@ -415,8 +487,7 @@ static inline ml_f ml_preview(const ml_osc *o, const ml_vco *c, ml_f step,
         _mm256_and_si256(act, _mm256_set1_epi32(WAVE_TRIANGLE)), _mm256_set1_epi32(WAVE_TRIANGLE)));
     ml_f saw = ml_and(saw_on, ml_saw(phase, blep));
     ml_f pulse = ml_and(pulse_on, ml_pulse_with_blep(phase, c->pw, step, blep));
-    ml_f tri = ml_and(tri_on, ml_sel(ml_raw_triangle(phase),
-                                     ml_clamp(o->triangle, -1.0f, 1.0f), o->init));
+    ml_f tri = ml_and(tri_on, ml_clamp(o->triangle, -1.0f, 1.0f));
     ml_f sample = ml_fmadd(c->tri, tri, ml_fmadd(c->pulse, pulse, ml_mul(c->saw, saw)));
     ml_f sine = ml_gt(c->sine, _mm256_setzero_ps());
     if (ml_any(sine))
@@ -424,18 +495,19 @@ static inline ml_f ml_preview(const ml_osc *o, const ml_vco *c, ml_f step,
     return ml_div(sample, divisor);
 }
 
-static inline ml_f ml_render_oscillator(ml_osc *o, ml_f preview, ml_f step,
-                                        ml_f sync_correction) {
-    ml_f phase = ml_turns(o->phase);
+/* seed_triangles for one oscillator: once per frame, before its substeps */
+static inline void ml_seed_triangle(ml_osc *o, ml_f step, ml_f gain) {
     const ml_f all = _mm256_castsi256_ps(_mm256_set1_epi32(-1));
-    if (!_mm256_testc_ps(o->init, all)) {
-        o->triangle = ml_sel(ml_raw_triangle(phase), o->triangle, o->init);
-        o->init = all;
-    }
+    if (_mm256_testc_ps(o->init, all)) return;
+    o->triangle = ml_sel(ml_triangle_seed(ml_turns(o->phase), step, gain), o->triangle, o->init);
+    o->init = all;
+}
+
+static inline ml_f ml_render_oscillator(ml_osc *o, ml_f preview, ml_f square,
+                                        ml_f triangle_step, ml_f sync_correction) {
     ml_f sample = ml_add(ml_add(preview, o->residual), sync_correction);
     o->residual = _mm256_setzero_ps();
-    o->triangle = ml_clamp(ml_fmadd(ml_mul(ml_pulse(phase, ML_F(0.5f), step), ML_F(4.0f)), step,
-                                    o->triangle), -1.25f, 1.25f);
+    o->triangle = ml_clamp(ml_fmadd(square, triangle_step, o->triangle), -1.25f, 1.25f);
     return ml_clamp(sample, -1.25f, 1.25f);
 }
 
@@ -457,16 +529,128 @@ static inline void ml_next_guard_gain(ml_osc *o) {
     o->gain = ml_sel(o->gain, o->target, done);
 }
 
+/* The sync paths stay out of line, as in ma_osc.c: they run for two edge
+ * zones after a reset and at the reset itself. VCO2's sync run and carried
+ * edges (wrap, width, half) stay in the lane bank. */
+
+/* held_preview: lanes with no recent reset get since = 1, which is the
+ * ordinary preview and pulse. */
+[[gnu::noinline, gnu::cold]]
+static ml_f ml_held_preview(const ma_voice_lanes *b, const ml_osc *o2, const ml_in *in,
+                            const ml_vco *c2, ml_f *square) {
+    ml_u64 run = ml_u64_ld(b->sync_run_q48);
+    ml_f held = ml_u64_gt(run, ml_u64_set(0));
+    ml_f since = ml_sel(ML_F(1.0f), ml_turns(ml_u64_sub(run, ml_u64_set(1))), held);
+    ml_f wrap_carry = ml_ld(b->sync_carry[0]), width_carry = ml_ld(b->sync_carry[1]);
+    ml_f phase = ml_turns(o2->phase), step = ml_ld(in->v2step);
+    *square = ml_pulse_since(phase, ML_F(0.5f), step, since, wrap_carry, ml_ld(b->sync_carry[2]));
+    return ml_wave_mix_since(phase, c2, step, ml_ld(in->div2), in->act2, since,
+                             wrap_carry, width_carry, o2->triangle);
+}
+
+/* sync_jump: `event` lanes get their carried distances. */
+[[gnu::noinline, gnu::cold]]
+static ml_f ml_sync_jump(ma_voice_lanes *b, const ml_osc *o2, const ml_in *in, const ml_vco *c2,
+                         const ml_u64 *advance, const ml_u64 *event_q, const ml_u64 *reset,
+                         ml_f fraction, ml_f square, ml_f event) {
+    const ml_f zero = _mm256_setzero_ps(), one = ML_F(1.0f);
+    ml_u64 run = ml_u64_ld(b->sync_run_q48);
+    ml_f held = ml_u64_gt(run, ml_u64_set(0));
+    ml_f carry[3] = { ml_ld(b->sync_carry[0]), ml_ld(b->sync_carry[1]), ml_ld(b->sync_carry[2]) };
+    ml_f step = ml_ld(in->v2step), gain = ml_ld(in->v2tg), divisor = ml_ld(in->div2);
+    ml_f reset_phase = ml_turns(*reset), event_phase = ml_turns(*event_q);
+    ml_f event_since = ml_sel(one, ml_turns(ml_u64_add(ml_u64_sub(run, ml_u64_set(1)), *advance)),
+                              held);
+    ml_f edge = ml_mul(ML_F(8.0f), step);
+    edge = ml_sel(edge, ML_F(0.49f), ml_gt(edge, ML_F(0.49f)));
+    ml_f behind[3] = {
+        ml_behind_edge(event_phase, event_since, carry[0]),
+        ml_behind_edge(ml_wrap(ml_sub(event_phase, c2->pw)), event_since, carry[1]),
+        ml_behind_edge(ml_wrap(ml_sub(event_phase, ML_F(0.5f))), event_since, carry[2]) };
+    behind[0] = ml_sel(behind[0], reset_phase, ml_and(ml_gt(event_phase, ml_sub(one, edge)),
+                                                     ml_lt(reset_phase, edge)));
+    ml_f event_triangle = ml_clamp(ml_fmadd(square, ml_mul(ml_ld(in->v2ts), fraction),
+                                            o2->triangle), -1.25f, 1.25f);
+    ml_f jump = ml_sub(
+        ml_wave_mix_since(reset_phase, c2, step, divisor, in->act2, zero, behind[0], behind[1],
+                          ml_triangle_seed(reset_phase, step, gain)),
+        ml_wave_mix_since(event_phase, c2, step, divisor, in->act2, event_since,
+                          carry[0], carry[1], event_triangle));
+    for (int k = 0; k < 3; k++)
+        _mm256_storeu_ps(b->sync_carry[k], ml_sel(carry[k], behind[k], event));
+    return jump;
+}
+
+/* held lanes run on, and drop out past sync_run_limit */
+[[gnu::noinline, gnu::cold]]
+static void ml_sync_run_on(ma_voice_lanes *b, const ml_in *in) {
+    ml_u64 run = ml_u64_ld(b->sync_run_q48), v2q = ml_u64_ld(in->v2q);
+    ml_f held = ml_u64_gt(run, ml_u64_set(0));
+    ml_u64 next = ml_u64_add(run, v2q);
+    ml_u64 wide = { _mm256_slli_epi64(v2q.lo, 3), _mm256_slli_epi64(v2q.hi, 3) };
+    ml_u64 cap = ml_u64_set(SYNC_RUN_LIMIT_Q48);
+    ml_u64 limit = ml_u64_sel(wide, cap, ml_u64_gt(wide, cap));
+    ml_f keep = _mm256_andnot_ps(ml_u64_gt(next, limit), held);
+    ml_u64_st(b->sync_run_q48, ml_u64_and(next, ml_mask64(keep)));
+}
+
+/* sync_restart for the `restart` lanes; the others take `advanced`. */
+[[gnu::noinline, gnu::cold]]
+static void ml_sync_restart(ma_voice_lanes *b, ml_osc *o2, const ml_in *in, const ml_vco *c2,
+                            const ml_u64 *reset_q, const ml_u64 *advanced,
+                            ml_f event_fraction, ml_f event, ml_f restart) {
+    const ml_f zero = _mm256_setzero_ps(), one = ML_F(1.0f);
+    ml_f fresh = _mm256_andnot_ps(event, restart);       /* restarts with no event */
+    ml_f carry[3];
+    for (int k = 0; k < 3; k++) {
+        carry[k] = ml_sel(ml_ld(b->sync_carry[k]), one, fresh);
+        _mm256_storeu_ps(b->sync_carry[k], carry[k]);
+    }
+    ml_f step = ml_ld(in->v2step);
+    ml_f remaining = ml_sub(one, event_fraction);
+    ml_u64 rest = ml_f_to_u64(ml_mul(ml_u48_to_f(ml_u64_ld(in->v2q)), remaining));
+    ml_u64 restarted = ml_u64_and(ml_u64_add(*reset_q, rest), ml_u64_set(PHASE_MASK_Q48));
+    ml_f reset_phase = ml_turns(*reset_q);
+    ml_f tri = ml_clamp(ml_fmadd(ml_pulse_since(reset_phase, ML_F(0.5f), step, zero,
+                                                carry[0], carry[2]),
+                                 ml_mul(ml_ld(in->v2ts), remaining),
+                                 ml_triangle_seed(reset_phase, step, ml_ld(in->v2tg))),
+                        -1.25f, 1.25f);
+    o2->phase = ml_u64_sel(*advanced, restarted, restart);
+    o2->triangle = ml_sel(o2->triangle, tri, restart);
+    o2->init = _mm256_or_ps(o2->init, restart);
+    ml_f edge = ml_mul(ML_F(8.0f), step);
+    edge = ml_sel(edge, ML_F(0.49f), ml_gt(edge, ML_F(0.49f)));
+    ml_f track = _mm256_or_ps(
+        _mm256_or_ps(_mm256_or_ps(ml_lt(carry[0], edge), ml_lt(carry[1], edge)),
+                     ml_lt(carry[2], edge)),
+        _mm256_or_ps(_mm256_or_ps(ml_lt(reset_phase, edge),
+                                  ml_lt(ml_wrap(ml_sub(reset_phase, c2->pw)), edge)),
+                     ml_lt(ml_wrap(ml_sub(reset_phase, ML_F(0.5f))), edge)));
+    ml_u64 tracked = ml_u64_and(ml_u64_add(rest, ml_u64_set(1)), ml_mask64(track));
+    ml_u64_st(b->sync_run_q48, ml_u64_sel(ml_u64_ld(b->sync_run_q48), tracked, restart));
+}
+
 /* render_source_substep, eight lanes */
-static inline ml_f ml_substep(ml_osc *o1, ml_osc *o2, const ml_in *in,
+static inline ml_f ml_substep(ma_voice_lanes *b, ml_osc *o1, ml_osc *o2, const ml_in *in,
                               const ml_vco *c1, const ml_vco *c2, ml_f guard_hz) {
     const ml_f zero = _mm256_setzero_ps(), one = ML_F(1.0f);
     const ml_u64 mask48 = ml_u64_set(PHASE_MASK_Q48);
-    ml_f div2 = ml_ld(in->div2), v2step = ml_ld(in->v2step), sync = ml_ld(in->sync);
+    ml_f v2step = ml_ld(in->v2step), sync = ml_ld(in->sync);
     ml_u64 v2q = ml_u64_ld(in->v2q);
-    ml_f v2preview = ml_preview(o2, c2, v2step, div2, in->act2);
+    bool any_held = !_mm256_testz_si256(
+        _mm256_or_si256(_mm256_loadu_si256((const ml_i *)b->sync_run_q48),
+                        _mm256_loadu_si256((const ml_i *)(b->sync_run_q48 + 4))),
+        _mm256_set1_epi32(-1));
+    ml_f v2preview, v2square;
+    if (any_held) {
+        v2preview = ml_held_preview(b, o2, in, c2, &v2square);
+    } else {
+        v2preview = ml_preview(o2, c2, v2step, ml_ld(in->div2), in->act2);
+        v2square = ml_pulse(ml_turns(o2->phase), ML_F(0.5f), v2step);
+    }
 
-    ml_f v1hz = ml_ld(in->v1hz), v1step = ml_ld(in->v1step);
+    ml_f v1hz = ml_ld(in->v1hz), v1step = ml_ld(in->v1step), v1ts = ml_ld(in->v1ts);
     ml_u64 v1q = ml_u64_ld(in->v1q);
     ml_f crossmod = ml_ld(in->crossmod);
     ml_f cm = _mm256_cmp_ps(crossmod, zero, _CMP_NEQ_UQ);
@@ -476,9 +660,11 @@ static inline ml_f ml_substep(ml_osc *o1, ml_osc *o2, const ml_in *in,
         ml_f hz = ml_mul(ml_mul(ml_ld(in->base), ratio), ml_ld(in->envr));
         ml_f step = ml_clamp(ml_div(hz, ml_ld(in->rate)), 0.0f, 0.45f);
         ml_u64 q = ml_f_to_u64(ml_mul(step, ML_F(0x1p48f)));
+        ml_f turns = ml_turns(q);
         v1hz = ml_sel(v1hz, hz, cm);
         v1q = ml_u64_sel(v1q, q, cm);
-        v1step = ml_sel(v1step, ml_turns(q), cm);
+        v1step = ml_sel(v1step, turns, cm);
+        v1ts = ml_sel(v1ts, ml_triangle_step(turns, ml_ld(in->v1tg)), cm);
     }
     ml_set_guard_target(o1, ml_sel(zero, one, ml_lt(v1hz, guard_hz)), in);
 
@@ -494,8 +680,8 @@ static inline ml_f ml_substep(ml_osc *o1, ml_osc *o2, const ml_in *in,
         ml_u64 advance = ml_f_to_u64(ml_mul(ml_u48_to_f(v2q), fraction));
         ml_u64 event_q = ml_u64_and(ml_u64_add(o2->phase, advance), mask48);
         ml_u64 reset = ml_u64_and(ml_f_to_u64(ml_mul(ml_u48_to_f(event_q), ml_sub(one, sync))), mask48);
-        ml_f jump = ml_sub(ml_raw_wave_mix(ml_turns(reset), c2, div2),
-                           ml_raw_wave_mix(ml_turns(event_q), c2, div2));
+        ml_f jump = ml_sync_jump(b, o2, in, c2, &advance, &event_q, &reset, fraction, v2square,
+                                 event);
         ml_f before = ml_mul(ML_F(0.5f), ml_sub(one, fraction));
         ml_f after = ml_sub(one, ml_mul(ML_F(0.5f), fraction));
         event_fraction = ml_sel(one, fraction, event);
@@ -505,28 +691,19 @@ static inline ml_f ml_substep(ml_osc *o1, ml_osc *o2, const ml_in *in,
     }
 
     ml_f v1preview = ml_preview(o1, c1, v1step, ml_ld(in->div1), in->act1);
-    ml_f vco1 = ml_render_oscillator(o1, v1preview, v1step, zero);
-    ml_f vco2 = ml_render_oscillator(o2, v2preview, v2step, sync_now);
+    ml_f vco1 = ml_render_oscillator(o1, v1preview, ml_pulse(ml_turns(o1->phase), ML_F(0.5f), v1step),
+                                     v1ts, zero);
+    ml_f vco2 = ml_render_oscillator(o2, v2preview, v2square, ml_ld(in->v2ts), sync_now);
     o2->residual = ml_add(o2->residual, sync_next);
     o1->phase = ml_u64_and(sum1, mask48);
 
     ml_u64 advanced = ml_u64_and(ml_u64_add(o2->phase, v2q), mask48);
     ml_f restart = ml_and(wrap, sync_on);
-    if (ml_any(restart)) {
-        ml_f remaining = ml_sub(one, event_fraction);
-        ml_u64 rest = ml_f_to_u64(ml_mul(ml_u48_to_f(v2q), remaining));
-        ml_u64 restarted = ml_u64_and(ml_u64_add(reset_q, rest), mask48);
-        ml_f reset_phase = ml_turns(reset_q);
-        ml_f tri = ml_clamp(ml_fmadd(
-            ml_mul(ml_mul(ml_pulse(reset_phase, ML_F(0.5f), ml_mul(v2step, remaining)),
-                          ML_F(4.0f)), v2step),
-            remaining, ml_raw_triangle(reset_phase)), -1.25f, 1.25f);
-        o2->phase = ml_u64_sel(advanced, restarted, restart);
-        o2->triangle = ml_sel(o2->triangle, tri, restart);
-        o2->init = _mm256_or_ps(o2->init, restart);
-    } else {
+    if (any_held) ml_sync_run_on(b, in);
+    if (ml_any(restart))
+        ml_sync_restart(b, o2, in, c2, &reset_q, &advanced, event_fraction, event, restart);
+    else
         o2->phase = advanced;
-    }
     ml_f mix = ml_add(ml_add(ml_mul(ml_ld(in->g1), vco1),
                              ml_mul(ml_mul(ml_ld(in->g2), ml_ld(in->v2level)), vco2)),
                       ml_mul(ml_ld(in->noiselevel), ml_ld(in->noise)));
@@ -965,8 +1142,12 @@ static void ml_front_math(const ml_front_in *x, ml_in *in, float cutoff_out[MA_L
     ml_f v1hz = ml_mul(base, envelope_ratio);
     ml_u64 v1q = ml_f_to_u64(ml_mul(ml_phase_step(v1hz, rate), ML_F(0x1p48f)));
     ml_f v1step = ml_turns(v1q);
+    ml_f v1tg = ml_triangle_gain(v1step);
     _mm256_storeu_ps(in->v1hz, ml_and(no_crossmod, v1hz));
     _mm256_storeu_ps(in->v1step, ml_and(no_crossmod, v1step));
+    _mm256_storeu_ps(in->v1seed, v1step);
+    _mm256_storeu_ps(in->v1tg, v1tg);
+    _mm256_storeu_ps(in->v1ts, ml_and(no_crossmod, ml_triangle_step(v1step, v1tg)));
     ml_u64_st(in->v1q, ml_u64_sel(ml_u64_set(0), v1q, no_crossmod));
     ml_f fine = ml_octave_ratio_small(ml_div(ml_ld(x->fine_cents), ML_F(1200.0f)));
     ml_f v2hz = ml_mul(ml_mul(base, ml_ld(x->interval)), fine);
@@ -976,7 +1157,10 @@ static void ml_front_math(const ml_front_in *x, ml_in *in, float cutoff_out[MA_L
     _mm256_storeu_ps(in->v2hz, v2hz);
     ml_u64 v2q = ml_f_to_u64(ml_mul(ml_phase_step(v2hz, rate), ML_F(0x1p48f)));
     ml_u64_st(in->v2q, v2q);
-    _mm256_storeu_ps(in->v2step, ml_turns(v2q));
+    ml_f v2step = ml_turns(v2q), v2tg = ml_triangle_gain(v2step);
+    _mm256_storeu_ps(in->v2step, v2step);
+    _mm256_storeu_ps(in->v2tg, v2tg);
+    _mm256_storeu_ps(in->v2ts, ml_triangle_step(v2step, v2tg));
 }
 
 /* Both table values raster_table_sample reads, eight lanes: one 32-bit
@@ -1096,9 +1280,11 @@ static void ml_kernel(ma_voice_lanes *b, const ml_in *in, float filtered[MA_LANE
     ml_f guard_hz = ml_ld(in->guard_hz);
     ml_set_guard_target(&o2, ml_sel(_mm256_setzero_ps(), ML_F(1.0f),
                                     ml_lt(ml_ld(in->v2hz), guard_hz)), in);
+    ml_seed_triangle(&o1, ml_ld(in->v1seed), ml_ld(in->v1tg));
+    ml_seed_triangle(&o2, ml_ld(in->v2step), ml_ld(in->v2tg));
     ml_f source[8];
     for (int substep = 0; substep < 8; substep++)
-        source[substep] = ml_substep(&o1, &o2, in, &c1, &c2, guard_hz);
+        source[substep] = ml_substep(b, &o1, &o2, in, &c1, &c2, guard_hz);
     ml_next_guard_gain(&o1);
     ml_next_guard_gain(&o2);
     ml_osc_st(b, 0, &o1);

@@ -641,8 +641,10 @@ static void test_ma_mozaik(void) {
         dry_hash = tw_fnv1a64(&pre_output, sizeof pre_output, dry_hash);
     }
     /* Re-pinned 2026-11-09 for explicit FMA and the folded halfband FIR
-     * (was b9ab7015dda6ead5; docs/ma3-fma-20261109.md, ma3-fir-fold-20261109.md). */
-    CHECK(dry_hash == UINT64_C(0xb2e59619a2a55cb1),
+     * (was b9ab7015dda6ead5; docs/ma3-fma-20261109.md, ma3-fir-fold-20261109.md),
+     * and 2026-11-10 for the triangle integrator gain (was b2e59619a2a55cb1;
+     * docs/ma-source-fix-20261110.md). */
+    CHECK(dry_hash == UINT64_C(0x75cf9d06e4cc7685),
           "MA1-5 zero-Mozaik envelope/VCA baseline is %016llx",
           (unsigned long long)dry_hash);
 
@@ -661,8 +663,10 @@ static void test_ma_mozaik(void) {
         };
         legacy_hash = tw_fnv1a64(&pre_output, sizeof pre_output, legacy_hash);
     }
-    /* Re-pinned 2026-11-09 for explicit FMA and the folded FIR (was 48685bb104788f11). */
-    CHECK(legacy_hash == UINT64_C(0xa63f63bdc633854d),
+    /* Re-pinned 2026-11-09 for explicit FMA and the folded FIR (was
+     * 48685bb104788f11), and 2026-11-10 for the triangle integrator gain (was
+     * a63f63bdc633854d). */
+    CHECK(legacy_hash == UINT64_C(0x65eb97a686df561d),
           "MA VCO1 sine zero must retain the pre-sine PCM anchor: %016llx",
           (unsigned long long)legacy_hash);
 

@@ -105,6 +105,11 @@ int main(void) {
             SAME(in.v1step[l], e->vco1_step, "vco1_step");
             SAME(in.v2hz[l], e->vco2_hz, "vco2_hz");
             SAME(in.v2step[l], e->vco2_step, "vco2_step");
+            SAME(in.v1seed[l], e->vco1_seed_step, "vco1_seed_step");
+            SAME(in.v1tg[l], e->vco1_triangle_gain, "vco1_triangle_gain");
+            SAME(in.v1ts[l], e->vco1_triangle_step, "vco1_triangle_step");
+            SAME(in.v2tg[l], e->vco2_triangle_gain, "vco2_triangle_gain");
+            SAME(in.v2ts[l], e->vco2_triangle_step, "vco2_triangle_step");
             SAME(in.envr[l], e->envelope_ratio, "envelope_ratio");
             SAME(in.sync[l], e->sync, "sync");
             if (in.v1q[l] != e->vco1_step_q48 || in.v2q[l] != e->vco2_step_q48) {

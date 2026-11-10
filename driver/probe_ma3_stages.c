@@ -41,9 +41,11 @@ AVX2 static void kernel_timed(ma_voice_lanes *b, const ml_in *in, float filtered
     ml_f guard_hz = ml_ld(in->guard_hz);
     ml_set_guard_target(&o2, ml_sel(_mm256_setzero_ps(), _mm256_set1_ps(1.0f),
                                     ml_lt(ml_ld(in->v2hz), guard_hz)), in);
+    ml_seed_triangle(&o1, ml_ld(in->v1seed), ml_ld(in->v1tg));
+    ml_seed_triangle(&o2, ml_ld(in->v2step), ml_ld(in->v2tg));
     ml_f source[8];
     for (int substep = 0; substep < 8; substep++)
-        source[substep] = ml_substep(&o1, &o2, in, &c1, &c2, guard_hz);
+        source[substep] = ml_substep(b, &o1, &o2, in, &c1, &c2, guard_hz);
     ml_next_guard_gain(&o1);
     ml_next_guard_gain(&o2);
     ml_osc_st(b, 0, &o1);

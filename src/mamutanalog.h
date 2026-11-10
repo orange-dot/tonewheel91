@@ -215,6 +215,12 @@ typedef struct {
 
 typedef struct {
     uint64_t phase_q48;
+    /* One plus the phase run since a sync reset that touched an edge zone,
+     * or 0: no such reset, or the run has passed the zone. While it is
+     * nonzero, sync_carry holds how far behind the reset the wrap, the pulse
+     * edge and the half-turn edge were last crossed (ma-constants.md 3.2). */
+    uint64_t sync_run_q48;
+    float sync_carry[3];
     float triangle;
     float sync_residual;
     float guard_gain;
@@ -639,6 +645,8 @@ typedef struct {
 enum { MA_LANES = 8 };
 typedef struct {
     uint64_t phase_q48[2][MA_LANES];
+    uint64_t sync_run_q48[MA_LANES];             /* VCO2 only */
+    float sync_carry[3][MA_LANES];
     float triangle[2][MA_LANES];
     float sync_residual[2][MA_LANES];
     float guard_gain[2][MA_LANES];

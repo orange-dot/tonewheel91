@@ -19,6 +19,32 @@ static float poly_blep(float phase, float step) {
     return 0.0f;
 }
 
+/* poly_blep for an oscillator that was sync-reset less than half a turn ago.
+ * A reset moves the phase but not the edges already passed: the half that
+ * follows an edge runs on the distance travelled since that edge was really
+ * crossed. That is the phase when the crossing came after the reset (the
+ * phase is less than `since`, the run since the reset), and `since + carry`
+ * otherwise, `carry` being the distance behind the edge at the reset. The
+ * half that precedes an edge still runs on the phase. */
+static float poly_blep_since(float phase, float step, float since,
+                             float carry) {
+    if (!(step > FLT_EPSILON)) return 0.0f;
+    float edge = 8.0f * step;
+    if (edge > 0.49f) edge = 0.49f;
+    float behind = phase < since ? phase : since + carry;
+    float blep = 0.0f;
+    if (behind < edge)
+        blep = 2.0f * (smoothstep5(0.5f * (behind / edge + 1.0f)) - 1.0f);
+    if (phase > 1.0f - edge)
+        blep += 2.0f * smoothstep5(0.5f * ((phase - 1.0f) / edge + 1.0f));
+    return blep;
+}
+
+/* The distance behind an edge that poly_blep_since works with. */
+static float behind_edge(float phase, float since, float carry) {
+    return phase < since ? phase : since + carry;
+}
+
 static float saw_sample(float phase, float blep) {
     return clamp_signal(2.0f * phase - 1.0f - blep,
                         -1.25f, 1.25f);
@@ -34,6 +60,16 @@ static float pulse_sample_with_blep(float phase, float width, float step,
 
 static float pulse_sample(float phase, float width, float step) {
     return pulse_sample_with_blep(phase, width, step, poly_blep(phase, step));
+}
+
+static float pulse_sample_since(float phase, float width, float step,
+                                float since, float wrap_carry,
+                                float width_carry) {
+    float sample = phase < width ? 1.0f : -1.0f;
+    sample += poly_blep_since(phase, step, since, wrap_carry);
+    sample -= poly_blep_since(wrap_phase(phase - width), step, since,
+                              width_carry);
+    return clamp_signal(sample, -1.25f, 1.25f);
 }
 
 static float mamut_sine(float phase) {
@@ -52,12 +88,25 @@ static float waveform_divisor(ma_vco_controls controls) {
     return sum > 1.0f ? sum : 1.0f;
 }
 
-static float raw_wave_mix(float phase, ma_vco_controls controls,
-                           float divisor) {
-    float saw = 2.0f * phase - 1.0f;
-    float pulse = phase < controls.pulse_width ? 1.0f : -1.0f;
-    float triangle = raw_triangle(phase);
-    float sample = ma_fmadd(controls.triangle_level, triangle,
+/* The smoothed waveform mix at a phase, for a given triangle state, run
+ * since the last sync reset and carried edges. Inactive shapes contribute an
+ * exact zero, as in preview_sparse_oscillator. */
+static float wave_mix_since(float phase, ma_vco_controls controls, float step,
+                            float divisor, unsigned active, float since,
+                            float wrap_carry, float width_carry,
+                            float triangle) {
+    float saw = 0.0f, pulse = 0.0f, tri = 0.0f;
+    float blep = active & (WAVE_SAW | WAVE_PULSE)
+               ? poly_blep_since(phase, step, since, wrap_carry) : 0.0f;
+    if (active & WAVE_SAW) saw = saw_sample(phase, blep);
+    if (active & WAVE_PULSE) {
+        pulse = (phase < controls.pulse_width ? 1.0f : -1.0f) + blep;
+        pulse -= poly_blep_since(wrap_phase(phase - controls.pulse_width),
+                                 step, since, width_carry);
+        pulse = clamp_signal(pulse, -1.25f, 1.25f);
+    }
+    if (active & WAVE_TRIANGLE) tri = clamp_signal(triangle, -1.0f, 1.0f);
+    float sample = ma_fmadd(controls.triangle_level, tri,
                             ma_fmadd(controls.pulse_level, pulse, controls.saw_level * saw));
     if (controls.sine_level > 0.0f)
         sample = ma_fmadd(controls.sine_level, mamut_sine(phase), sample);
@@ -75,9 +124,7 @@ static float preview_oscillator(const ma_oscillator *oscillator,
                                 float divisor) {
     float phase = phase_turns(oscillator->phase_q48);
     float blep = poly_blep(phase, step);
-    float triangle = oscillator->triangle_initialized
-                   ? clamp_signal(oscillator->triangle, -1.0f, 1.0f)
-                   : raw_triangle(phase);
+    float triangle = clamp_signal(oscillator->triangle, -1.0f, 1.0f);
     float sample = ma_fmadd(controls.triangle_level, triangle,
                             ma_fmadd(controls.pulse_level,
                                      pulse_sample_with_blep(phase, controls.pulse_width,
@@ -100,9 +147,7 @@ static float preview_sparse_oscillator(const ma_oscillator *oscillator,
     if (active & WAVE_PULSE)
         pulse = pulse_sample_with_blep(phase, controls.pulse_width, step, blep);
     if (active & WAVE_TRIANGLE)
-        triangle = oscillator->triangle_initialized
-                 ? clamp_signal(oscillator->triangle, -1.0f, 1.0f)
-                 : raw_triangle(phase);
+        triangle = clamp_signal(oscillator->triangle, -1.0f, 1.0f);
     /* Only preview work is optional. render_oscillator still advances its
      * triangle integrator even when the triangle contribution is zero. */
     float sample = ma_fmadd(controls.triangle_level, triangle,
@@ -112,21 +157,26 @@ static float preview_sparse_oscillator(const ma_oscillator *oscillator,
     return sample / divisor;
 }
 
-static float render_oscillator(ma_oscillator *oscillator,
-                               float preview, float step,
-                               float sync_correction) {
-    if (!oscillator->triangle_initialized) {
-        oscillator->triangle = raw_triangle(
-            phase_turns(oscillator->phase_q48));
-        oscillator->triangle_initialized = true;
-    }
+/* `square` is the smoothed 50% pulse at the current phase; the triangle
+ * integrates it at the edge-compensated rate. */
+static inline float integrate_oscillator(ma_oscillator *oscillator,
+                                         float preview, float square,
+                                         float triangle_step,
+                                         float sync_correction) {
     float sample = preview + oscillator->sync_residual + sync_correction;
     oscillator->sync_residual = 0.0f;
     oscillator->triangle = clamp_signal(
-        ma_fmadd(pulse_sample(phase_turns(oscillator->phase_q48), 0.5f, step) * 4.0f,
-                 step, oscillator->triangle),
+        ma_fmadd(square, triangle_step, oscillator->triangle),
         -1.25f, 1.25f);
     return clamp_signal(sample, -1.25f, 1.25f);
+}
+
+static float render_oscillator(ma_oscillator *oscillator, float preview,
+                               float step, float triangle_step,
+                               float sync_correction) {
+    float square = pulse_sample(phase_turns(oscillator->phase_q48), 0.5f, step);
+    return integrate_oscillator(oscillator, preview, square, triangle_step,
+                                sync_correction);
 }
 
 static bool phase_will_wrap(const ma_oscillator *oscillator,
@@ -190,14 +240,21 @@ ma_source_frame ma_voice_prepare_source_frame_guarded(
     if (source.mixer_divisor < 1.0f) source.mixer_divisor = 1.0f;
     /* Cross-mod is the only source of pitch changes within these eight
      * substeps. Character, envelopes and LFO have already advanced. */
-    if (controls->crossmod_amount == 0.0f) {
-        source.vco1_hz = base_hz;
+    /* Under cross-mod the triangle keeps the gain of the unmodulated step. */
+    float vco1_hz = base_hz;
 #if !defined(MA_SOURCE_EVIDENCE)
-        source.vco1_hz *= source.envelope_ratio;
+    vco1_hz *= source.envelope_ratio;
 #endif
-        source.vco1_step_q48 = phase_step_q48(
-            phase_step(source.vco1_hz, source.rate_hz));
-        source.vco1_step = phase_turns(source.vco1_step_q48);
+    uint64_t vco1_step_q48 = phase_step_q48(phase_step(vco1_hz, source.rate_hz));
+    float vco1_step = phase_turns(vco1_step_q48);
+    source.vco1_seed_step = vco1_step;
+    source.vco1_triangle_gain = triangle_gain_for(vco1_step);
+    if (controls->crossmod_amount == 0.0f) {
+        source.vco1_hz = vco1_hz;
+        source.vco1_step_q48 = vco1_step_q48;
+        source.vco1_step = vco1_step;
+        source.vco1_triangle_step = triangle_step_for(vco1_step,
+                                                      source.vco1_triangle_gain);
     }
     float fine_ratio = octave_ratio_small(
         controls->vco2_fine_cents / 1200.0f);
@@ -208,6 +265,9 @@ ma_source_frame ma_voice_prepare_source_frame_guarded(
     float step = phase_step(source.vco2_hz, source.rate_hz);
     source.vco2_step_q48 = phase_step_q48(step);
     source.vco2_step = phase_turns(source.vco2_step_q48);
+    source.vco2_triangle_gain = triangle_gain_for(source.vco2_step);
+    source.vco2_triangle_step = triangle_step_for(source.vco2_step,
+                                              source.vco2_triangle_gain);
     return source;
 }
 
@@ -221,24 +281,167 @@ ma_source_frame ma_voice_prepare_source_frame(const ma_synth *s,
                                                  s->oscillator2.guard_gain);
 }
 
-float ma_voice_render_source_substep(ma_synth *s,
-                                     const ma_render_controls *controls,
-                                     const ma_source_frame *source,
-                                     float base_hz, float noise,
-                                     float guard1, float guard2) {
+void ma_voice_seed_triangles(ma_synth *s, const ma_source_frame *source) {
+    ma_oscillator *oscillator[2] = { &s->oscillator1, &s->oscillator2 };
+    const float step[2] = { source->vco1_seed_step, source->vco2_step };
+    const float gain[2] = { source->vco1_triangle_gain,
+                            source->vco2_triangle_gain };
+    for (int k = 0; k < 2; k++) {
+        if (oscillator[k]->triangle_initialized) continue;
+        oscillator[k]->triangle = triangle_seed(
+            phase_turns(oscillator[k]->phase_q48), step[k], gain[k]);
+        oscillator[k]->triangle_initialized = true;
+    }
+}
+
+/* The three sync paths below stay out of line. They run for two edge zones
+ * after a reset and at the reset itself, and inlined they slow the ordinary
+ * substep. */
+
+/* VCO2's preview and its 50% pulse while a sync reset is recent: its edges
+ * run on their own distances (ma-constants.md 3.2). */
+typedef struct {
+    float preview;
+    float square;
+} held_vco;
+
+[[gnu::noinline, gnu::cold]]
+static held_vco held_preview(const ma_oscillator *oscillator,
+                             const ma_source_frame *source) {
+    const float *carry = oscillator->sync_carry;      /* wrap, width, half */
+    float since = phase_turns(oscillator->sync_run_q48 - 1);
+    float phase = phase_turns(oscillator->phase_q48);
+    float step = source->vco2_step;
+    return (held_vco){
+        .preview = wave_mix_since(phase, source->vco2, step,
+                                  source->vco2_divisor, source->vco2_active,
+                                  since, carry[0], carry[1],
+                                  oscillator->triangle),
+        .square = pulse_sample_since(phase, 0.5f, step, since,
+                                     carry[0], carry[2]),
+    };
+}
+
+/* render_oscillator for a held VCO2, whose 50% pulse held_preview made. */
+[[gnu::noinline, gnu::cold]]
+static float render_held(ma_oscillator *oscillator,
+                         const ma_source_frame *source, held_vco held,
+                         float sync_correction) {
+    return integrate_oscillator(oscillator, held.preview, held.square,
+                                source->vco2_triangle_step, sync_correction);
+}
+
+/* The step VCO2's output takes at a sync reset. Edges crossed before the
+ * event keep their distances across the reset, and a reset from just before
+ * the wrap to just after it takes that wrap. The step then runs from the
+ * smoothed waveform at the event to the one at the reset phase, where the
+ * phase has not run yet. `square` is the held 50% pulse; with no reset
+ * recent it is the ordinary one. Leaves the carried distances in the
+ * oscillator. */
+[[gnu::noinline, gnu::cold]]
+static float sync_jump(ma_oscillator *oscillator, const ma_source_frame *source,
+                       uint64_t event_advance, uint64_t event_phase_q48,
+                       uint64_t reset_phase_q48, float event_fraction,
+                       float square) {
+    float *carry = oscillator->sync_carry;
+    uint64_t run = oscillator->sync_run_q48;
+    float step = source->vco2_step;
+    if (!run)
+        square = pulse_sample(phase_turns(oscillator->phase_q48), 0.5f, step);
+    float event_phase = phase_turns(event_phase_q48);
+    float reset_phase = phase_turns(reset_phase_q48);
+    float event_since = run ? phase_turns(run - 1 + event_advance) : 1.0f;
+    float edge = 8.0f * step;
+    if (edge > 0.49f) edge = 0.49f;
+    float behind[3] = {
+        behind_edge(event_phase, event_since, carry[0]),
+        behind_edge(wrap_phase(event_phase - source->vco2.pulse_width),
+                    event_since, carry[1]),
+        behind_edge(wrap_phase(event_phase - 0.5f), event_since, carry[2]),
+    };
+    if (event_phase > 1.0f - edge && reset_phase < edge)
+        behind[0] = reset_phase;
+    float event_triangle = clamp_signal(
+        ma_fmadd(square, source->vco2_triangle_step * event_fraction,
+                 oscillator->triangle),
+        -1.25f, 1.25f);
+    float jump = wave_mix_since(reset_phase, source->vco2, step,
+                                source->vco2_divisor, source->vco2_active,
+                                0.0f, behind[0], behind[1],
+                                triangle_seed(reset_phase, step,
+                                              source->vco2_triangle_gain))
+               - wave_mix_since(event_phase, source->vco2, step,
+                                source->vco2_divisor, source->vco2_active,
+                                event_since, carry[0], carry[1],
+                                event_triangle);
+    for (int k = 0; k < 3; k++) carry[k] = behind[k];
+    return jump;
+}
+
+/* Moves VCO2 to its reset phase and through the rest of the substep. The
+ * reset needs tracking only if it left an edge's smoothing running or landed
+ * inside a zone that follows an edge; otherwise the phase alone is right. */
+[[gnu::noinline, gnu::cold]]
+static void sync_restart(ma_oscillator *oscillator,
+                         const ma_source_frame *source,
+                         uint64_t reset_phase_q48, float event_fraction,
+                         bool event) {
+    float *carry = oscillator->sync_carry;
+    if (!event)
+        for (int k = 0; k < 3; k++) carry[k] = 1.0f;
+    float step = source->vco2_step;
+    float remaining = 1.0f - event_fraction;
+    uint64_t remaining_advance = (uint64_t)((float)source->vco2_step_q48
+                                            * remaining);
+    oscillator->phase_q48 = (reset_phase_q48 + remaining_advance)
+                          & PHASE_MASK_Q48;
+    float reset_phase = phase_turns(reset_phase_q48);
+    oscillator->triangle = clamp_signal(
+        ma_fmadd(pulse_sample_since(reset_phase, 0.5f, step, 0.0f,
+                                    carry[0], carry[2]),
+                 source->vco2_triangle_step * remaining,
+                 triangle_seed(reset_phase, step, source->vco2_triangle_gain)),
+        -1.25f, 1.25f);
+    oscillator->triangle_initialized = true;
+    float edge = 8.0f * step;
+    if (edge > 0.49f) edge = 0.49f;
+    bool track = carry[0] < edge || carry[1] < edge || carry[2] < edge
+              || reset_phase < edge
+              || wrap_phase(reset_phase - source->vco2.pulse_width) < edge
+              || wrap_phase(reset_phase - 0.5f) < edge;
+    oscillator->sync_run_q48 = track ? 1 + remaining_advance : 0;
+}
+
+/* One substep. `held` is whether VCO2 was sync-reset within its last edge
+ * zone; it is a constant in each of the two instances below, so the ordinary
+ * one carries none of the held code. */
+[[gnu::always_inline]]
+static inline float source_substep(ma_synth *s,
+                                   const ma_render_controls *controls,
+                                   const ma_source_frame *source,
+                                   float base_hz, float noise,
+                                   float guard1, float guard2, bool is_held) {
     ma_vco_controls vco1_controls = source->vco1;
     ma_vco_controls vco2_controls = source->vco2;
     float vco2_step = source->vco2_step;
     uint64_t vco2_step_q48 = source->vco2_step_q48;
-    float vco2_preview = source->vco2_active == WAVE_ALL
-        ? preview_oscillator(&s->oscillator2, vco2_controls,
-                              vco2_step, source->vco2_divisor)
-        : preview_sparse_oscillator(&s->oscillator2, vco2_controls,
-                                     vco2_step, source->vco2_divisor,
-                                     source->vco2_active);
+    held_vco held = { 0 };
+    float vco2_preview;
+    if (is_held) {
+        held = held_preview(&s->oscillator2, source);
+        vco2_preview = held.preview;
+    } else {
+        vco2_preview = source->vco2_active == WAVE_ALL
+            ? preview_oscillator(&s->oscillator2, vco2_controls, vco2_step,
+                                 source->vco2_divisor)
+            : preview_sparse_oscillator(&s->oscillator2, vco2_controls,
+                                         vco2_step, source->vco2_divisor,
+                                         source->vco2_active);
+    }
     float vco1_hz = source->vco1_hz;
     float vco1_step = source->vco1_step;
     uint64_t vco1_step_q48 = source->vco1_step_q48;
+    float vco1_triangle_step = source->vco1_triangle_step;
     if (controls->crossmod_amount != 0.0f) {
         float cross_ratio = clamp_signal(
             1.0f + vco2_preview * controls->crossmod_amount * 0.25f,
@@ -249,18 +452,21 @@ float ma_voice_render_source_substep(ma_synth *s,
 #endif
         vco1_step_q48 = phase_step_q48(phase_step(vco1_hz, source->rate_hz));
         vco1_step = phase_turns(vco1_step_q48);
+        vco1_triangle_step = triangle_step_for(vco1_step,
+                                               source->vco1_triangle_gain);
     }
 
     float guard_hz = 0.45f * s->sample_rate_hz;
     ma_voice_set_guard_target(&s->oscillator1, vco1_hz < guard_hz ? 1.0f : 0.0f,
                               s->sample_rate_hz);
     bool master_wrap = phase_will_wrap(&s->oscillator1, vco1_step_q48);
-    float sync = source->sync;
+    bool reset = master_wrap && source->sync > 0.0f;
+    bool event = reset && vco1_step > FLT_EPSILON;
     float sync_now = 0.0f;
     float sync_next = 0.0f;
     float event_fraction = 1.0f;
     uint64_t sync_reset_phase_q48 = 0;
-    if (master_wrap && sync > 0.0f && vco1_step > FLT_EPSILON) {
+    if (event) {
         uint64_t until_wrap = PHASE_ONE_Q48 - s->oscillator1.phase_q48;
         event_fraction = (float)until_wrap / (float)vco1_step_q48;
         event_fraction = clamp_signal(event_fraction, 0.0f, 1.0f);
@@ -269,14 +475,11 @@ float ma_voice_render_source_substep(ma_synth *s,
         uint64_t sync_event_phase_q48 =
             (s->oscillator2.phase_q48 + event_advance) & PHASE_MASK_Q48;
         sync_reset_phase_q48 =
-            (uint64_t)((float)sync_event_phase_q48 * (1.0f - sync))
+            (uint64_t)((float)sync_event_phase_q48 * (1.0f - source->sync))
             & PHASE_MASK_Q48;
-        float sync_event_phase = phase_turns(sync_event_phase_q48);
-        float sync_reset_phase = phase_turns(sync_reset_phase_q48);
-        float jump = raw_wave_mix(sync_reset_phase, vco2_controls,
-                                   source->vco2_divisor)
-                   - raw_wave_mix(sync_event_phase, vco2_controls,
-                                   source->vco2_divisor);
+        float jump = sync_jump(&s->oscillator2, source, event_advance,
+                               sync_event_phase_q48, sync_reset_phase_q48,
+                               event_fraction, held.square);
         float before = 0.5f * (1.0f - event_fraction);
         float after = 1.0f - 0.5f * event_fraction;
         sync_now = jump * smoothstep5(before);
@@ -284,38 +487,54 @@ float ma_voice_render_source_substep(ma_synth *s,
     }
 
     float vco1_preview = source->vco1_active == WAVE_ALL
-        ? preview_oscillator(&s->oscillator1, vco1_controls,
-                              vco1_step, source->vco1_divisor)
+        ? preview_oscillator(&s->oscillator1, vco1_controls, vco1_step,
+                             source->vco1_divisor)
         : preview_sparse_oscillator(&s->oscillator1, vco1_controls,
                                      vco1_step, source->vco1_divisor,
                                      source->vco1_active);
-    float vco1 = render_oscillator(&s->oscillator1, vco1_preview,
-                                   vco1_step, 0.0f);
+    float vco1 = render_oscillator(&s->oscillator1, vco1_preview, vco1_step,
+                                   vco1_triangle_step, 0.0f);
     /* Cross-mod already read VCO2 at this phase, before sync correction. */
-    float vco2 = render_oscillator(&s->oscillator2, vco2_preview,
-                                   vco2_step, sync_now);
+    float vco2 = is_held
+        ? render_held(&s->oscillator2, source, held, sync_now)
+        : render_oscillator(&s->oscillator2, vco2_preview, vco2_step,
+                            source->vco2_triangle_step, sync_now);
     s->oscillator2.sync_residual += sync_next;
     advance_phase(&s->oscillator1, vco1_step_q48);
-    if (master_wrap && sync > 0.0f) {
-        float remaining = 1.0f - event_fraction;
-        uint64_t remaining_advance = (uint64_t)((float)vco2_step_q48
-                                                * remaining);
-        s->oscillator2.phase_q48 =
-            (sync_reset_phase_q48 + remaining_advance) & PHASE_MASK_Q48;
-        float sync_reset_phase = phase_turns(sync_reset_phase_q48);
-        s->oscillator2.triangle = raw_triangle(sync_reset_phase);
-        s->oscillator2.triangle = clamp_signal(
-            ma_fmadd(pulse_sample(sync_reset_phase, 0.5f, vco2_step * remaining)
-                         * 4.0f * vco2_step,
-                     remaining, s->oscillator2.triangle),
-            -1.25f, 1.25f);
-        s->oscillator2.triangle_initialized = true;
+    if (reset) {
+        sync_restart(&s->oscillator2, source, sync_reset_phase_q48,
+                     event_fraction, event);
     } else {
         advance_phase(&s->oscillator2, vco2_step_q48);
+        if (is_held) {
+            uint64_t run = s->oscillator2.sync_run_q48 + vco2_step_q48;
+            s->oscillator2.sync_run_q48 = run > sync_run_limit(vco2_step_q48)
+                                        ? 0 : run;
+        }
     }
 
     return (guard1 * vco1 + guard2 * controls->vco2_level * vco2
             + controls->noise_level * noise) / source->mixer_divisor;
+}
+
+[[gnu::noinline, gnu::cold]]
+static float held_substep(ma_synth *s, const ma_render_controls *controls,
+                          const ma_source_frame *source, float base_hz,
+                          float noise, float guard1, float guard2) {
+    return source_substep(s, controls, source, base_hz, noise, guard1, guard2,
+                          true);
+}
+
+float ma_voice_render_source_substep(ma_synth *s,
+                                     const ma_render_controls *controls,
+                                     const ma_source_frame *source,
+                                     float base_hz, float noise,
+                                     float guard1, float guard2) {
+    if (s->oscillator2.sync_run_q48)
+        return held_substep(s, controls, source, base_hz, noise, guard1,
+                            guard2);
+    return source_substep(s, controls, source, base_hz, noise, guard1, guard2,
+                          false);
 }
 
 void ma_voice_push_oversample_history(float history[31], uint8_t *position,

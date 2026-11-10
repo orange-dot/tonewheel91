@@ -333,19 +333,32 @@ static void engine_twin(void) {
         &ma_patch_tepih, &ma_patch_lead, &ma_patch_raster, &ma_patch_prizma, &ma_patch_granica };
     static ma_frame lane_frames[257], scalar_frames[257];
     uint64_t sleeps = 0, frames_total = 0;
+    /* Variant 1 is hard sync with every shape sounding; variant 2 adds
+     * cross-mod and a softened, partial sync. Both put resets inside the
+     * edge zones (ma-constants.md 3.2). */
+    for (unsigned variant = 0; variant < 3; variant++)
     for (unsigned li = 0; li < 3; li++)
         for (unsigned unison = 1; unison <= 4; unison *= 2) {
             ma_voice_pool_config c = ma_voice_pool_default_config;
             c.limit = (uint8_t)limits[li];
             c.unison_count = (uint8_t)unison;
-            ma_patch patch = *patches[(li * 3 + unison) % 5];
+            ma_patch patch = *patches[(li * 3 + unison + variant) % 5];
             patch.amp_adsr = (ma_adsr){ 0.004f, 0.03f, 0.6f, 0.012f };
+            if (variant) {
+                patch.vco2 = (ma_vco_controls){ .saw_level = 0.5f, .pulse_level = 0.4f,
+                    .triangle_level = 0.5f, .sine_level = 0.2f, .pulse_width = 0.31f };
+                patch.vco2_level = 0.9f;
+                patch.vco2_interval = variant == 1 ? 7 : 12;
+                patch.sync_amount = variant == 1 ? 1.0f : 0.7f;
+                patch.sync_softness = variant == 1 ? 0.0f : 0.4f;
+                patch.crossmod_amount = variant == 1 ? 0.0f : 0.45f;
+            }
             c.engine = MA_POOL_ENGINE_AUTO;
             assert(ma_voice_pool_init(&a, 48000, &c, &patch));
             c.engine = MA_POOL_ENGINE_SCALAR;
             assert(ma_voice_pool_init(&scalar_pool, 48000, &c, &patch));
             assert(!scalar_pool.lanes_enabled);
-            uint32_t seed = UINT32_C(0x6c616e65) ^ li ^ (unison << 8);
+            uint32_t seed = UINT32_C(0x6c616e65) ^ li ^ (unison << 8) ^ (variant << 16);
             uint8_t held[16] = { 0 };
             for (unsigned step = 0; step < 64; step++) {
                 seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
@@ -381,9 +394,12 @@ static void engine_twin(void) {
 }
 int main(void) {
     config(); allocation(); group_priority(); event_stress(); sleep_wake(); stereo_gain(); hostile(); engine_twin();
+    /* Re-pinned 2026-11-10 for the triangle integrator gain and the sync step
+     * (docs/ma-source-fix-20261110.md). Before: 4946fd6b8aa8a5d5,
+     * 4cf48dbe261e8c40, a68d44f296ff0a63, d805ee48df95e9bc. */
     const uint64_t expected[] = {
-        UINT64_C(0x4946fd6b8aa8a5d5), UINT64_C(0x4cf48dbe261e8c40),
-        UINT64_C(0xa68d44f296ff0a63), UINT64_C(0xd805ee48df95e9bc),
+        UINT64_C(0xb1f9361a37fc1173), UINT64_C(0x6dfe4219354a7bb7),
+        UINT64_C(0x6b185eb6af0320f4), UINT64_C(0x7676e8e9dbb2457d),
     };
     unsigned index = 0;
     for (unsigned u = 1; u <= 8; u *= 2) {
