@@ -10,6 +10,7 @@ or test dependency.
 |---|---|---|
 | B1 | triangle core, 24 transistors | `b1-bench-cv-2.cir`: the B1-THT bench of the lab's 2026-10-16 run (`mamut-synthesis-research`), copied unchanged |
 | VCO-2 | exponential converter and reset-type saw core, 16 transistors | `vco2.cir`: a study circuit written for the digital model, not a board design |
+| VCO-2 pair | two VCO-2 cores on one supply with a series resistance and bus capacitor | built by `vco4.py` from `vco2.cir` |
 | shapers | triangle to sine (degenerated long-tailed pair) and triangle to saw (a linear pair swapped by a switching quad on B1's square), 10 transistors | `shapers.cir`: study circuits hung on B1's buffered triangle, not a board design |
 
 `models/` holds the lab's declared engineering transistor and support models,
@@ -49,6 +50,11 @@ python3 driver/spice/vco/shapers.py analyze  # shapers.json
 python3 driver/spice/vco/shapers.py bench_high && driver/spice/vco/b1_run.sh build/vco/shapers
 python3 driver/spice/vco/shapers.py analyze_high   # V2b, B1 with a range switch: high.json
 python3 driver/spice/vco/shapers_render.py         # listen/
+
+# V4: two VCO-2 cores on one supply (build/vco/vco4/)
+python3 driver/spice/vco/vco4.py case NAME RS CB NOTE DETUNE_CENTS SECONDS [INTERVAL]
+python3 driver/spice/vco/vco4.py analyze NAME ...
+python3 driver/spice/vco/vco4_render.py            # listen/
 ```
 
 The VCO-2 runs are cached by their inputs (`runs/<name>/tag.json`), so a

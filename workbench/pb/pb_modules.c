@@ -384,7 +384,8 @@ static void sync_module(pb_app *a, struct nk_context *ctx, struct nk_rect bounds
     const pb_probe_result *r = a->shown;
     const wb_theme *t = pb_theme(a);
     header(a, ctx, PB_MOD_SYNC, nullptr);
-    struct nk_rect pr = picture(a, ctx, bounds.h * .5f);
+    /* six control rows below: the picture gives up one row for the supply */
+    struct nk_rect pr = picture(a, ctx, bounds.h * .5f - 22);
     struct nk_command_buffer *out = nk_window_get_canvas(ctx);
     if (r) {
         const pb_tap_capture *c = &r->tap[PB_TAP_VCO2];
@@ -412,10 +413,11 @@ static void sync_module(pb_app *a, struct nk_context *ctx, struct nk_rect bounds
     pb_field_control(a, ctx, "source.sync", false);
     pb_field_control(a, ctx, "source.sync_softness", false);
     pb_field_control(a, ctx, "source.crossmod", false);
-    /* Both oscillators' VCO-2 pitch law, and how much of the reset dead time
-     * is left untrimmed (flat at the top). */
+    /* Both oscillators' VCO-2 pitch law, how much of the reset dead time is
+     * left untrimmed (flat at the top), and how soft their shared supply is. */
     pb_field_control(a, ctx, "vco.analog", false);
     pb_field_control(a, ctx, "vco.dead_time", false);
+    pb_field_control(a, ctx, "vco.supply", false);
     if (r) {
         const ma_patch *p = pb_authored(a);
         int si = pb_field_index("source.sync"), xi = pb_field_index("source.crossmod");

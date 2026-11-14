@@ -93,6 +93,8 @@ static const patch_field FIELDS[] = {
     F("vco1.tri_saw", vco1.tri_saw_level, 0, 1, .01, .10),
     F("vco2.tri_sine", vco2.tri_sine_level, 0, 1, .01, .10),
     F("vco2.tri_saw", vco2.tri_saw_level, 0, 1, .01, .10),
+    /* Version 8: the two cores' shared supply (docs/ma-vco-plan.md, V4). */
+    F("vco.supply", vco_supply, 0, 1, .01, .10),
 };
 
 static_assert(sizeof FIELDS / sizeof *FIELDS < 64,
@@ -112,8 +114,10 @@ static constexpr unsigned SHAPER_FIRST_FIELD = 57;
 static constexpr unsigned SHAPER_FIELD_COUNT = 4;
 static_assert(VCO_FIRST_FIELD + VCO_FIELD_COUNT == SHAPER_FIRST_FIELD,
               "the shaper block follows the oscillator-pitch block");
-static_assert(SHAPER_FIRST_FIELD + SHAPER_FIELD_COUNT == sizeof FIELDS / sizeof *FIELDS,
-              "the shaper block closes the catalog");
+static constexpr unsigned SUPPLY_FIELD = 61;
+static_assert(SHAPER_FIRST_FIELD + SHAPER_FIELD_COUNT == SUPPLY_FIELD,
+              "the supply follows the shaper block");
+static_assert(SUPPLY_FIELD + 1 == sizeof FIELDS / sizeof *FIELDS, "the supply closes the catalog");
 
 #undef F
 #undef I
@@ -437,7 +441,8 @@ bool ma_patch_read(FILE *file, ma_patch_document *document,
                            && strcmp(separator, "4")
                            && strcmp(separator, "5")
                            && strcmp(separator, "6")
-                           && strcmp(separator, "7"))) {
+                           && strcmp(separator, "7")
+                           && strcmp(separator, "8"))) {
                 set_error(error, line_number, "invalid or duplicate version");
                 return false;
             }
@@ -507,6 +512,12 @@ bool ma_patch_read(FILE *file, ma_patch_document *document,
         return false;
     }
     required &= ~shaper_fields;
+    uint64_t supply_field = version < 8 ? UINT64_C(1) << SUPPLY_FIELD : 0;
+    if (seen & supply_field) {
+        set_error(error, line_number, "the supply field requires patch version 8");
+        return false;
+    }
+    required &= ~supply_field;
     /* Earlier versions predate a block: its fields are refused and the
      * block stays at the reader's zero, the bypass the compiled bank uses. */
     uint64_t newer = version == 1 ? raster_fields | bcs_fields | glas_fields
@@ -549,10 +560,12 @@ bool ma_patch_write(FILE *file, const ma_patch_document *document) {
     const ma_patch *v = &document->value;
     bool shaped = v->vco1.tri_sine_level != 0.0f || v->vco1.tri_saw_level != 0.0f
                || v->vco2.tri_sine_level != 0.0f || v->vco2.tri_saw_level != 0.0f;
+    bool supplied = v->vco_supply != 0.0f;
+    shaped = shaped || supplied;
     bool analog = shaped || v->vco_analog != 0.0f || v->vco_dead_time != 0.0f;
-    int version = shaped ? 7 : analog ? 6 : racked ? 5 : 4;
-    size_t count = shaped ? sizeof FIELDS / sizeof *FIELDS
-                 : analog ? SHAPER_FIRST_FIELD : VCO_FIRST_FIELD;
+    int version = supplied ? 8 : shaped ? 7 : analog ? 6 : racked ? 5 : 4;
+    size_t count = supplied ? sizeof FIELDS / sizeof *FIELDS
+                 : shaped ? SUPPLY_FIELD : analog ? SHAPER_FIRST_FIELD : VCO_FIRST_FIELD;
     if (fprintf(file, "mamutanalog_patch=%d\nname=%s\n", version, document->name) < 0)
         return false;
     for (size_t i = 0; i < count; i++) {

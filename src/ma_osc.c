@@ -58,6 +58,10 @@ ma_source_frame ma_voice_prepare_source_frame_guarded(
         .vco1_swell = s->vco_swell[0],
         .vco2_swell = s->vco_swell[1],
         .saw_bow = s->vco_bow,
+        .couple_hz = s->vco_couple_hz,
+        .couple_p = s->vco_couple_p,
+        .couple_q = s->vco_couple_q,
+        .couple_jump = s->vco_couple_jump,
     };
     ml_source src = {};
     ml_prepare_source(&x, filter_modulation, &src);
@@ -86,6 +90,10 @@ ma_source_frame ma_voice_prepare_source_frame_guarded(
         .vco1_swell = src.vco1_tri.swell,
         .vco2_swell = src.vco2_tri.swell,
         .saw_bow = src.saw_bow,
+        .couple_hz = src.couple_hz,
+        .couple_p = src.couple_p,
+        .couple_q = src.couple_q,
+        .couple_jump = src.couple_jump,
         .envelope_ratio = src.envelope_ratio,
         .sync = src.sync,
     };
@@ -173,6 +181,10 @@ static ml_source source_of(const ma_synth *s, const ma_render_controls *controls
         .vco1_tri = ml_tri_view(ml_tri_of(f->vco1_skew, f->vco1_swell), f->vco1_triangle_gain),
         .vco2_tri = ml_tri_view(ml_tri_of(f->vco2_skew, f->vco2_swell), f->vco2_triangle_gain),
         .saw_bow = f->saw_bow,
+        .couple_hz = f->couple_hz,
+        .couple_p = f->couple_p,
+        .couple_q = f->couple_q,
+        .couple_jump = f->couple_jump,
         .envelope_ratio = f->envelope_ratio,
         .sync = f->sync,
         .base_hz = base_hz,

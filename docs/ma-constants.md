@@ -175,6 +175,21 @@ static curve `x * odd(x^2) + even(x^2)` and the switched pair
 `pulse(p, r, d) * (x - 1) / 2`, whose two steps take the pulse's smoothed
 edges. Their levels join the waveform divisor after the older four.
 
+With `vco.supply` (and the law on, docs/ma-vco-plan.md V4) the two cores
+pull each other near unison, the octave and the fifth, as two VCO-2 cores on
+one supply do in SPICE [ALGORITHM REVISION 2026-11-14]. Once a frame, before
+the substeps, with `psi = wrap(q * p2 - p * p1)` (Q48, exact) and the lock
+range `L` from the front end:
+
+```text
+G      = 2 L (wrap(psi - jump) - 1/2)         jump = 0: the resets together
+p1    -= G / (2 p) / sample_rate              (turns, on the Q48 phase)
+p2    += G / (2 q) / sample_rate
+```
+
+`L = 0` (no law, or an interval that does not couple) leaves both phases bit
+for bit.
+
 Under cross-mod VCO1's step changes every substep. Its increment is then
 `pulse * 4d * gain(d0)` and its seed is `seed(p, d0)`, with `d0` the frame's
 unmodulated step [DECISION: the gain follows the note, not the modulation].

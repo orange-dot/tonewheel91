@@ -715,3 +715,12 @@ $(BUILD)/test_ma_vco_shape: test/ma_vco_shape.c $(MA_RUNTIME_OBJS) | $(BUILD)
 .PHONY: check-ma-vco-shape
 check-ma-vco-shape: $(BUILD)/test_ma_vco_shape
 	$(BUILD)/test_ma_vco_shape
+
+# Two cores on one supply (docs/ma-vco-plan.md, V4): the coupling against
+# the SPICE pair, locking, the front end's lock range, both render paths.
+test: check-ma-vco-couple
+$(BUILD)/test_ma_vco_couple: test/ma_vco_couple.c $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma-vco-couple
+check-ma-vco-couple: $(BUILD)/test_ma_vco_couple
+	$(BUILD)/test_ma_vco_couple

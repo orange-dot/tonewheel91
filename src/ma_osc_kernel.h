@@ -231,6 +231,7 @@ typedef struct {
     ml_u64 vco2_step_q48;
     ml_tri vco1_tri, vco2_tri;
     ml_f saw_bow;
+    ml_f couple_hz, couple_p, couple_q, couple_jump;   /* V4; couple_hz 0 = none */
     ml_f envelope_ratio, sync;
     ml_f base_hz, noise, guard1, guard2;
     ml_f crossmod_amount, vco2_level, noise_level;
@@ -250,6 +251,7 @@ typedef struct {
     ml_f sync_amount, sync_softness, crossmod_amount;
     ml_f vco2_level, noise_level, guard1, guard2;
     ml_f vco1_skew, vco2_skew, vco1_swell, vco2_swell, saw_bow;   /* V2, V3 */
+    ml_f couple_hz, couple_p, couple_q, couple_jump;               /* V4 */
 } ml_source_in;
 
 static inline ml_shapes ml_shapes_on(const ml_vco *c) {
@@ -295,6 +297,10 @@ static inline void ml_prepare_source(const ml_source_in *x, ml_f modulation, ml_
     src->vco1_tri = ml_tri_of(x->vco1_skew, x->vco1_swell);
     src->vco2_tri = ml_tri_of(x->vco2_skew, x->vco2_swell);
     src->saw_bow = x->saw_bow;
+    src->couple_hz = x->couple_hz;
+    src->couple_p = x->couple_p;
+    src->couple_q = x->couple_q;
+    src->couple_jump = x->couple_jump;
     src->vco1_seed_step = vco1_step;
     src->vco1_triangle_gain = ml_triangle_gain(vco1_step, src->vco1_tri.h);
     src->vco1_hz = ml_keep(crossmod_off, vco1_hz);
@@ -667,7 +673,44 @@ static inline ml_f ml_source_substep(ml_osc_pair *v, const ml_source *in) {
 
 /* VCO2's guard target, the triangle seeds, eight 8x source substeps, and
  * both guard steps. */
+/* x * n for n = 1, 2 or 3, on Q48 phases (mod 2^48). */
+static inline ml_u64 ml_u64_times(ml_u64 x, ml_f n) {
+    ml_u64 sum = ml_u64_add(x, ml_u64_keep(n >= 2.0f, x));
+    return ml_u64_add(sum, ml_u64_keep(n >= 3.0f, x));
+}
+
+/* A signed number of turns added to a Q48 phase. */
+static inline ml_u64 ml_phase_nudge(ml_u64 phase_q48, ml_f turns) {
+    ml_u64 up = ml_f_to_u64(ml_if(turns > 0.0f, turns, 0.0f) * 0x1p48f);
+    ml_u64 down = ml_f_to_u64(ml_if(turns < 0.0f, -turns, 0.0f) * 0x1p48f);
+    return ml_u64_and(ml_u64_sub(ml_u64_add(phase_q48, up), down), ML_U64(PHASE_MASK_Q48));
+}
+
+/* Two cores on one supply (docs/ma-vco-plan.md, V4): near p:q (VCO2 over
+ * VCO1) each core is pulled by the other's resets. With psi = q phi2 - p phi1
+ * the phase difference runs at its detune plus
+ *   G(psi) = 2 L (wrap(psi - jump) - 1/2),
+ * a sawtooth that locks psi at `jump` while the detune stays within L (Hz),
+ * as the pair of VCO-2 cores does in SPICE (driver/spice/vco/vco4.py). VCO1
+ * takes -G / 2p and VCO2 +G / 2q, once a frame, as a nudge of the phase.
+ * L = 0 leaves both phases bit for bit. */
+static inline void ml_couple(ml_osc_pair *v, const ml_source *in) {
+    ml_m on = in->couple_hz > 0.0f;
+    if (!ml_any(on)) return;
+    ml_u64 psi_q48 = ml_u64_and(ml_u64_sub(ml_u64_add(ml_u64_times(v->vco2.phase_q48, in->couple_q),
+                                                      ML_U64(PHASE_ONE_Q48 * 4)),
+                                           ml_u64_times(v->vco1.phase_q48, in->couple_p)),
+                                ML_U64(PHASE_MASK_Q48));
+    ml_f g = 2.0f * in->couple_hz * (ml_wrap(ml_turns(psi_q48) - in->couple_jump) - 0.5f);
+    ml_f frame = 8.0f / in->rate_hz;                /* seconds per frame */
+    ml_f k1 = ml_keep(on, -0.5f * g * frame / ml_if(on, in->couple_p, 1.0f));
+    ml_f k2 = ml_keep(on, 0.5f * g * frame / ml_if(on, in->couple_q, 1.0f));
+    v->vco1.phase_q48 = ml_u64_if(on, ml_phase_nudge(v->vco1.phase_q48, k1), v->vco1.phase_q48);
+    v->vco2.phase_q48 = ml_u64_if(on, ml_phase_nudge(v->vco2.phase_q48, k2), v->vco2.phase_q48);
+}
+
 static inline void ml_source_block(ml_osc_pair *v, const ml_source *in, ml_f source[8]) {
+    ml_couple(v, in);
     ml_set_guard_target(&v->vco2, ml_if(in->vco2_hz < in->guard_hz, 1.0f, 0.0f), in);
     ml_seed_triangle(&v->vco1, in->vco1_seed_step, in->vco1_triangle_gain, in->vco1_tri.rise);
     ml_seed_triangle(&v->vco2, in->vco2_step, in->vco2_triangle_gain, in->vco2_tri.rise);

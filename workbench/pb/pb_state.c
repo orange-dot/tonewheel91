@@ -148,14 +148,19 @@ static uint64_t section_mask(const reader *r, section s) {
 }
 
 /* The [snapshot] blocks a file may leave out, whole: the oscillator-pitch
- * block (0) and the triangle shapers (1), which snapshots saved before them
- * do not have. A missing block stays at zero, its bypass. */
+ * block (0), the triangle shapers (1) and the cores' supply (2), which
+ * snapshots saved before them do not have. A missing block stays at zero,
+ * its bypass. */
 static uint64_t snapshot_optional(int block) {
     uint64_t mask = 0;
     ma_patch_field_info info;
-    for (size_t j = 0; ma_patch_field_info_at(j, &info); j++)
-        if (block ? strstr(info.name, ".tri_") != nullptr : !strncmp(info.name, "vco.", 4))
-            mask |= UINT64_C(1) << (j + 1);
+    for (size_t j = 0; ma_patch_field_info_at(j, &info); j++) {
+        bool supply = !strcmp(info.name, "vco.supply");
+        bool in = block == 2 ? supply
+                : block == 1 ? strstr(info.name, ".tri_") != nullptr
+                : !strncmp(info.name, "vco.", 4) && !supply;
+        if (in) mask |= UINT64_C(1) << (j + 1);
+    }
     return mask;
 }
 
@@ -163,8 +168,9 @@ static bool close_section(reader *r) {
     if (r->sec == SEC_TOP) return true;
     uint64_t full = section_mask(r, r->sec);
     bool complete = r->seen == full;
-    for (int leave = 1; r->sec == SEC_SNAPSHOT && !complete && leave < 4; leave++) {
-        uint64_t left = (leave & 1 ? snapshot_optional(0) : 0) | (leave & 2 ? snapshot_optional(1) : 0);
+    for (int leave = 1; r->sec == SEC_SNAPSHOT && !complete && leave < 8; leave++) {
+        uint64_t left = (leave & 1 ? snapshot_optional(0) : 0) | (leave & 2 ? snapshot_optional(1) : 0)
+                      | (leave & 4 ? snapshot_optional(2) : 0);
         complete = r->seen == (full & ~left);
     }
     if (!complete) return fail(r, "%s is missing keys", SECTION_NAMES[r->sec]);

@@ -184,6 +184,7 @@ typedef struct {
     float vco1_skew, vco2_skew;     /* V2: the triangles' rise less 0.5 */
     float vco1_swell, vco2_swell;   /* V3: the triangle the shapers see, less 1 */
     float saw_bow;                  /* V2: VCO-2's saw bow, 0 = straight */
+    float couple_hz, couple_p, couple_q, couple_jump;   /* V4: lock range, p:q, jump */
     float envelope_ratio;
     float sync;
 } ma_source_frame;
@@ -360,6 +361,25 @@ static constexpr float VCO_SWELL_TOP_HZ = 20000.0f;
 /* VCO-2's saw bow: 30.5 mV in the middle of a 5.06 V ramp at C4, 29.3 to
  * 32.1 mV from C2 to C8 (docs/ma-vco2-spice.md); as a share of the span 2. */
 static constexpr float VCO_SAW_BOW = 0.01205f;
+
+/* ---- two cores on one supply (docs/ma-vco-plan.md, V4) ----
+ * Two VCO-2 cores on a shared 12 V / 8 V supply in SPICE
+ * (driver/spice/vco/vco4.py): near p:q (VCO2 over VCO1) the phase
+ * difference q phi2 - p phi1 runs at its detune plus a sawtooth of half
+ * height L that locks it at `jump`. L over the lower core's frequency is the
+ * same from C2 to C6; it is `good` for a board with 1 ohm and 10 uF on its
+ * rails and `soft` for 10 ohm and 100 nF. Every pair locks with its resets
+ * together: the jump is at psi = 0 in the core's phase (0 at the reset)
+ * within 0.03 in every SPICE case. The intervals below VCO1 mirror the ones
+ * above it. Other intervals do not couple. */
+typedef struct { int8_t interval, p, q; float jump, good, soft_octaves; } vco_couple_row;
+static constexpr vco_couple_row VCO_COUPLE[5] = {     /* soft = good * 2^soft_octaves */
+    { 0, 1, 1, 0.0f, 0.000106f, 3.2944f },   /* soft 0.00104 */
+    { 12, 2, 1, 0.0f, 0.00016f, 3.2854f },   /* soft 0.00156 */
+    { -12, 1, 2, 0.0f, 0.00016f, 3.2854f },   /* soft 0.00156 */
+    { 7, 3, 2, 0.0f, 0.000132f, 3.3219f },   /* soft 0.00132 */
+    { -7, 2, 3, 0.0f, 0.000132f, 3.3219f },   /* soft 0.00132 */
+};
 
 /* ---- the triangle core's shapers (docs/ma-vco-plan.md, V3) ----
  * The sine pair's static curve (driver/spice/vco/shapers.py fit), trimmed at

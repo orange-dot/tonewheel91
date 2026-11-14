@@ -1726,3 +1726,18 @@ Notes:
   the swing, and with it the saw's step, grows nearly straight in hertz
   (-7.7 % at 18.7 kHz), now measured instead of extrapolated; the sine's
   H3 returns above 6 kHz. Gate 52 checks.
+
+### 2026-11-14 — V4: two cores on one supply
+
+- SPICE (`vco4.py`): two VCO-2 cores (boards A, B) on shared 12 V / 8 V rails
+  through Rs and a bus capacitor. The coupling is a sawtooth in the phase
+  difference that locks the resets together; constant in cents C2..C6; at
+  unison 0.19 cents for 1 ohm / 10 uF, 1.8 cents for 10 ohm / 100 nF; the
+  octave and the fifth lock a little more strongly. `docs/ma-vco4-spice.md`.
+- A first jump estimate was off by up to 0.05 (a fit cannot place a jump
+  inside its left-out zone) and the octave and fifth by half a turn (SPICE
+  timed cycles mid-ramp); located directly, every jump is at the resets.
+- Core: `vco.supply` (.mapatch v8), `ml_couple` nudges both phases once a
+  frame; Patchbench `supply` in the SYNC module.
+- Gate `make check-ma-vco-couple` (19 checks). Listening renders in
+  `build/vco/vco4/listen/`; operator verdict open.

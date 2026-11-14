@@ -63,6 +63,7 @@ hashes included — reproduce bit-for-bit.
     make check-rk1   # Mamut insert rack (EQ, utility) gates; docs/ma-rack-rk1.md
     make check-ma-vco  # circuit-derived oscillator pitch against the SPICE study; docs/ma-vco-plan.md
     make check-ma-vco-shape  # circuit-derived triangle, saw bow and triangle shapers; docs/ma-vco-plan.md
+    make check-ma-vco-couple # two oscillator cores on one supply (locking); docs/ma-vco4-spice.md
     make check-ma3-shows # new Blues/all-Mamut Hurt score checks; no audio
     make bench-ma  # five-card CPU/wall timing and pinned PCM checks (host only)
     make audition-ma2-4  # dry chord/unison comparison: character 0 / .20 / 1

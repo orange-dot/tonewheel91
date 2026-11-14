@@ -1,7 +1,7 @@
 #ifndef MA_PATCH_FILE_H
 #define MA_PATCH_FILE_H
 
-/* Hosted Mamut Analog patch text (versions 1..7) and its editor-facing field
+/* Hosted Mamut Analog patch text (versions 1..8) and its editor-facing field
  * catalog.  The freestanding core knows only the concrete ma_patch value. */
 
 #include <stdbool.h>

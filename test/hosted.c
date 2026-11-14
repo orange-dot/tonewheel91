@@ -366,7 +366,7 @@ static void test_ma_patch_files(void) {
                            &invalid, &error)
           && strstr(error.message, "domain"),
           "fractional MA patch integer was accepted");
-    CHECK(!read_patch_text("mamutanalog_patch=8\nname=x\n",
+    CHECK(!read_patch_text("mamutanalog_patch=9\nname=x\n",
                            &invalid, &error)
           && strstr(error.message, "version"),
           "unsupported MA patch version was accepted");
@@ -428,7 +428,7 @@ static void test_ma_patch_files(void) {
               builtins[i].name, error.line, error.message);
     }
 
-    CHECK(ma_patch_field_count() == 61,
+    CHECK(ma_patch_field_count() == 62,
           "MA patch field catalog count changed unexpectedly");
     ma_patch_field_info field = { 0 };
     double value = 0.0;
@@ -579,6 +579,32 @@ static void test_ma_patch_shapers(void) {
           && back.value.vco2.tri_saw_level == 0, "an older patch did not load with the shapers off");
 }
 
+/* Version 8 carries the cores' supply (docs/ma-vco-plan.md, V4) with every
+ * earlier block; without it a patch keeps writing version 7 or below. */
+static void test_ma_patch_supply(void) {
+    ma_patch_document plain = { .name = "Lead", .value = ma_patch_lead };
+    static char text[16384], older[16384];
+    CHECK(patch_text(&plain, older, sizeof older) && !strstr(older, "vco.supply"),
+          "a patch without the supply wrote its key");
+    ma_patch_document supplied = plain;
+    supplied.value.vco_analog = 1;
+    supplied.value.vco_supply = .5f;
+    CHECK(patch_text(&supplied, text, sizeof text) && !strncmp(text, "mamutanalog_patch=8\n", 20)
+          && strstr(text, "vco.supply=0.5\n") && strstr(text, "vco1.tri_sine=0\n"),
+          "the supply did not write as version 8 with the earlier blocks");
+    ma_patch_document back = { 0 };
+    ma_patch_error error = { 0 };
+    CHECK(read_patch_text(text, &back, &error) && !memcmp(&back.value, &supplied.value, sizeof supplied.value),
+          "the supply did not round-trip: line %u %s", error.line, error.message);
+    static char edited[16384];
+    snprintf(edited, sizeof edited, "%s", text);
+    CHECK(edit_text(edited, sizeof edited, "mamutanalog_patch=8", "mamutanalog_patch=7")
+          && !read_patch_text(edited, &back, &error) && strstr(error.message, "version 8"),
+          "a version 7 patch with the supply was accepted: '%s'", error.message);
+    CHECK(read_patch_text(older, &back, &error) && back.value.vco_supply == 0,
+          "an older patch did not load with the supply at zero");
+}
+
 /* RK1: .mapatch version 5 carries the rack (docs/ma-rack-plan.md RKD12). */
 static void test_ma_patch_rack(void) {
     ma_patch_document plain = { .name = "Lead", .value = ma_patch_lead };
@@ -664,6 +690,7 @@ int main(void) {
     test_ma_patch_rack();
     test_ma_patch_vco();
     test_ma_patch_shapers();
+    test_ma_patch_supply();
     printf("hosted: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
 }

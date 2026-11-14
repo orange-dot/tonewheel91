@@ -50,6 +50,8 @@ static const pb_field FIELDS[] = {
     /* The triangle core's shapers (docs/ma-vco-plan.md, V3), per oscillator. */
     L("vco1.tri_sine", PB_MOD_VCO1, "tri sine", 0), L("vco1.tri_saw", PB_MOD_VCO1, "tri saw", 0),
     L("vco2.tri_sine", PB_MOD_VCO2, "tri sine", 0), L("vco2.tri_saw", PB_MOD_VCO2, "tri saw", 0),
+    /* The two cores' shared supply (V4). */
+    L("vco.supply", PB_MOD_SYNC, "supply", 0),
 };
 #undef L
 

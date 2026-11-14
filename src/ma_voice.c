@@ -257,7 +257,31 @@ static void analog_shape(ma_synth *s, float amount, float octaves1, float octave
     s->vco_bow = amount * VCO_SAW_BOW;
 }
 
+/* 2^x for 0 <= x <= 4. */
+static float vco_exp2(float x) {
+    float q = ma_octave_ratio_small(x * (1.0f / 16.0f));
+    for (int i = 0; i < 4; i++) q *= q;
+    return q;
+}
+
+/* The two cores' coupling this frame (V4): the row for VCO2's interval, the
+ * supply between the two measured boards (geometric), the amount, and the
+ * lower core's frequency. */
+static void analog_couple(ma_synth *s, float amount, float hz1, float hz2) {
+    s->vco_couple_hz = 0.0f;
+    for (unsigned i = 0; i < sizeof VCO_COUPLE / sizeof *VCO_COUPLE; i++) {
+        const vco_couple_row *r = &VCO_COUPLE[i];
+        if (r->interval != s->vco2_interval) continue;
+        float rel = r->good * vco_exp2(s->vco_supply * r->soft_octaves);
+        s->vco_couple_hz = amount * rel * (hz1 < hz2 ? hz1 : hz2);
+        s->vco_couple_p = (float)r->p;
+        s->vco_couple_q = (float)r->q;
+        s->vco_couple_jump = r->jump;
+    }
+}
+
 static void plain_shape(ma_synth *s) {
+    s->vco_couple_hz = 0.0f;
     s->vco2_bend = 0.0f;
     s->vco_skew[0] = s->vco_skew[1] = 0.0f;
     s->vco_swell[0] = s->vco_swell[1] = 0.0f;
@@ -291,6 +315,7 @@ static float analog_pitch(ma_synth *s, float base_hz, float note_position,
         card ? temp + amount * c->vco2_temp_k : 0.0f);
     s->vco2_bend = vco2_hz / (ratio * vco1_hz) - 1.0f;
     analog_shape(s, amount, octaves, octaves2, vco1_hz, vco2_hz);
+    analog_couple(s, amount, vco1_hz, vco2_hz);
     return vco1_hz;
 }
 

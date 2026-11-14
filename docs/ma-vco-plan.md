@@ -5,7 +5,8 @@ studies and this document), **V1 implemented** 2026-11-12 (the pitch law, its
 two patch controls, file version 6, the Patchbench controls), **V2 and V3
 implemented** 2026-11-14 (the skewed triangle and the saw's bow under the
 same amount; the two triangle shapers as new levels, file version 7);
-listening open for all three. V4 is not started.
+listening open for all three. **V4 implemented** 2026-11-14 (the two cores'
+coupling on a shared supply, `vco.supply`, file version 8).
 
 Operator direction: the instrument's character should come from analog
 oscillators. The method is the one proposed for VCF-1: simulate a circuit in
@@ -67,6 +68,11 @@ and accepted them.
 | VD17 | **The sine is the pair's static curve**, trimmed at A4, as an odd and an even polynomial (six terms each, within 5e-5). The saw is the switched pair taken as linear (the stage is -61 dB from a line), `pulse * (x - 1) / 2`, its steps smoothed by the pulse's own edges. Both see the state over the integrator's gain, so their ramps run between +-1 at the trim note. |
 | VD18 | **The swing the shapers see is what the saw saw in SPICE**: a cubic in octaves through zero at A4, fitted to the switched pair's step at nine pitches (27 Hz to 1.94 kHz); above that, measured on B1 with a range switch to 18.7 kHz (V2b, operator 2026-11-14), straight in hertz (4.14e-6 per Hz) from the join, held above 20 kHz. It is three quarters of the capacitor's swing growth (the swap comes just after the vertex). It scales with the amount. The range switch's own rise (it repeats the bass's skew) is not taken: VD12 stands. |
 | VD19 | **File version 7** carries the four shaper levels. A patch without them keeps writing version 6 or below byte for byte; versions below 7 refuse the keys. A Patchbench snapshot may leave out the pitch block and the shaper block, each whole. |
+| VD20 | **The cores couple through their supply** (V4, operator 2026-11-14): a new control `vco.supply`, 0 = a well-decoupled board (1 ohm, 10 uF), 1 = a soft rail (10 ohm, 100 nF), geometric in between; the coupling scales with `vco.analog`, so amount zero is still the old voice. |
+| VD21 | **The coupling is the SPICE sawtooth**, not a sine: with `psi = q phi2 - p phi1`, `G(psi) = 2 L (wrap(psi) - 1/2)`, the jump at the resets (psi = 0, within 0.03 of every case), `L` a constant share of the lower core's frequency (C2 to C6). |
+| VD22 | **Unison, the octave and the fifth**, above and below VCO1 (operator chose both intervals measured); the intervals below mirror the ones above. Other intervals do not couple. |
+| VD23 | **A phase nudge once a frame**, split evenly: VCO1 by -G / 2p, VCO2 by +G / 2q, in the kernel, where the lanes hold the phases. About 1e-5 turn a frame; the steps, the BLEPs and the triangles do not change. |
+| VD24 | **File version 8** carries `vco.supply`; a patch without it keeps writing version 7 or below. Patchbench snapshots may leave it out on its own. |
 
 ## 3. Steps
 
@@ -77,7 +83,7 @@ and accepted them.
 | V2 | Shape: the triangle's unequal ramps (B1) and the saw's bow (VCO-2). Changes the oscillator kernel and the lanes | implemented, listening open |
 | V3 | Shapers that B1 lacks (triangle to sine, triangle to saw), from new netlists | implemented, listening open |
 | V2b | The shape above B1's 1.94 kHz: B1 with a range switch, both shapers, to 18.7 kHz | measured and in the core 2026-11-14 |
-| V4 | Two cores sharing a supply: locking near unison | not started; B1's supply rejection (±0.26 cents for ±5 %) says it needs a deliberately soft supply |
+| V4 | Two cores sharing a supply: locking near unison, the octave and the fifth | implemented 2026-11-14, listening open |
 
 ## 4. V1 as built
 
@@ -156,6 +162,31 @@ the step: 0.06 after 400 random pitches on one voice (no pool, where every
 note re-seeds). The pull of VD14 removes it for skewed triangles; doing the
 same for the old one would change the pinned signatures.
 
+## 5b. V4 as built
+
+Evidence: `docs/ma-vco4-spice.md`.
+
+- **Front end**: `analog_couple` in `src/ma_voice.c`: the row for VCO2's
+  interval (`VCO_COUPLE` in `src/ma_voice_impl.h`), the supply between the
+  two boards, the amount, the lower core's frequency. The synth carries
+  `vco_couple_hz` (0 = none), p, q and the jump.
+- **Kernel**: `ml_couple` in `src/ma_osc_kernel.h`, first in
+  `ml_source_block`: psi from the two Q48 phases, the sawtooth, the two
+  nudges.
+- **Files**: `driver/ma_patch_file.c` (version 8), `workbench/pb/pb_state.c`.
+- **Patchbench**: `supply` under `dead time` in "SYNC · XMOD · PITCH".
+
+Gate `make check-ma-vco-couple` (`test/ma_vco_couple.c`, 19 checks):
+
+| Check | Result |
+| --- | --- |
+| A voice's sawtooth against SPICE, unison, octave, fifth, both supplies | lock within 1.5 %, jump within 0.03 |
+| Soft rail, unison, 1 cent apart | locked (mean beat 0.0000 Hz), held at the resets |
+| Soft rail, unison, 3 cents apart | beats at 0.66 Hz against 0.76 free |
+| The front end's lock range against the table, 7 intervals, 3 supplies, 3 notes | within 0.4 % (the rest is zero) |
+| The supply without the law | no coupling |
+| Pool block render against the frame-by-frame tick, coupling on | 8192 frames, 0 differ |
+
 ## 6. Open
 
 - Operator: listening, in the Patchbench. Suggested: a patch with two
@@ -173,3 +204,8 @@ same for the old one would change the pinned signatures.
   section 5), then the Patchbench. The core's sine has less third harmonic
   than the board's (straight ramps), B1's ramp bow is not modelled.
 - Nominal parts only for both shapers; no spread across cards.
+- V4 listening: `build/vco/vco4/listen/` (SPICE pair against the core's,
+  and the core's pair with and without coupling), then `supply` in the
+  Patchbench. Only the rails couple in the study; a board that takes its
+  pitch trim from the same rail would couple more. How the pull is shared
+  between the cores is assumed even.

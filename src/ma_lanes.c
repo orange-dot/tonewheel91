@@ -139,6 +139,8 @@ typedef struct {
     /* the triangles' rise and swing, and the saw's bow (V2, V3) */
     alignas(32) float skew1[MA_LANES], skew2[MA_LANES], swell1[MA_LANES], swell2[MA_LANES];
     alignas(32) float bow[MA_LANES];
+    /* the two cores' coupling (V4): lock range (0 = none), p, q, jump */
+    alignas(32) float couple[4][MA_LANES];
     alignas(32) float div1[MA_LANES], div2[MA_LANES], mixdiv[MA_LANES], rate[MA_LANES];
     alignas(32) float v1hz[MA_LANES], v1step[MA_LANES], v2hz[MA_LANES], v2step[MA_LANES];
     /* triangle integrator gain and unit-pulse increment */
@@ -185,6 +187,10 @@ static void ml_benign(ml_in *in) {
     in->swell1[l] = f->source.vco1_swell;
     in->swell2[l] = f->source.vco2_swell;
     in->bow[l] = f->source.saw_bow;
+    in->couple[0][l] = f->source.couple_hz;
+    in->couple[1][l] = f->source.couple_p;
+    in->couple[2][l] = f->source.couple_q;
+    in->couple[3][l] = f->source.couple_jump;
     in->div1[l] = f->source.vco1_divisor;
     in->div2[l] = f->source.vco2_divisor;
     in->mixdiv[l] = f->source.mixer_divisor;
@@ -319,6 +325,10 @@ static ml_source ml_source_load(const ml_in *in) {
         .vco1_tri = ml_tri_view(ml_tri_of(ml_ld(in->skew1), ml_ld(in->swell1)), ml_ld(in->v1tg)),
         .vco2_tri = ml_tri_view(ml_tri_of(ml_ld(in->skew2), ml_ld(in->swell2)), ml_ld(in->v2tg)),
         .saw_bow = ml_ld(in->bow),
+        .couple_hz = ml_ld(in->couple[0]),
+        .couple_p = ml_ld(in->couple[1]),
+        .couple_q = ml_ld(in->couple[2]),
+        .couple_jump = ml_ld(in->couple[3]),
         .envelope_ratio = ml_ld(in->envr),
         .sync = ml_ld(in->sync),
         .base_hz = ml_ld(in->base),
@@ -457,6 +467,7 @@ typedef struct {
     float cutoff_max[MA_LANES], rate[MA_LANES];
     float vco[2][7][MA_LANES];                       /* saw pulse tri sine pw tsine tsaw */
     float skew[2][MA_LANES], swell[2][MA_LANES], bow[MA_LANES];
+    float couple[4][MA_LANES];
     float sync_amount[MA_LANES], sync_softness[MA_LANES], v2level[MA_LANES];
     float noise_level[MA_LANES], crossmod[MA_LANES], fine_cents[MA_LANES];
     float base[MA_LANES], interval[MA_LANES], g1[MA_LANES], g2[MA_LANES];
@@ -496,6 +507,8 @@ static void ml_front_gather(ml_front_in *x, unsigned l, const ma_synth *s,
         x->skew[k][l] = s->vco_skew[k]; x->swell[k][l] = s->vco_swell[k];
     }
     x->bow[l] = s->vco_bow;
+    x->couple[0][l] = s->vco_couple_hz; x->couple[1][l] = s->vco_couple_p;
+    x->couple[2][l] = s->vco_couple_q; x->couple[3][l] = s->vco_couple_jump;
     x->sync_amount[l] = c->sync_amount; x->sync_softness[l] = c->sync_softness;
     x->v2level[l] = c->vco2_level; x->noise_level[l] = c->noise_level;
     x->crossmod[l] = c->crossmod_amount; x->fine_cents[l] = c->vco2_fine_cents;
@@ -557,6 +570,10 @@ static void ml_front_math(const ml_front_in *x, ml_in *in, float cutoff_out[MA_L
         .vco1_swell = ml_ld(x->swell[0]),
         .vco2_swell = ml_ld(x->swell[1]),
         .saw_bow = ml_ld(x->bow),
+        .couple_hz = ml_ld(x->couple[0]),
+        .couple_p = ml_ld(x->couple[1]),
+        .couple_q = ml_ld(x->couple[2]),
+        .couple_jump = ml_ld(x->couple[3]),
     };
     ml_source src = {};
     ml_prepare_source(&source_in, level * amount, &src);
@@ -586,6 +603,9 @@ static void ml_front_math(const ml_front_in *x, ml_in *in, float cutoff_out[MA_L
     ml_store(in->swell1, src.vco1_tri.swell);
     ml_store(in->swell2, src.vco2_tri.swell);
     ml_store(in->bow, src.saw_bow);
+    for (int k = 0; k < 4; k++)
+        ml_store(in->couple[k], k == 0 ? src.couple_hz : k == 1 ? src.couple_p
+                                : k == 2 ? src.couple_q : src.couple_jump);
 }
 
 /* render_raster for the lanes in `on`, both 2x steps of one output sample,

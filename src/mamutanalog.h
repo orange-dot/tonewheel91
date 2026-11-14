@@ -99,6 +99,10 @@ typedef struct {
      * board without that trim (flat at the top). */
     float vco_analog;
     float vco_dead_time;
+    /* How soft the two cores' shared supply is (V4): 0 a well-decoupled
+     * board, 1 a 10 ohm / 100 nF rail; the cores pull each other near
+     * unison, the octave and the fifth. Scales with vco_analog. */
+    float vco_supply;
 } ma_patch;
 
 /* Compiled factory bank; hosted mirrors are not core dependencies. */
@@ -379,12 +383,16 @@ typedef struct {
     float vco2_fine_cents;
     float vco_analog;
     float vco_dead_time;
+    float vco_supply;
     float vco2_bend;        /* this frame: VCO2's law over VCO1's, minus one */
     /* this frame's circuit shapes (V2): each triangle's rise less 0.5, the
      * swing its shapers see less 1, and the saw's bow; all 0 without the law */
     float vco_skew[2];
     float vco_swell[2];
     float vco_bow;
+    /* this frame's coupling of the two cores (V4): lock range in Hz (0 =
+     * none), VCO2 over VCO1 near p:q, and the phase it locks at */
+    float vco_couple_hz, vco_couple_p, vco_couple_q, vco_couple_jump;
     float sync_amount;
     float sync_softness;
     float crossmod_amount;
@@ -534,6 +542,9 @@ void ma_synth_set_vco2(ma_synth *s, ma_vco_controls controls, float level,
  * of the reset dead time left untrimmed [0,1]. Not smoothed: an edit moves
  * the pitch by cents, without a phase step. */
 void ma_synth_set_vco_analog(ma_synth *s, float amount, float dead_time);
+/* How soft the two cores' shared supply is [0,1] (V4): their coupling near
+ * unison, the octave and the fifth, scaled by the analog amount. */
+void ma_synth_set_vco_supply(ma_synth *s, float supply);
 void ma_synth_set_oscillator_modulation(ma_synth *s, float sync_amount,
                                         float sync_softness,
                                         float crossmod_amount,
