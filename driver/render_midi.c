@@ -30,6 +30,7 @@
 #include "host_parse.h"
 #include "midi_map.h"
 #include "ma_midi_render.h"
+#include "ma_patch_file.h"
 #include "smf.h"
 #include "smf_schedule.h"
 #include "wav.h"
@@ -58,6 +59,7 @@ static void usage(const char *argv0) {
             "  --reverb-mix x     enable reverb, mix 0..1 (default disabled)\n"
             "  --reverb-size x    0..1 (default .65)\n"
             "  --reverb-damping x 0...99 (default .55)\n"
+            "  --rack path        Mamut insert rack from a .mapatch v5 file\n"
             "  -c list  MIDI channels to render, e.g. 0,4 (default: all)\n"
             "  -R digits  registration, nine digits (default 888000000)\n"
             "  -v mode  vibrato 0..6 = off,V1..V3,C1..C3 (default 0)\n"
@@ -89,6 +91,8 @@ typedef struct {
     ma_chorus_controls chorus;
     ma_reverb_controls reverb;
     unsigned rate;
+    ma_rack_spec rack;     /* --rack; empty = no rack attached */
+    const char *rack_path;
 } settings_t;
 
 static double render_ma(const smf_event *events, size_t count, const settings_t *s,
@@ -98,6 +102,13 @@ static double render_ma(const smf_event *events, size_t count, const settings_t 
         UINT16_MAX, events, event_frames, count)) return NAN;
     ma_effects_set_chorus(&renderer.midi.pool.effects, s->chorus);
     ma_effects_set_reverb(&renderer.midi.pool.effects, s->reverb);
+    static ma_rack rack;
+    if (!ma_rack_spec_empty(&s->rack)) {
+        ma_rack_init(&rack, (float)s->rate);
+        if (!ma_rack_apply(&rack, &s->rack)) return NAN;
+        ma_rack_settle(&rack);   /* a render starts with the rack in place */
+        ma_voice_pool_attach_rack(&renderer.midi.pool, &rack);
+    }
     for (size_t offset = 0; offset < frames;) {
         size_t n = frames - offset;
         if (n > s->block_frames) n = s->block_frames;
@@ -266,7 +277,7 @@ int main(int argc, char **argv) {
 
     enum { OPT_PATCH = 256, OPT_LIMIT, OPT_UNISON, OPT_DETUNE, OPT_SEED, OPT_BLOCK,
         OPT_CHORUS_MIX, OPT_CHORUS_DEPTH, OPT_CHORUS_RATE,
-        OPT_REVERB_MIX, OPT_REVERB_SIZE, OPT_REVERB_DAMPING };
+        OPT_REVERB_MIX, OPT_REVERB_SIZE, OPT_REVERB_DAMPING, OPT_RACK };
     static const struct option options[] = {
         {"patch", required_argument, NULL, OPT_PATCH},
         {"voice-limit", required_argument, NULL, OPT_LIMIT},
@@ -280,12 +291,13 @@ int main(int argc, char **argv) {
         {"reverb-mix", required_argument, NULL, OPT_REVERB_MIX},
         {"reverb-size", required_argument, NULL, OPT_REVERB_SIZE},
         {"reverb-damping", required_argument, NULL, OPT_REVERB_DAMPING},
+        {"rack", required_argument, NULL, OPT_RACK},
         {"help", no_argument, NULL, 'h'},
         {0},
     };
     int c;
     while ((c = getopt_long(argc, argv, "I:c:R:v:D:C:N:m:p:fg:w:r:t:o:h", options, NULL)) != -1) {
-        if (c >= OPT_PATCH && c <= OPT_REVERB_DAMPING) ma_options = true;
+        if (c >= OPT_PATCH && c <= OPT_RACK) ma_options = true;
         if (c > 0 && c < 256 && strchr("RvDCNmpfw", c)) legacy_options = true;
         switch (c) {
         case 'I':
@@ -335,6 +347,21 @@ int main(int argc, char **argv) {
             else if (c == OPT_REVERB_MIX) { st.reverb.mix = value; st.reverb.enabled = true; }
             else if (c == OPT_REVERB_SIZE) st.reverb.size = value;
             else st.reverb.damping = value;
+            break;
+        }
+        case OPT_RACK: {
+            static ma_patch_document doc;
+            ma_patch_error pe = { 0 };
+            if (!ma_patch_load(optarg, &doc, &pe)) {
+                fprintf(stderr, "%s: %s line %u: %s\n", argv[0], optarg, pe.line, pe.message);
+                return 2;
+            }
+            if (ma_rack_spec_empty(&doc.rack)) {
+                fprintf(stderr, "%s: %s carries no rack\n", argv[0], optarg);
+                return 2;
+            }
+            st.rack = doc.rack;
+            st.rack_path = optarg;
             break;
         }
         case 'c':
@@ -453,13 +480,18 @@ int main(int argc, char **argv) {
            / st.rate,
            tail_s, (double)st.rate);
     static const char *rot_name[4] = { "bypass", "chorale", "tremolo", "brake" };
-    if (st.instrument == INSTRUMENT_MAMUT)
+    if (st.instrument == INSTRUMENT_MAMUT) {
         printf("  instrument mamutanalog, patch %s, limit %u, unison %u, "
                "detune +/-%.2f cents, seed %" PRIu64 ", block %u, gain %g\n",
                st.patch_name, st.pool.limit, st.pool.unison_count,
                (double)st.pool.detune_cents, st.pool.session_seed,
                st.block_frames, (double)st.gain);
-    else if (st.instrument == INSTRUMENT_EP)
+        if (st.rack_path) {
+            unsigned blocks = 0;
+            for (unsigned i = 0; i < MA_RACK_SLOTS; i++) blocks += st.rack.slot[i].kind != MA_RACK_EMPTY;
+            printf("  rack %u block%s from %s\n", blocks, blocks == 1 ? "" : "s", st.rack_path);
+        }
+    } else if (st.instrument == INSTRUMENT_EP)
         printf("  instrument ep73, compass 28..100, drive %.2f, cabinet %.2f,"
                " condition %.2f, gain %g%s\n", (double)st.drive, (double)st.cab,
                (double)st.cond, (double)st.gain, st.fold ? ", octave-fold" : "");

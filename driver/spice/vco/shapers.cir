@@ -1,0 +1,48 @@
+* Mamut V3 study: the two shapers B1 lacks, hung on B1's buffered triangle.
+* A hand-written study circuit for the digital model, not a board design:
+* rails, bias and trims are ideal sources; parts are the lab's declared
+* engineering transistor models (models/*.lib). Included after the B1 DUT
+* (b1_gen.py extra=...) or by the static bench (shapers.py), which drive the
+* stage inputs SIN_B / W_B / W_SW directly.
+*
+* Parameters from the including bench:
+*   re_sin  emitter degeneration of the sine pair (ohm)
+*   vref    the saw's reference: TBUF at the top vertex, trimmed at A4
+*
+* ---- rails (ideal) ----
+VSH  VSH  0 12
+VEE  VEE  0 -12
+*
+* ---- triangle to sine: degenerated long-tailed pair, about 1 mA tail ----
+* Output is the collector of the reference side, so it rises with the input.
+XQS1 SIN_C1 SIN_B SIN_E1 BC547C
+XQS2 SINE   SIN_R SIN_E2 BC547C
+RSE1 SIN_E1 SIN_T {re_sin}
+RSE2 SIN_E2 SIN_T {re_sin}
+XQS3 SIN_T SIN_TB SIN_TE BC547C
+VSTB SIN_TB 0 -10
+RSTE SIN_TE VEE 1.3k
+RSC1 VSH SIN_C1 4.7k
+RSC2 VSH SINE   4.7k
+*
+* ---- triangle to saw: a degenerated pair (linear in the triangle) whose two
+* currents a switching quad swaps at every vertex, on B1's own square ----
+* While the triangle rises the output follows it; while it falls the output
+* follows its mirror image, so both halves rise. The reference sits at the
+* top vertex, where the swap then takes no step.
+XQW1 W_C1 W_B  W_E1 BC547C
+XQW2 W_C2 W_R  W_E2 BC547C
+RWE1 W_E1 W_T 2.2k
+RWE2 W_E2 W_T 2.2k
+XQW7 W_T W_TB W_TE BC547C
+VWTB W_TB 0 -10
+RWTE W_TE VEE 680
+VWR  W_R  0 {vref}
+XQW3 W_OP W_SW  W_C1 BC547C
+XQW4 W_ON W_SWR W_C1 BC547C
+XQW5 W_OP W_SWR W_C2 BC547C
+XQW6 W_ON W_SW  W_C2 BC547C
+VWSR W_SWR 0 6
+RWLP VSH W_OP 2.7k
+RWLN VSH W_ON 2.7k
+* the saw is v(W_ON) - v(W_OP), read by an ideal difference stage

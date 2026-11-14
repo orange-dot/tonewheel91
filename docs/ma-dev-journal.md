@@ -48,6 +48,12 @@ its internal sub-gates already has working code.
   their counts, and both compiler core-symbol audits pass.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
+- Insert rack: RK0 (plan and decisions) done 2026-11-11,
+  `docs/ma-rack-plan.md`. RK1 (`eq`, `utility`, `.mapatch` v5, `.wbpatch`
+  rack, `render_midi --rack`, Patchbench rack row) implemented the same day,
+  uncommitted; gates 1–7 pass, listening open (`docs/ma-rack-rk1.md`).
+  RK1b (8-band parametric EQ, EQ editor, AVX2 wavefront) the same day,
+  uncommitted (`docs/ma-rack-rk1b.md`).
 - Core implementation status: MA0, MA1, MA2-1 through MA2-7, MA2-DIG,
   MA2-BCS and MA2-PERF are closed. MA3-1 and MA3-2 are complete; MA3 remains open.
 
@@ -101,6 +107,9 @@ one.
 
 | Date | Decision | Reason |
 | --- | --- | --- |
+| 2026-11-11 | RK1b: replace RK1's four-section EQ with an up-to-8-band parametric EQ (six shapes, per-band crossfades, canonical specs, band keys in v5/.wbpatch) and a full EQ editor in the Patchbench; run settled EQ blocks as an AVX2 wavefront, block-wise in the pool render. | Operator asked for defined bands and widths (first 42), then accepted 8 for AVX2. A serial band chain vectorizes as a pipeline (lane k = band k on sample t-k), bit-identical to the scalar tick; the scalar path runs whenever anything ramps. |
+| 2026-11-11 | RK3 scope: one modulation bus (2 LFOs, follower on the rack input, note-triggered ADSR, CC116..119 knobs, effective macros, wheel, pressure) with 16 routes; RK3b feeds the same bus into the smoothed global voice controls directly after RK3; macros may drive effects through explicit routes (MA3-2 rule amended); `.mapatch` v6. | Operator decisions 1–3 of the RK3 discussion. Modulating after the smoother keeps fast LFOs intact; one-way source-to-source routing removes cycles; skipping the sum keeps exact bypass; a shared per-frame scalar keeps scalar and lanes bit-identical. |
+| 2026-11-11 | Open the insert-rack track (RK0..RK4): a closed 8-slot bus chain of compiled block kinds, caller-owned state outside the pool, `.mapatch` v5 `rack.<n>.*` keys; amend MAD8 and clarify MAD4. RK1 lands `eq`, `utility` and the Patchbench rack strip. | The operator wants reusable blocks, starting with an EQ, that the Patchbench can insert anywhere, so sounds are built from structure and not only from parameters. A closed enum gives that without a plug-in surface; an empty rack keeps every pinned signature. |
 | 2026-09-08 | Close MA2-6 on the x86-64 Linux host; remove Raspberry Pi from target scope and accept the operator listening verdict. | GCC/Clang/sanitizer gates, deterministic MA2-4/5 listening artifacts and host benchmarks pass; the remaining host budget warning is recorded as follow-up work rather than a release blocker. |
 | 2026-09-06 | Close MA2-5 with a raw-card stereo entry point, unnormalized sum and one shared body. | Center-card MA1 and nine older PCM anchors stay exact. Pan, crossfeed, mono transitions and shared-body routing pass; single-timbre shared controls belong to card 0. |
 | 2026-09-06 | Close MA2-4 with bank character `.20`, independent A/D/R time biases and a continuous 32-sample walk clock. | Physical calibration survives note and patch events; exact zero PCM, numeric routing probes and deterministic listening evidence pass. Sustain levels remain authored. |
@@ -1628,3 +1637,92 @@ Notes:
   stopped inlining `ml_preview` once `ma_lanes.c` grew; it is now
   `[[gnu::always_inline]]`.
 - `docs/ma-single-source-20261110.md`.
+
+### 2026-11-11 — RK0: insert rack plan
+
+- Operator request: reusable, insertable blocks for the Patchbench,
+  starting with an EQ. Organ and ep73 are frozen and their conclusions do
+  not bind this line.
+- `docs/ma-rack-plan.md` records RKD1..RKD12, the block waves, RK1..RK4 and
+  the RK1 gates. The prefix is `RK` because `R0..R4` name the 2026-11-09
+  refactor steps.
+- Backlog amended: MAD8 (closed rack, `.mapatch` v5), MAD4 (voice filter
+  only), out-of-scope note, status register row.
+- RK2 re-pinning confirmed by the operator the same day: wet signatures
+  are re-pinned once when chorus and reverb move into the rack and safety
+  moves after them (RKD9); dry signatures stay bit-identical.
+- No code changed; no PCM moved.
+- RK3 discussion closed the same day: operator approved macros as effect
+  sources through explicit routes, RK3b directly after RK3, and left the
+  source list to the plan; added `noteenv` (pumping/swell), 16 shared
+  routes and one-way control-source modulation of LFO rate/depth.
+  RKD13..RKD20 and the RK3b section in `docs/ma-rack-plan.md`.
+
+### 2026-11-11 — RK1: insert rack host, EQ, utility, Patchbench row
+
+- Core `src/ma_rack.c`: chain host (LIS-kept order, 10 ms fades, 6 ms
+  parameter ramps, `ma_rack_settle`), `eq` (four TPT SVF sections, analytic
+  within 0.0002 dB at 44.1..192 kHz), `utility`. Hook between the output DC
+  block and master (RKD9).
+- Hosted: `.mapatch` v5 `rack.<n>.*` (an empty rack still writes v4 byte for
+  byte); `.wbpatch` `wbpatch=2` + `rack=1` (a child otherwise inherits);
+  `render_midi --rack`; `bench_ma3_perf` `MA3_PERF_RACK`.
+- Patchbench: rack row (8 cells, editor, measured response pictures, drag
+  on the bell), rack in undo, A/B, save/derive/flatten/autosave, bounce and
+  audition; `ma_rack` in `pb_engine` with its own mailbox, re-attached on
+  pool swaps.
+- Gates: GCC/Clang/sanitizer `make test` green with 0 warnings, every pin
+  unchanged; perf A/B (`build/rk1-perf-20261111-01/`) hook 0.998x and empty
+  rack 1.000x median, eight active EQs +18 % (lanes); rack input level
+  -28 dBFS per note, -20 dBFS per chord before master, all factory patches.
+- One existing test changed meaning: `test/hosted.c` used version 5 as the
+  unsupported example; it now uses 6.
+- Listening pairs in `build/rk1-listen/`; operator verdict open.
+- `docs/ma-rack-rk1.md`.
+
+### 2026-11-11 — RK1b: parametric EQ, EQ editor, AVX2 wavefront
+
+- EQ: up to 8 bands (bell, low/high shelf, low/high cut, notch), output
+  gain; per-band crossfades for on/off, shape and count; analytic within
+  0.0007 dB at 44.1..192 kHz; the RK1 listening pairs re-render
+  bit-identically in the band format.
+- Patchbench EQ editor over the module rows: grid with ranges, summed and
+  per-band curves from the core's coefficients, live output spectrum, node
+  drag/wheel/right-click/double-click/Del, band panel and list.
+- AVX2: `ma_output_render` split into front/back, the pool's vector render
+  runs the rack per run of 256 frames, settled EQs as a wavefront
+  (`src/ma_rack_lanes.c`). Block parity: 0 mismatches over 138989 random
+  frames, 543 wavefront runs; pool block render equals per-frame tick.
+- Perf (`build/rk1c-perf-20261111-02/`): EQ cost 0.222 -> 0.048 Mc/block
+  (32 bands) and 0.383 -> 0.048 (64 bands); no-rack lanes 0.987x, scalar
+  engine 1.005x after forcing `pool_front`/`pool_back` inline (a first
+  run had the scalar engine at +2.1 % median).
+- `docs/ma-rack-rk1b.md`.
+
+### 2026-11-14 — V2/V3: B1's skewed triangle, the saw's bow, two triangle shapers
+
+- SPICE: B1 unchanged at fourteen CVs (27 Hz..1.94 kHz): the rise goes from
+  0.545 to 0.501, about f^-0.54, so no run-away in the bass. Two study shapers
+  on B1's buffered triangle (`shapers.cir`): a degenerated long-tailed pair
+  (47 ohm, -39.8 dB trimmed) and a linear pair swapped by a switching quad on
+  B1's square; trimmed in place at A4 like a board. Across the range the
+  sine's distortion is B1's skew (H2 -25 dB at 27 Hz, -40 at A4) and the
+  saw's step at the vertex is the swing (+0.4 % .. -0.9 %).
+  `docs/ma-vco-shapes-spice.md`.
+- Core: under `vco.analog` the triangle integrates `c + h * pulse` with the
+  pulse's edge at B1's rise, and the saw takes VCO-2's bow; new levels
+  `tri_sine`, `tri_saw` per VCO (`.mapatch` v7). The integrator is moved on a
+  rise change and pulled back once a frame away from the edges: in f32,
+  unequal steps otherwise walk it 0.005 a second at 27.5 Hz.
+- Patchbench: six level knobs per VCO module; snapshots may leave out the
+  pitch and shaper blocks, each whole.
+- Gates: `make check-ma-vco-shape` (49 checks), `test/hosted.c` version 7.
+- Side finding, not acted on: the old triangle walks off centre on pitch
+  jumps mid-ramp (edge compensation changes with the step), 0.06 after 400
+  random pitches on one voice; pool voices re-seed per note.
+- Listening renders in `build/vco/shapers/listen/`; operator verdict open.
+- V2b (same day): B1 with a range switch (C3 / 8, / 16) to 18.7 kHz. The
+  rise follows the current (the switch repeats the bass skew; not taken);
+  the swing, and with it the saw's step, grows nearly straight in hertz
+  (-7.7 % at 18.7 kHz), now measured instead of extrapolated; the sine's
+  H3 returns above 6 kHz. Gate 52 checks.

@@ -43,6 +43,7 @@ void ma_lanes_gather(ma_voice_lanes *b, unsigned lane, const ma_synth *s) {
         b->guard_step[k][lane] = osc[k]->guard_step;
         b->guard_frames[k][lane] = osc[k]->guard_frames;
         b->triangle_initialized[k][lane] = osc[k]->triangle_initialized ? -1 : 0;
+        b->rise[k][lane] = osc[k]->rise;
         uint8_t own = s->oversample_history_pos[k];
         b->own_history_pos[k][lane] = own;
         for (int j = 0; j < 31; j++)
@@ -93,6 +94,7 @@ void ma_lanes_scatter(const ma_voice_lanes *b, unsigned lane, ma_synth *s) {
         osc[k]->guard_step = b->guard_step[k][lane];
         osc[k]->guard_frames = (uint16_t)b->guard_frames[k][lane];
         osc[k]->triangle_initialized = b->triangle_initialized[k][lane] != 0;
+        osc[k]->rise = b->rise[k][lane];
         uint8_t own = b->own_history_pos[k][lane];
         for (int j = 0; j < 31; j++)
             s->oversample_history[k][(own + j) % 31] = b->history[k][j][lane];
@@ -133,7 +135,10 @@ void ma_lanes_scatter(const ma_voice_lanes *b, unsigned lane, ma_synth *s) {
 
 /* Per-sample lane inputs: the front end's products for each lane. */
 typedef struct {
-    alignas(32) float c1[5][MA_LANES], c2[5][MA_LANES];   /* saw pulse tri sine pw */
+    alignas(32) float c1[7][MA_LANES], c2[7][MA_LANES];   /* saw pulse tri sine pw tsine tsaw */
+    /* the triangles' rise and swing, and the saw's bow (V2, V3) */
+    alignas(32) float skew1[MA_LANES], skew2[MA_LANES], swell1[MA_LANES], swell2[MA_LANES];
+    alignas(32) float bow[MA_LANES];
     alignas(32) float div1[MA_LANES], div2[MA_LANES], mixdiv[MA_LANES], rate[MA_LANES];
     alignas(32) float v1hz[MA_LANES], v1step[MA_LANES], v2hz[MA_LANES], v2step[MA_LANES];
     /* triangle integrator gain and unit-pulse increment */
@@ -172,7 +177,14 @@ static void ml_benign(ml_in *in) {
         c[k][2][l] = v[k]->triangle_level;
         c[k][3][l] = v[k]->sine_level;
         c[k][4][l] = v[k]->pulse_width;
+        c[k][5][l] = v[k]->tri_sine_level;
+        c[k][6][l] = v[k]->tri_saw_level;
     }
+    in->skew1[l] = f->source.vco1_skew;
+    in->skew2[l] = f->source.vco2_skew;
+    in->swell1[l] = f->source.vco1_swell;
+    in->swell2[l] = f->source.vco2_swell;
+    in->bow[l] = f->source.saw_bow;
     in->div1[l] = f->source.vco1_divisor;
     in->div2[l] = f->source.vco2_divisor;
     in->mixdiv[l] = f->source.mixer_divisor;
@@ -238,6 +250,7 @@ static ml_osc ml_osc_load(const ma_voice_lanes *b, int k) {
         .guard_frames = (ml_int)_mm256_loadu_si256((const ml_i *)b->guard_frames[k]),
         .triangle_initialized =
             (ml_m)_mm256_loadu_si256((const ml_i *)b->triangle_initialized[k]),
+        .rise = ml_ld(b->rise[k]),
     };
 }
 static void ml_osc_store(ma_voice_lanes *b, int k, const ml_osc *o) {
@@ -249,6 +262,7 @@ static void ml_osc_store(ma_voice_lanes *b, int k, const ml_osc *o) {
     _mm256_storeu_ps(b->guard_step[k], o->guard_step);
     _mm256_storeu_si256((ml_i *)b->guard_frames[k], (ml_i)o->guard_frames);
     _mm256_storeu_si256((ml_i *)b->triangle_initialized[k], (ml_i)o->triangle_initialized);
+    _mm256_storeu_ps(b->rise[k], o->rise);
 }
 static ml_osc_pair ml_pair_load(const ma_voice_lanes *b) {
     return (ml_osc_pair){
@@ -265,16 +279,19 @@ static void ml_pair_store(ma_voice_lanes *b, const ml_osc_pair *v) {
     ml_u64_st(b->sync_run_q48, v->sync_run_q48);
     for (int k = 0; k < 3; k++) _mm256_storeu_ps(b->sync_carry[k], v->sync_carry[k]);
 }
-static ml_vco ml_vco_load(const float c[5][MA_LANES]) {
-    return (ml_vco){ ml_ld(c[0]), ml_ld(c[1]), ml_ld(c[2]), ml_ld(c[3]), ml_ld(c[4]) };
+static ml_vco ml_vco_load(const float c[7][MA_LANES]) {
+    return (ml_vco){ ml_ld(c[0]), ml_ld(c[1]), ml_ld(c[2]), ml_ld(c[3]), ml_ld(c[4]),
+                     ml_ld(c[5]), ml_ld(c[6]) };
 }
 static ml_shapes ml_shapes_load(const int32_t active[MA_LANES]) {
     ml_int bits = (ml_int)_mm256_loadu_si256((const ml_i *)active);
     return (ml_shapes){ (bits & WAVE_SAW) != 0, (bits & WAVE_PULSE) != 0,
-                        (bits & WAVE_TRIANGLE) != 0 };
+                        (bits & WAVE_TRIANGLE) != 0, (bits & WAVE_TRI_SINE) != 0,
+                        (bits & WAVE_TRI_SAW) != 0 };
 }
 static void ml_shapes_store(int32_t active[MA_LANES], ml_shapes on) {
-    ml_int bits = (on.saw & WAVE_SAW) | (on.pulse & WAVE_PULSE) | (on.triangle & WAVE_TRIANGLE);
+    ml_int bits = (on.saw & WAVE_SAW) | (on.pulse & WAVE_PULSE) | (on.triangle & WAVE_TRIANGLE)
+                | (on.tri_sine & WAVE_TRI_SINE) | (on.tri_saw & WAVE_TRI_SAW);
     _mm256_storeu_si256((ml_i *)active, (ml_i)bits);
 }
 /* The kernel's frame inputs, from the lane inputs the front end wrote. */
@@ -299,6 +316,9 @@ static ml_source ml_source_load(const ml_in *in) {
         .vco2_triangle_gain = ml_ld(in->v2tg),
         .vco2_triangle_step = ml_ld(in->v2ts),
         .vco2_step_q48 = ml_u64_ld(in->v2q),
+        .vco1_tri = ml_tri_view(ml_tri_of(ml_ld(in->skew1), ml_ld(in->swell1)), ml_ld(in->v1tg)),
+        .vco2_tri = ml_tri_view(ml_tri_of(ml_ld(in->skew2), ml_ld(in->swell2)), ml_ld(in->v2tg)),
+        .saw_bow = ml_ld(in->bow),
         .envelope_ratio = ml_ld(in->envr),
         .sync = ml_ld(in->sync),
         .base_hz = ml_ld(in->base),
@@ -435,7 +455,8 @@ typedef struct {
     float note[MA_LANES], keytrack[MA_LANES], cutoff_hz[MA_LANES], poly[MA_LANES];
     float character[MA_LANES], cutoff_octaves[MA_LANES], vco2_cents[MA_LANES];
     float cutoff_max[MA_LANES], rate[MA_LANES];
-    float vco[2][5][MA_LANES];                       /* saw pulse tri sine pw */
+    float vco[2][7][MA_LANES];                       /* saw pulse tri sine pw tsine tsaw */
+    float skew[2][MA_LANES], swell[2][MA_LANES], bow[MA_LANES];
     float sync_amount[MA_LANES], sync_softness[MA_LANES], v2level[MA_LANES];
     float noise_level[MA_LANES], crossmod[MA_LANES], fine_cents[MA_LANES];
     float base[MA_LANES], interval[MA_LANES], g1[MA_LANES], g2[MA_LANES];
@@ -471,21 +492,26 @@ static void ml_front_gather(ml_front_in *x, unsigned l, const ma_synth *s,
         x->vco[k][0][l] = v[k]->saw_level; x->vco[k][1][l] = v[k]->pulse_level;
         x->vco[k][2][l] = v[k]->triangle_level; x->vco[k][3][l] = v[k]->sine_level;
         x->vco[k][4][l] = v[k]->pulse_width;
+        x->vco[k][5][l] = v[k]->tri_sine_level; x->vco[k][6][l] = v[k]->tri_saw_level;
+        x->skew[k][l] = s->vco_skew[k]; x->swell[k][l] = s->vco_swell[k];
     }
+    x->bow[l] = s->vco_bow;
     x->sync_amount[l] = c->sync_amount; x->sync_softness[l] = c->sync_softness;
     x->v2level[l] = c->vco2_level; x->noise_level[l] = c->noise_level;
     x->crossmod[l] = c->crossmod_amount; x->fine_cents[l] = c->vco2_fine_cents;
     x->base[l] = f->base_hz;
-    x->interval[l] = interval_ratio(s->vco2_interval);
+    x->interval[l] = interval_ratio(s->vco2_interval) * (1.0f + s->vco2_bend);
     x->g1[l] = guard1; x->g2[l] = guard2;
 }
 
-static void ml_vco_store(float c[5][MA_LANES], ml_vco v) {
+static void ml_vco_store(float c[7][MA_LANES], ml_vco v) {
     ml_store(c[0], v.saw_level);
     ml_store(c[1], v.pulse_level);
     ml_store(c[2], v.triangle_level);
     ml_store(c[3], v.sine_level);
     ml_store(c[4], v.pulse_width);
+    ml_store(c[5], v.tri_sine_level);
+    ml_store(c[6], v.tri_saw_level);
 }
 
 /* The filter coefficient and the source frame of eight voices, written into
@@ -526,6 +552,11 @@ static void ml_front_math(const ml_front_in *x, ml_in *in, float cutoff_out[MA_L
         .noise_level = ml_ld(x->noise_level),
         .guard1 = ml_ld(x->g1),
         .guard2 = ml_ld(x->g2),
+        .vco1_skew = ml_ld(x->skew[0]),
+        .vco2_skew = ml_ld(x->skew[1]),
+        .vco1_swell = ml_ld(x->swell[0]),
+        .vco2_swell = ml_ld(x->swell[1]),
+        .saw_bow = ml_ld(x->bow),
     };
     ml_source src = {};
     ml_prepare_source(&source_in, level * amount, &src);
@@ -550,6 +581,11 @@ static void ml_front_math(const ml_front_in *x, ml_in *in, float cutoff_out[MA_L
     ml_store(in->v2tg, src.vco2_triangle_gain);
     ml_store(in->v2ts, src.vco2_triangle_step);
     ml_u64_st(in->v2q, src.vco2_step_q48);
+    ml_store(in->skew1, src.vco1_tri.skew);
+    ml_store(in->skew2, src.vco2_tri.skew);
+    ml_store(in->swell1, src.vco1_tri.swell);
+    ml_store(in->swell2, src.vco2_tri.swell);
+    ml_store(in->bow, src.saw_bow);
 }
 
 /* render_raster for the lanes in `on`, both 2x steps of one output sample,

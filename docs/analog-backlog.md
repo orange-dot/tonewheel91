@@ -113,11 +113,11 @@ These decisions are inputs to implementation, not milestone questions.
 | MAD1 | Five fixed voice cards; free-card search is round-robin and exhaustion steals the oldest assigned card. |
 | MAD2 | Notes cover the full MIDI range 0..127 with no folding or out-of-compass rejection. |
 | MAD3 | Both VCOs continuously mix saw, pulse, triangle and Mamut sine; Mozaik is a separate third/AUX source. |
-| MAD4 | One nonlinear four-pole lowpass is the filter identity; no filter-model menu in MA0–MA5. |
+| MAD4 | One nonlinear four-pole lowpass is the filter identity; no filter-model menu in MA0–MA5. This governs the voice filter; a bus filter block in the insert rack (`docs/ma-rack-plan.md`) is an effect, not a voice filter model (2026-11-11). |
 | MAD5 | Direct analog controls and five public Mamut macros coexist. All five macros at zero are an exact direct-path bypass and are the init default. |
 | MAD6 | GFM first lands as a hidden modulation field, not an audible parallel layer. Its post-MA4 factory amount is subtle and nonzero. |
 | MAD7 | The first playable version is stereo and includes fixed card spread followed by Mamut-derived chorus and reverb. |
-| MAD8 | The core exposes one concrete `ma_patch` value type and grouped C setters. Hosted tools own a strict versioned one-file-per-patch format; there is no generic registry, plug-in API or core I/O. |
+| MAD8 | The core exposes one concrete `ma_patch` value type and grouped C setters. Hosted tools own a strict versioned one-file-per-patch format; there is no generic registry, plug-in API or core I/O. Amended 2026-11-11 (RK0): the core also exposes one insert rack, a fixed 8-slot serial chain of blocks from a closed, compiled `enum` of kinds, described by a `ma_rack_spec` value and stored as optional `rack.<n>.*` keys in `.mapatch` v5 (`docs/ma-rack-plan.md`). Still no registry, plug-in API, dynamic loading or core I/O. |
 | MAD9 | MIDI control is a generic, stable map owned by this repo; a PC4 or other controller maps to it externally. |
 | MAD10 | Tepih is the compiled factory dark pad, Lead is the direct voice, and Dubina is the VCO2-sine-dominant low voice. |
 | MAD11 | Mozaik and GFM are committed. BCS may enter only through its isolated feedback-only slice; Orbita and Kosava require later evidence and promotion decisions, and wild concepts stay research-only. |
@@ -575,6 +575,11 @@ The first playable chain ports the behavior of the donor's
   must return dry PCM bit-identically.
 - No chorus/reverb macro routing in MA0–MA5. The effects remain direct
   controls so identity evaluation stays attributable to the voice.
+  Amended 2026-11-11 (operator): from RK3 the effective macro values may
+  drive rack blocks, chorus and reverb included, through explicit
+  modulation routes only. No route exists by default, every route is
+  visible in the Patchbench, and no route reproduces the unmodulated PCM
+  bit for bit (`docs/ma-rack-plan.md` RKD14..RKD18).
 
 ## Generic MIDI contract
 
@@ -1043,7 +1048,9 @@ formant bank after the ladder. Both are exactly bypassed at zero.
 - Orbita or Kosava production integration;
 - Lavina, Brazda or Mraz implementation;
 - MIDI 2.0 UMP transport, MPE zones or sample-accurate hosted scheduling;
-- a generic instrument framework or cross-repo runtime dependency;
+- a generic instrument framework or cross-repo runtime dependency (the
+  closed insert rack of `docs/ma-rack-plan.md` is not one: it is Mamut-only
+  and adds no plug-in surface);
 - editing the organ or EP implementation to share speculative helpers.
 
 Per-note state is reserved so future MIDI 2.0/MPE transport has a landing
@@ -1088,6 +1095,7 @@ zone; transport does not define the DSP model.
 | BCS | implemented feedback-only in MA2-BCS; operator listening pending | ad hoc slice before MA2-4 |
 | Orbita | candidate; offline spike done 2026-11-07 (`docs/ma-orbita-spike-20261107.md`); hosted use in MA3 Hurt (`docs/ma3-hurt-orbita.md`) | v0.2 insertion choice |
 | Glas (formant bank, Orbita formants, formant grains) | implemented in the core 2026-11-07 by operator decision, exact bypass (`ma-constants.md` §10C); on the vector lanes since 2026-11-08 (`docs/ma3-glas-lanes-20261108.md`) | patch-file v4 if it stays |
+| Insert rack (EQ, utility; then chorus/reverb, delay, saturator, compressor) and modulation bus (rack targets RK3, global voice targets RK3b) | committed 2026-11-11; RK0 plan done, RK2 re-pin and RK3/RK3b scope operator-confirmed (`docs/ma-rack-plan.md`) | RK1 |
 | Kosava | candidate; donor plan only | post-MA5 offline backlog if selected |
 | Mraz | research priority among wild concepts | unscheduled |
 | Lavina | research | unscheduled |

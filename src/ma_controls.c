@@ -33,6 +33,8 @@ static ma_vco_smoothers initialized_vco_smoothers(ma_vco_controls value) {
         .triangle_level = initialized_smoother(value.triangle_level),
         .sine_level = initialized_smoother(value.sine_level),
         .pulse_width = initialized_smoother(value.pulse_width),
+        .tri_sine_level = initialized_smoother(value.tri_sine_level),
+        .tri_saw_level = initialized_smoother(value.tri_saw_level),
     };
 }
 
@@ -47,6 +49,10 @@ static void set_vco_targets(ma_vco_smoothers *smoothers,
     set_smoother_target(&smoothers->sine_level, value.sine_level,
                         sample_rate_hz);
     set_smoother_target(&smoothers->pulse_width, value.pulse_width,
+                        sample_rate_hz);
+    set_smoother_target(&smoothers->tri_sine_level, value.tri_sine_level,
+                        sample_rate_hz);
+    set_smoother_target(&smoothers->tri_saw_level, value.tri_saw_level,
                         sample_rate_hz);
 }
 
@@ -364,6 +370,10 @@ static ma_vco_controls sanitize_vco(ma_vco_controls controls,
                                     fallback.sine_level),
         .pulse_width = clamp_control(controls.pulse_width, 0.05f, 0.95f,
                                      fallback.pulse_width),
+        .tri_sine_level = clamp_control(controls.tri_sine_level, 0.0f, 1.0f,
+                                        fallback.tri_sine_level),
+        .tri_saw_level = clamp_control(controls.tri_saw_level, 0.0f, 1.0f,
+                                       fallback.tri_saw_level),
     };
 }
 
@@ -444,6 +454,8 @@ static ma_patch sanitize_patch(const ma_patch *value, float sample_rate_hz) {
         .formant_orbita = clamp_control(source->formant_orbita,
                                         0.0f, 1.0f, 0.0f),
         .grain_mix = clamp_control(source->grain_mix, 0.0f, 1.0f, 0.0f),
+        .vco_analog = clamp_control(source->vco_analog, 0.0f, 1.0f, 0.0f),
+        .vco_dead_time = clamp_control(source->vco_dead_time, 0.0f, 1.0f, 0.0f),
     };
     for (int macro = 0; macro < MA_MACRO_COUNT; macro++)
         result.macro[macro] = clamp_control(source->macro[macro],
@@ -460,6 +472,8 @@ void ma_synth_init_patch(ma_synth *s, float sample_rate_hz,
         .vco1 = value.vco1,
         .vco2 = value.vco2,
         .vco2_level = value.vco2_level,
+        .vco_analog = value.vco_analog,
+        .vco_dead_time = value.vco_dead_time,
         .vco2_interval = value.vco2_interval,
         .vco2_fine_cents = value.vco2_fine_cents,
         .sync_amount = value.sync_amount,
@@ -624,6 +638,11 @@ void ma_synth_set_formant(ma_synth *s, float mix, float vowel, float shift,
     ma_glas_set_formant(&s->glas, mix, vowel, shift, orbita, s->sample_rate_hz);
 }
 
+void ma_synth_set_vco_analog(ma_synth *s, float amount, float dead_time) {
+    s->vco_analog = clamp_control(amount, 0.0f, 1.0f, 0.0f);
+    s->vco_dead_time = clamp_control(dead_time, 0.0f, 1.0f, 0.0f);
+}
+
 void ma_synth_set_grain(ma_synth *s, float mix) {
     ma_glas_set_grain(&s->glas, mix, s->sample_rate_hz);
 }
@@ -761,6 +780,7 @@ void ma_voice_patch_controls(ma_synth *s, const ma_patch *patch) {
     ma_patch p = sanitize_patch(patch, s->sample_rate_hz);
     ma_synth_set_vco1(s, p.vco1);
     ma_synth_set_vco2(s, p.vco2, p.vco2_level, p.vco2_interval, p.vco2_fine_cents);
+    ma_synth_set_vco_analog(s, p.vco_analog, p.vco_dead_time);
     ma_synth_set_oscillator_modulation(s, p.sync_amount, p.sync_softness,
                                       p.crossmod_amount, p.noise_level);
     ma_synth_set_raster(s, p.raster_mix, p.raster_position, p.raster_warp);

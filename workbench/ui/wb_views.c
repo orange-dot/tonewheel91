@@ -7,9 +7,31 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <spawn.h>
+#include <sys/wait.h>
 
 #include "wb_appstate.h"
 #include "../desk/wb_patch.h"
+
+extern char **environ;
+
+/* Patchbench (docs/patchbench-plan.md, PB9) on a part's patch: the binary
+ * beside `wb`, started through a shell that backgrounds it and exits, so
+ * the desk keeps no child. */
+static void open_in_patchbench(app *a, const char *patch_path) {
+    char bin[1100];
+    snprintf(bin, sizeof bin, "%s", a->jobs.wb_path);
+    char *slash = strrchr(bin, '/');
+    snprintf(slash ? slash + 1 : bin, sizeof bin - (size_t)(slash ? slash + 1 - bin : 0), "patchbench");
+    char *const argv[] = { "sh", "-c", "\"$0\" \"$1\" >/dev/null 2>&1 &", bin, (char *)patch_path, nullptr };
+    pid_t pid;
+    if (posix_spawn(&pid, "/bin/sh", nullptr, nullptr, argv, environ)) {
+        app_say(a, true, "cannot start %s", bin);
+        return;
+    }
+    waitpid(pid, nullptr, 0);
+    app_say(a, false, "Patchbench on %s", patch_path);
+}
 
 enum { ROW = WB_ROW_HEIGHT };
 
@@ -787,6 +809,11 @@ static void mamut_panel(app *a, struct nk_context *ctx) {
         wb_error e = { 0 };
         if (wb_patch_write_overrides(path, &child, &e)) app_set_key(a, WB_KIND_PART, (unsigned)a->patch_part, "patch", relative);
         else app_say(a, true, "%s", e.message);
+    }
+    if (nk_button_label(ctx, "open in Patchbench")) {
+        char path[4400];
+        snprintf(path, sizeof path, "%s/%s", a->dir, part->patch);
+        open_in_patchbench(a, path);
     }
     if (nk_button_label(ctx, "store as B")) { a->patch_b = a->patch; a->patch_b_valid = true; }
     if (nk_button_label(ctx, "swap A / B (Tab)") && a->patch_b_valid) {

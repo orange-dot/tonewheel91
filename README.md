@@ -60,6 +60,9 @@ hashes included — reproduce bit-for-bit.
     make check-ma3-1 # dry Mamut MIDI/SMF twins and renderer CLI checks
     make check-ma3-2 # shared effects, wet MIDI twins, bypass and tail checks
     make audition-ma3-2 # short Tepih/Granica dry/chorus/reverb/wet WAVs
+    make check-rk1   # Mamut insert rack (EQ, utility) gates; docs/ma-rack-rk1.md
+    make check-ma-vco  # circuit-derived oscillator pitch against the SPICE study; docs/ma-vco-plan.md
+    make check-ma-vco-shape  # circuit-derived triangle, saw bow and triangle shapers; docs/ma-vco-plan.md
     make check-ma3-shows # new Blues/all-Mamut Hurt score checks; no audio
     make bench-ma  # five-card CPU/wall timing and pinned PCM checks (host only)
     make audition-ma2-4  # dry chord/unison comparison: character 0 / .20 / 1
@@ -106,6 +109,7 @@ hashes included — reproduce bit-for-bit.
         --unison 1 -t 4 -o build/mamut-dry.wav input.mid
                    # dry by default; optional --chorus-mix .30 --reverb-mix .25
                    # optional --detune, --seed, --block-frames
+                   # optional --rack patch.mapatch: its insert rack (v5)
                    # global direct CCs, per-channel sustain/expression;
                    # macros CC109..113; CC114 unison changes are ignored
 

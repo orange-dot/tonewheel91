@@ -13,17 +13,25 @@ float ma_octave_ratio_small(float octaves) {
 
 static ml_vco vco_of(ma_vco_controls c) {
     return (ml_vco){ c.saw_level, c.pulse_level, c.triangle_level, c.sine_level,
-                     c.pulse_width };
+                     c.pulse_width, c.tri_sine_level, c.tri_saw_level };
 }
 
 static ma_vco_controls controls_of(ml_vco c) {
     return (ma_vco_controls){ c.saw_level, c.pulse_level, c.triangle_level,
-                              c.sine_level, c.pulse_width };
+                              c.sine_level, c.pulse_width, c.tri_sine_level,
+                              c.tri_saw_level };
 }
 
 static unsigned active_of(ml_shapes on) {
     return (on.saw ? WAVE_SAW : 0u) | (on.pulse ? WAVE_PULSE : 0u)
-         | (on.triangle ? WAVE_TRIANGLE : 0u);
+         | (on.triangle ? WAVE_TRIANGLE : 0u) | (on.tri_sine ? WAVE_TRI_SINE : 0u)
+         | (on.tri_saw ? WAVE_TRI_SAW : 0u);
+}
+
+static ml_shapes shapes_of(unsigned active) {
+    return (ml_shapes){ (active & WAVE_SAW) != 0, (active & WAVE_PULSE) != 0,
+                        (active & WAVE_TRIANGLE) != 0, (active & WAVE_TRI_SINE) != 0,
+                        (active & WAVE_TRI_SAW) != 0 };
 }
 
 ma_source_frame ma_voice_prepare_source_frame_guarded(
@@ -34,7 +42,7 @@ ma_source_frame ma_voice_prepare_source_frame_guarded(
         .vco2 = vco_of(controls->vco2),
         .sample_rate_hz = s->sample_rate_hz,
         .base_hz = base_hz,
-        .interval_ratio = interval_ratio(s->vco2_interval),
+        .interval_ratio = interval_ratio(s->vco2_interval) * (1.0f + s->vco2_bend),
         .vco2_fine_cents = controls->vco2_fine_cents,
         .character = s->character.smoother.current,
         .vco2_cents = s->character.vco2_cents,
@@ -45,6 +53,11 @@ ma_source_frame ma_voice_prepare_source_frame_guarded(
         .noise_level = controls->noise_level,
         .guard1 = guard1_gain,
         .guard2 = guard2_gain,
+        .vco1_skew = s->vco_skew[0],
+        .vco2_skew = s->vco_skew[1],
+        .vco1_swell = s->vco_swell[0],
+        .vco2_swell = s->vco_swell[1],
+        .saw_bow = s->vco_bow,
     };
     ml_source src = {};
     ml_prepare_source(&x, filter_modulation, &src);
@@ -68,6 +81,11 @@ ma_source_frame ma_voice_prepare_source_frame_guarded(
         .vco2_step_q48 = src.vco2_step_q48,
         .vco2_triangle_gain = src.vco2_triangle_gain,
         .vco2_triangle_step = src.vco2_triangle_step,
+        .vco1_skew = src.vco1_tri.skew,
+        .vco2_skew = src.vco2_tri.skew,
+        .vco1_swell = src.vco1_tri.swell,
+        .vco2_swell = src.vco2_tri.swell,
+        .saw_bow = src.saw_bow,
         .envelope_ratio = src.envelope_ratio,
         .sync = src.sync,
     };
@@ -95,6 +113,7 @@ static ml_osc osc_load(const ma_oscillator *o) {
         .guard_step = o->guard_step,
         .guard_frames = o->guard_frames,
         .triangle_initialized = o->triangle_initialized,
+        .rise = o->rise,
     };
 }
 
@@ -107,6 +126,7 @@ static void osc_store(ma_oscillator *o, const ml_osc *x) {
     o->guard_step = x->guard_step;
     o->guard_frames = (uint16_t)x->guard_frames;
     o->triangle_initialized = x->triangle_initialized;
+    o->rise = x->rise;
 }
 
 static ml_osc_pair pair_load(const ma_synth *s) {
@@ -133,10 +153,8 @@ static ml_source source_of(const ma_synth *s, const ma_render_controls *controls
     return (ml_source){
         .vco1 = vco_of(f->vco1),
         .vco2 = vco_of(f->vco2),
-        .vco1_on = { (f->vco1_active & WAVE_SAW) != 0, (f->vco1_active & WAVE_PULSE) != 0,
-                     (f->vco1_active & WAVE_TRIANGLE) != 0 },
-        .vco2_on = { (f->vco2_active & WAVE_SAW) != 0, (f->vco2_active & WAVE_PULSE) != 0,
-                     (f->vco2_active & WAVE_TRIANGLE) != 0 },
+        .vco1_on = shapes_of(f->vco1_active),
+        .vco2_on = shapes_of(f->vco2_active),
         .vco1_divisor = f->vco1_divisor,
         .vco2_divisor = f->vco2_divisor,
         .mixer_divisor = f->mixer_divisor,
@@ -152,6 +170,9 @@ static ml_source source_of(const ma_synth *s, const ma_render_controls *controls
         .vco2_triangle_gain = f->vco2_triangle_gain,
         .vco2_triangle_step = f->vco2_triangle_step,
         .vco2_step_q48 = f->vco2_step_q48,
+        .vco1_tri = ml_tri_view(ml_tri_of(f->vco1_skew, f->vco1_swell), f->vco1_triangle_gain),
+        .vco2_tri = ml_tri_view(ml_tri_of(f->vco2_skew, f->vco2_swell), f->vco2_triangle_gain),
+        .saw_bow = f->saw_bow,
         .envelope_ratio = f->envelope_ratio,
         .sync = f->sync,
         .base_hz = base_hz,
@@ -180,8 +201,10 @@ void ma_voice_render_source_block(ma_synth *s, const ma_render_controls *control
 /* The block's parts, for white-box gates. */
 void ma_voice_seed_triangles(ma_synth *s, const ma_source_frame *source) {
     ml_osc_pair v = pair_load(s);
-    ml_seed_triangle(&v.vco1, source->vco1_seed_step, source->vco1_triangle_gain);
-    ml_seed_triangle(&v.vco2, source->vco2_step, source->vco2_triangle_gain);
+    ml_seed_triangle(&v.vco1, source->vco1_seed_step, source->vco1_triangle_gain,
+                     ml_tri_of(source->vco1_skew, source->vco1_swell).rise);
+    ml_seed_triangle(&v.vco2, source->vco2_step, source->vco2_triangle_gain,
+                     ml_tri_of(source->vco2_skew, source->vco2_swell).rise);
     pair_store(s, &v);
 }
 

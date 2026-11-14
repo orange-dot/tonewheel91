@@ -142,6 +142,10 @@ static constexpr uint64_t SYNC_RUN_LIMIT_Q48 = UINT64_C(1) << 47;
  * (ma-constants.md 3.1). */
 static constexpr float TRIANGLE_EDGE_LOSS = 1.25f;
 
+/* A skewed triangle's pull back to its steady trajectory, per frame
+ * (ma_osc_kernel.h, ml_seed_triangle; docs/ma-vco-plan.md V2). */
+static constexpr float TRIANGLE_PULL = 1.0f / 64.0f;
+
 static constexpr ma_adsr AMP_ADSR_DEFAULT = {
     .attack_ms = 600.0f,
     .decay_ms = 1600.0f,
@@ -177,6 +181,9 @@ typedef struct {
     uint64_t vco2_step_q48;
     float vco2_triangle_gain;
     float vco2_triangle_step;
+    float vco1_skew, vco2_skew;     /* V2: the triangles' rise less 0.5 */
+    float vco1_swell, vco2_swell;   /* V3: the triangle the shapers see, less 1 */
+    float saw_bow;                  /* V2: VCO-2's saw bow, 0 = straight */
     float envelope_ratio;
     float sync;
 } ma_source_frame;
@@ -238,8 +245,8 @@ static constexpr ma_bcs_parameters BCS_LANDMARK[4] = {
     },
 };
 
-enum { WAVE_SAW = 1, WAVE_PULSE = 2, WAVE_TRIANGLE = 4,
-       WAVE_ALL = WAVE_SAW | WAVE_PULSE | WAVE_TRIANGLE };
+enum { WAVE_SAW = 1, WAVE_PULSE = 2, WAVE_TRIANGLE = 4, WAVE_TRI_SINE = 8, WAVE_TRI_SAW = 16,
+       WAVE_ALL = WAVE_SAW | WAVE_PULSE | WAVE_TRIANGLE | WAVE_TRI_SINE | WAVE_TRI_SAW };
 
 #if !defined(MA_SOURCE_EVIDENCE)
 typedef struct {
@@ -301,6 +308,83 @@ static inline uint16_t smoothing_frames(float sample_rate_hz) {
 static inline float next_noise(uint64_t *state) {
     uint32_t top = (uint32_t)(tw_splitmix64(state) >> 40);
     return (float)top * (1.0f / 8388608.0f) - 1.0f;
+}
+
+/* ---- circuit-derived oscillator pitch (docs/ma-vco-plan.md) ----
+ * One VCO-2 core (driver/spice/vco/vco2.cir): an exponential current plus a
+ * constant extra current charges the capacitor, and every cycle loses a dead
+ * time to the reset:  1/f = 1/(f_exp + extra) + dead.
+ * The board is trimmed the way a technician trims it: scale until C2 -> C6
+ * is four octaves, pitch until A4 is 440 Hz (to first order in the two small
+ * terms; the SPICE trim loop lands within 0.4 cents of this over C0..C9).
+ * Temperature moves pitch and scale together, as measured with the
+ * +3300 ppm/K scale resistor fitted. `hz` is the ideal frequency and
+ * `octaves` its distance from A4. */
+static constexpr float VCO_INV_LN2 = 1.44269502f;
+static constexpr float VCO_TEMP_OCTAVES_PER_K = 0.99f / 1200.0f;          /* at A4 */
+static constexpr float VCO_TEMP_SCALE_PER_K = -0.20f / 1200.0f;           /* per octave from A4 */
+static constexpr float VCO_NOMINAL_EXTRA_HZ = 0.244f;
+static constexpr float VCO_NOMINAL_DEAD_US = 6.546f;
+static constexpr float VCO_WALK_K_PER_CENT = 0.5f / 3.0f;   /* the card's walk, read as kelvin */
+
+/* ---- circuit-derived oscillator shape (docs/ma-vco-plan.md, V2) ----
+ * B1's triangle (driver/spice/vco/b1_low.py, 27 Hz to 1.94 kHz): the rise
+ * takes 0.5 + exp(P(x)) of the turn, x octaves from A4, P the quartic below
+ * (within 3 % of the asymmetry at every simulated pitch). Outside the
+ * simulated range P runs on along its end slopes; the rise is capped. */
+static constexpr float VCO_RISE_POLY[5] = {          /* x^0 .. x^4 */
+    -4.76207198f, -0.620919801f, -0.114165139f, -0.0267012744f, -0.00284620846f,
+};
+static constexpr float VCO_RISE_X_LOW = -4.00592f;
+static constexpr float VCO_RISE_X_HIGH = 2.14301f;
+static constexpr float VCO_RISE_SLOPE_LOW = -0.259835f;
+static constexpr float VCO_RISE_SLOPE_HIGH = -1.59015f;
+static constexpr float VCO_RISE_MAX = 0.6f;
+/* Its swing grows with pitch (each reversal overshoots by the comparator's
+ * delay). The shapers see that growth relative to A4, where they are
+ * trimmed, a little less than the capacitor has it: the saw's pair swaps
+ * just after the vertex. `swell` is what the switched pair sees, fitted to
+ * its step at the vertex in SPICE (driver/spice/vco/shapers.py): to 1.94 kHz
+ * a cubic in octaves from A4 through zero (within 2.3e-4), held below 27 Hz;
+ * above it, measured with B1's range switch to 18.7 kHz (V2b), straight in
+ * hertz (within 8e-4), held above 20 kHz. The sine sees the same swell; its
+ * drive is 0.3 % off at most for it. */
+static constexpr float VCO_SWELL_POLY[3] = {           /* x^1 .. x^3 */
+    0.00224345534f, 0.000646784953f, 0.0000813179675f,
+};
+static constexpr float VCO_SWELL_X_LOW = -4.00504f;
+static constexpr float VCO_SWELL_X_HIGH = 2.14382f;    /* 1944.5 Hz */
+static constexpr float VCO_SWELL_JOIN_HZ = 1944.5f;
+static constexpr float VCO_SWELL_PER_HZ = 4.1438e-6f;
+static constexpr float VCO_SWELL_TOP_HZ = 20000.0f;
+/* VCO-2's saw bow: 30.5 mV in the middle of a 5.06 V ramp at C4, 29.3 to
+ * 32.1 mV from C2 to C8 (docs/ma-vco2-spice.md); as a share of the span 2. */
+static constexpr float VCO_SAW_BOW = 0.01205f;
+
+/* ---- the triangle core's shapers (docs/ma-vco-plan.md, V3) ----
+ * The sine pair's static curve (driver/spice/vco/shapers.py fit), trimmed at
+ * A4, on the triangle normalized to +-1 at A4's vertices and scaled to peaks
+ * of +-1: x * odd(x^2) + even(x^2), within 5e-5 over +-1 and 1.3e-4 over
+ * +-1.1. The even part is the trimmed offset. */
+enum { SHAPER_SINE_TERMS = 6 };
+static constexpr float SHAPER_SINE_ODD[SHAPER_SINE_TERMS] = {
+    1.54028599f, -0.561557056f, -0.192092654f, 0.307457722f, -0.0962403955f, 0.00214095014f,
+};
+static constexpr float SHAPER_SINE_EVEN[SHAPER_SINE_TERMS] = {
+    -0.00273633822f, 0.00344021426f, 0.00217042488f, -0.00509633677f, 0.0025910752f, -0.000369745654f,
+};
+
+float ma_octave_ratio_small(float octaves);
+
+static inline float vco_law_hz(float hz, float octaves, float extra_hz,
+                               float dead_s, float temp_k) {
+    float e_c2 = extra_hz * (1.0f / 65.40639f) - 65.40639f * dead_s;
+    float e_c6 = extra_hz * (1.0f / 1046.5023f) - 1046.5023f * dead_s;
+    float e_a4 = extra_hz * (1.0f / 440.0f) - 440.0f * dead_s;
+    float scale = -0.25f * VCO_INV_LN2 * (e_c6 - e_c2) + temp_k * VCO_TEMP_SCALE_PER_K;
+    float offset = -VCO_INV_LN2 * e_a4 + temp_k * VCO_TEMP_OCTAVES_PER_K;
+    float exponential = hz * ma_octave_ratio_small(offset + scale * octaves);
+    return 1.0f / (1.0f / (exponential + extra_hz) + dead_s);
 }
 
 static inline float interval_ratio(int interval) {

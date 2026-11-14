@@ -46,6 +46,11 @@ typedef struct {
     float triangle_level;
     float sine_level;
     float pulse_width;
+    /* The triangle core's shapers (docs/ma-vco-plan.md, V3): the sine of a
+     * long-tailed pair and the saw of a switched pair, both on the
+     * triangle. Zero levels are an exact bypass. */
+    float tri_sine_level;
+    float tri_saw_level;
 } ma_vco_controls;
 
 typedef struct {
@@ -87,6 +92,13 @@ typedef struct {
     float formant_shift;
     float formant_orbita;
     float grain_mix;
+    /* Circuit-derived oscillator pitch (docs/ma-vco-plan.md). vco_analog is
+     * how much of the VCO-2 pitch law applies; zero is an exact bypass.
+     * vco_dead_time is the share of the saw core's reset dead time left
+     * untrimmed: zero is a board with its high-frequency trim set, one a
+     * board without that trim (flat at the top). */
+    float vco_analog;
+    float vco_dead_time;
 } ma_patch;
 
 /* Compiled factory bank; hosted mirrors are not core dependencies. */
@@ -127,6 +139,13 @@ typedef struct {
     float walk_step;
     uint8_t walk_phase;
     bool assigned;
+    /* The card's two VCO-2 cores (docs/ma-vco-plan.md): its temperature away
+     * from the trim temperature, VCO2's own offset from it, and per core the
+     * extra capacitor current (as a frequency) and the reset dead time. */
+    float temp_k;
+    float vco2_temp_k;
+    float vco_extra_hz[2];
+    float vco_dead_us[2];
 } ma_character;
 
 typedef struct {
@@ -151,6 +170,8 @@ typedef struct {
     ma_smoother triangle_level;
     ma_smoother sine_level;
     ma_smoother pulse_width;
+    ma_smoother tri_sine_level;
+    ma_smoother tri_saw_level;
 } ma_vco_smoothers;
 
 typedef struct {
@@ -228,6 +249,7 @@ typedef struct {
     float guard_step;
     uint16_t guard_frames;
     bool triangle_initialized;
+    float rise;             /* the triangle's last rise (V2); 0: none yet */
 } ma_oscillator;
 
 typedef struct {
@@ -355,6 +377,14 @@ typedef struct {
     float vco2_level;
     int vco2_interval;
     float vco2_fine_cents;
+    float vco_analog;
+    float vco_dead_time;
+    float vco2_bend;        /* this frame: VCO2's law over VCO1's, minus one */
+    /* this frame's circuit shapes (V2): each triangle's rise less 0.5, the
+     * swing its shapers see less 1, and the saw's bow; all 0 without the law */
+    float vco_skew[2];
+    float vco_swell[2];
+    float vco_bow;
     float sync_amount;
     float sync_softness;
     float crossmod_amount;
@@ -500,6 +530,10 @@ void ma_synth_set_mod_wheel(ma_synth *s, float amount);
 void ma_synth_set_vco1(ma_synth *s, ma_vco_controls controls);
 void ma_synth_set_vco2(ma_synth *s, ma_vco_controls controls, float level,
                        int interval, float fine_cents);
+/* The VCO-2 pitch law: amount [0,1] (zero is an exact bypass) and the share
+ * of the reset dead time left untrimmed [0,1]. Not smoothed: an edit moves
+ * the pitch by cents, without a phase step. */
+void ma_synth_set_vco_analog(ma_synth *s, float amount, float dead_time);
 void ma_synth_set_oscillator_modulation(ma_synth *s, float sync_amount,
                                         float sync_softness,
                                         float crossmod_amount,
@@ -613,6 +647,112 @@ void ma_effects_set_chorus(ma_effects *fx, ma_chorus_controls controls);
 void ma_effects_set_reverb(ma_effects *fx, ma_reverb_controls controls);
 [[nodiscard]] ma_frame ma_effects_tick(ma_effects *fx, ma_frame input);
 
+/* RK1 insert rack (docs/ma-rack-plan.md): one fixed serial chain of blocks
+ * from a closed set of kinds, between the output DC block and the master
+ * fader. ma_rack_spec is the small value a host publishes; ma_rack is the
+ * caller-owned DSP state. An empty rack, a disabled block, a block at mix
+ * zero and a block at neutral settings all return their input bits. */
+/* EQ (RK1b): up to MA_EQ_BANDS parametric bands in series, then an output
+ * gain. The first param[MA_EQ_BAND_COUNT] bands are in use; band b's fields
+ * sit at param[MA_EQ_BAND(b, field)], and bands past the count hold their
+ * initial values. Utility: gain dB, mid/side width (1 = unchanged), balance.
+ * One enum, so the counts compare without enum-type warnings. */
+enum {
+    MA_EQ_BANDS = 8, MA_EQ_BAND_FIELDS = 5,
+    MA_EQ_BAND_COUNT = 0, MA_EQ_OUTPUT_DB = 1, MA_EQ_FIRST_BAND = 2,
+    MA_EQ_PARAM_COUNT = MA_EQ_FIRST_BAND + MA_EQ_BANDS * MA_EQ_BAND_FIELDS,
+    MA_UTILITY_GAIN_DB = 0, MA_UTILITY_WIDTH = 1, MA_UTILITY_PAN = 2, MA_UTILITY_PARAM_COUNT = 3,
+    MA_RACK_SLOTS = 8, MA_RACK_PARAMS = MA_EQ_PARAM_COUNT,
+};
+enum { MA_EQ_TYPE, MA_EQ_FREQ_HZ, MA_EQ_GAIN_DB, MA_EQ_Q, MA_EQ_ON };
+#define MA_EQ_BAND(b, field) (MA_EQ_FIRST_BAND + (b) * MA_EQ_BAND_FIELDS + (field))
+/* Band shapes (TPT state-variable forms). Gain applies to the bell and the
+ * shelves; Q is the width of the bell and notch, the slope of the shelves
+ * and the resonance of the cuts (.7071 is Butterworth, 12 dB/oct). */
+typedef enum : uint8_t {
+    MA_EQ_BELL, MA_EQ_LOW_SHELF, MA_EQ_HIGH_SHELF, MA_EQ_LOW_CUT, MA_EQ_HIGH_CUT, MA_EQ_NOTCH,
+    MA_EQ_TYPE_COUNT,
+} ma_eq_type;
+typedef enum : uint8_t {
+    MA_RACK_EMPTY = 0,
+    MA_RACK_EQ = 1,
+    MA_RACK_UTILITY = 2,
+    MA_RACK_KIND_COUNT,
+} ma_rack_kind;
+/* STEPPED: integer values (the band count, a band's type); no ramp. */
+typedef enum : uint8_t { MA_RACK_LINEAR, MA_RACK_LOG, MA_RACK_TOGGLE, MA_RACK_STEPPED } ma_rack_curve;
+typedef struct {
+    float minimum, maximum, initial;
+    ma_rack_curve curve;
+} ma_rack_param_info;
+[[nodiscard]] unsigned ma_rack_param_count(ma_rack_kind kind);
+[[nodiscard]] bool ma_rack_param_info_at(ma_rack_kind kind, unsigned index,
+                                         ma_rack_param_info *info);
+
+typedef struct {
+    uint32_t id;                   /* nonzero and unique while occupied */
+    ma_rack_kind kind;             /* MA_RACK_EMPTY: the slot is skipped */
+    bool enabled;
+    float mix;                     /* [0,1]; 1 is the block's full effect */
+    float param[MA_RACK_PARAMS];   /* per-kind layout above; rest unused, 0 */
+} ma_rack_slot_spec;
+typedef struct { ma_rack_slot_spec slot[MA_RACK_SLOTS]; } ma_rack_spec;
+/* An occupied, enabled slot of `kind` at its initial parameters, mix 1. */
+void ma_rack_slot_init(ma_rack_slot_spec *slot, ma_rack_kind kind, uint32_t id);
+/* Ids unique and nonzero, kinds known, every value finite and in range,
+ * stepped and toggle values whole, unused parameters zero, EQ bands past
+ * the count at their initial values. Empty slots must be all zero. */
+[[nodiscard]] bool ma_rack_spec_valid(const ma_rack_spec *spec);
+[[nodiscard]] bool ma_rack_spec_empty(const ma_rack_spec *spec);
+
+typedef struct {
+    float s1[2], s2[2];            /* TPT integrator states, L/R */
+    float a1, a2, a3, m0, m1, m2;
+    float weight;                  /* 0..1 crossfade: on/off and type change */
+    uint8_t type;                  /* the shape the coefficients hold */
+    bool active;
+} ma_rack_svf;
+typedef struct {
+    uint32_t id;
+    ma_rack_kind kind;
+    bool live;
+    bool moving;                   /* some parameter ramp may still run */
+    uint8_t span;                  /* EQ bands to visit: in use or fading */
+    float fade, fade_target;       /* structural crossfade, RKD6 */
+    ma_smoother mix;               /* target is mix, or 0 while disabled */
+    ma_smoother param[MA_RACK_PARAMS];
+    ma_rack_svf svf[MA_EQ_BANDS];
+} ma_rack_block;
+typedef struct {
+    ma_rack_block block[MA_RACK_SLOTS];  /* chain order; live ones first */
+    ma_rack_block staging[MA_RACK_SLOTS]; /* adoption scratch (one rack per thread) */
+    ma_rack_spec pending;          /* adopted once fade-outs reach zero */
+    bool has_pending;
+    float sample_rate_hz;
+    float fade_step;
+    uint16_t smooth_frames;
+    uint64_t applies, structural_changes, adoptions, sanitizations;
+    uint64_t lane_runs;            /* EQ runs taken by the AVX2 wavefront */
+} ma_rack;
+void ma_rack_init(ma_rack *rack, float sample_rate_hz);
+/* Clears every block's history; keeps the chain and its targets. */
+void ma_rack_reset(ma_rack *rack);
+/* Between frames on the render thread. An invalid spec changes nothing and
+ * returns false. Same id and kind keep their state (RKD6). */
+bool ma_rack_apply(ma_rack *rack, const ma_rack_spec *spec);
+[[nodiscard]] ma_frame ma_rack_tick(ma_rack *rack, ma_frame input);
+/* True while a fade or a parameter ramp is still moving. */
+[[nodiscard]] bool ma_rack_moving(const ma_rack *rack);
+/* Finish every fade, ramp and pending adoption at once: for a host that
+ * starts rendering, not for edits while sound is playing. */
+void ma_rack_settle(ma_rack *rack);
+/* n frames in place, the same bits as n calls of ma_rack_tick. Frames with
+ * skip[i] set (skip may be null) pass untouched and do not tick the rack.
+ * With `lanes` (the caller checked AVX2 at run time, as the pool does), a
+ * settled EQ block runs as an AVX2 wavefront: lane k is band k on sample
+ * t - k. */
+void ma_rack_process(ma_rack *rack, ma_frame *frames, const bool *skip, size_t n, bool lanes);
+
 typedef struct {
     ma_synth voice;
     uint64_t allocation_id;
@@ -656,6 +796,7 @@ typedef struct {
     float guard_step[2][MA_LANES];
     int32_t guard_frames[2][MA_LANES];
     int32_t triangle_initialized[2][MA_LANES];   /* 0 or -1 */
+    float rise[2][MA_LANES];
     float history[2][31][MA_LANES];
     float output_history[7][MA_LANES];
     float ladder_state[4][MA_LANES];
@@ -681,6 +822,11 @@ typedef struct {
     uint8_t active;                              /* gathered, still awake */
 } ma_voice_lanes;
 
+/* One run of the vector render (live-path step 7): the voice banks compute
+ * up to MA_POOL_RUN frames ahead of the per-frame mix, bank by bank, so the
+ * banks can run on several threads. */
+enum { MA_POOL_RUN = 256, MA_POOL_BANKS = MA_POOL_CAPACITY / MA_LANES };
+
 typedef struct {
     ma_pool_slot slot[MA_POOL_CAPACITY];
     ma_pool_group group[MA_POOL_CAPACITY];
@@ -691,6 +837,7 @@ typedef struct {
     ma_voice_pool_config config;
     ma_pool_diagnostics diagnostics;
     ma_effects effects;
+    ma_rack *rack;                 /* caller-owned, attached after init; NULL = none */
     float bend[16], pressure[16], mod_wheel[16];
     bool sustain[16];
     uint64_t next_allocation;
@@ -699,6 +846,13 @@ typedef struct {
     uint8_t cursor;
     bool lanes_enabled;            /* resolved from config.engine at init */
     ma_voice_lanes lanes[MA_POOL_CAPACITY / MA_LANES];
+    /* Run state: each bank's voice outputs for the run (bank-major, so two
+     * threads never share a cache line), the run frame at which a slot falls
+     * asleep (-1 none), and which part computes each bank. */
+    float run_out[MA_POOL_BANKS][MA_POOL_RUN][MA_LANES];
+    int16_t run_sleep[MA_POOL_CAPACITY];
+    uint8_t run_part[MA_POOL_BANKS];
+    uint16_t run_frames;
 } ma_voice_pool;
 static_assert(sizeof(ma_voice_pool) < 1024u * 1024u);
 
@@ -729,8 +883,26 @@ void ma_voice_pool_set_glide(ma_voice_pool *pool, bool enabled, float seconds);
 void ma_voice_pool_set_lfo(ma_voice_pool *pool, float depth, float rate_hz);
 void ma_voice_pool_set_output(ma_voice_pool *pool, float drive, float width,
     float crossfeed, float master);
+/* Insert the rack between the output DC block and the master fader. Init
+ * detaches it; reset keeps it. NULL detaches. The rack's own state is never
+ * touched by the pool. */
+void ma_voice_pool_attach_rack(ma_voice_pool *pool, ma_rack *rack);
 [[nodiscard]] ma_frame ma_voice_pool_tick(ma_voice_pool *pool);
 /* Events are dispatched by the caller at block boundaries. */
 void ma_voice_pool_render(ma_voice_pool *pool, ma_frame *frames, size_t count);
+
+/* A host's way to run parts of a render on its own threads. run must call
+ * job(arg, k) once for every k in [0, parts), on any thread and in any order,
+ * and return when all have finished. The core starts no thread itself. */
+typedef struct {
+    void (*run)(void *context, void (*job)(void *arg, unsigned part), void *arg, unsigned parts);
+    void *context;
+    unsigned parts;                /* how many parts the host can run at once, >= 1 */
+} ma_pool_executor;
+/* ma_voice_pool_render with the vector engine's voice banks spread over the
+ * executor's parts (live-path step 7); the same bits as ma_voice_pool_render
+ * for any executor, or none. The scalar engine ignores the executor. */
+void ma_voice_pool_render_parallel(ma_voice_pool *pool, ma_frame *frames, size_t count,
+                                   const ma_pool_executor *executor);
 
 #endif

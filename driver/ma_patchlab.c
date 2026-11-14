@@ -23,6 +23,7 @@
 #include "../src/mamutanalog.h"
 #include "host_parse.h"
 #include "live_io.h"
+#include "rt_audio.h"
 #include "ma_patch_file.h"
 #include "wav.h"
 
@@ -641,7 +642,7 @@ static void draw_screen(const patchlab *lab, unsigned long xruns) {
 static int run_interactive(patch_bank *bank, const char *initial,
                            const char *pcm_device, const char *midi_device,
                            unsigned rate, snd_pcm_uframes_t period,
-                           unsigned periods, float gain) {
+                           unsigned periods, float gain, int rt_prio) {
     patchlab lab = { .bank = bank, .active_note = -1 };
     if (initial) {
         bank_entry *entry = bank_find(lab.bank, initial);
@@ -658,6 +659,7 @@ static int run_interactive(patch_bank *bank, const char *initial,
     live_pcm audio = { 0 };
     if (live_pcm_open(&audio, pcm_device, rate, period, periods) < 0) return 1;
     period = audio.period;
+    if (rt_prio > 0) rt_audio_engage(rt_prio);
     snd_rawmidi_t *midi = nullptr;
     if (midi_device) {
         int error = snd_rawmidi_open(&midi, nullptr, midi_device,
@@ -730,7 +732,9 @@ static void usage(const char *program) {
         "  -r, --rate HZ                  44100..192000 (default 48000)\n"
         "  -p, --period FRAMES            default 128\n"
         "  -n, --periods COUNT            default 3\n"
-        "  -g, --gain GAIN                0..16 (default 0.5)\n",
+        "  -g, --gain GAIN                0..16 (default 0.5)\n"
+        "  --rt[=PRIO]                    SCHED_FIFO + mlockall at PRIO (live mode default, 80)\n"
+        "  --no-rt                        stay at normal priority\n",
         program);
 }
 
@@ -742,6 +746,7 @@ int main(int argc, char **argv) {
     unsigned rate = 48000, periods = 3;
     snd_pcm_uframes_t period = 128;
     float gain = .5f;
+    int rt_prio = 80;  /* live mode runs real-time by default; --no-rt opts out */
     static const struct option options[] = {
         { "list", no_argument, nullptr, 1000 },
         { "dump", required_argument, nullptr, 1001 },
@@ -754,6 +759,8 @@ int main(int argc, char **argv) {
         { "period", required_argument, nullptr, 'p' },
         { "periods", required_argument, nullptr, 'n' },
         { "gain", required_argument, nullptr, 'g' },
+        { "rt", optional_argument, nullptr, 1004 },
+        { "no-rt", no_argument, nullptr, 1005 },
         { "help", no_argument, nullptr, 'h' },
         { nullptr, 0, nullptr, 0 },
     };
@@ -778,6 +785,21 @@ int main(int argc, char **argv) {
             selector = optarg;
             break;
         case 1003: initial = optarg; break;
+        case 1004:
+            if (mode != MODE_LIVE) { usage(argv[0]); return 2; }
+            if (optarg) {
+                if (!host_parse_u64(optarg, 1, 99, &integer)) {
+                    usage(argv[0]); return 2;
+                }
+                rt_prio = (int)integer;
+            } else {
+                rt_prio = 80;
+            }
+            break;
+        case 1005:
+            if (mode != MODE_LIVE) { usage(argv[0]); return 2; }
+            rt_prio = 0;
+            break;
         case 'b': bank_directory = optarg; break;
         case 'd': pcm_device = optarg; break;
         case 'm': midi_device = optarg; break;
@@ -834,5 +856,5 @@ int main(int argc, char **argv) {
         return render_patch(&document, argv[optind], rate, gain);
     }
     return run_interactive(&bank, initial, pcm_device, midi_device, rate,
-                           period, periods, gain);
+                           period, periods, gain, rt_prio);
 }

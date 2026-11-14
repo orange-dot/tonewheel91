@@ -31,17 +31,18 @@ static float output_safety_tick(ma_output_state *output, float input) {
     return sample;
 }
 
-ma_frame ma_output_render(ma_output_state *output, float mid, float side,
-                           float drive, float load, float master) {
+/* Body and DC block. A non-finite mid or side skips both (and the rack):
+ * *finite is false and the frame is the raw mid +- side for the safety. */
+ma_frame ma_output_front(ma_output_state *output, float mid, float side,
+                         float drive, float load, bool *finite) {
     output->pre_body = mid;
     if (!(mid >= -FLT_MAX && mid <= FLT_MAX)
         || !(side >= -FLT_MAX && side <= FLT_MAX)) {
         output->post_body = mid;
-        return (ma_frame){
-            .left = output_safety_tick(output, mid + side),
-            .right = output_safety_tick(output, mid - side),
-        };
+        *finite = false;
+        return (ma_frame){ mid + side, mid - side };
     }
+    *finite = true;
     float body = mid;
     if (drive > 0.0f) {
         tw_drive_set(&output->body, drive);
@@ -50,10 +51,28 @@ ma_frame ma_output_render(ma_output_state *output, float mid, float side,
     output->post_body = body;
     float left = side == 0.0f ? body : body + side;
     float right = side == 0.0f ? body : body - side;
-    left = output_dc_tick(output, left, &output->dc_lp_left) * master;
-    right = output_dc_tick(output, right, &output->dc_lp_right) * master;
+    left = output_dc_tick(output, left, &output->dc_lp_left);
+    right = output_dc_tick(output, right, &output->dc_lp_right);
+    return (ma_frame){ left, right };
+}
+
+/* Master and safety; a non-finite frame goes to the safety unscaled. */
+ma_frame ma_output_back(ma_output_state *output, ma_frame x, float master, bool finite) {
+    if (finite) {
+        x.left *= master;
+        x.right *= master;
+    }
     return (ma_frame){
-        .left = output_safety_tick(output, left),
-        .right = output_safety_tick(output, right),
+        .left = output_safety_tick(output, x.left),
+        .right = output_safety_tick(output, x.right),
     };
+}
+
+ma_frame ma_output_render(ma_output_state *output, ma_rack *rack, float mid,
+                           float side, float drive, float load, float master) {
+    bool finite;
+    ma_frame x = ma_output_front(output, mid, side, drive, load, &finite);
+    /* RKD9: the rack sees the level before the master fader. */
+    if (finite && rack) x = ma_rack_tick(rack, x);
+    return ma_output_back(output, x, master, finite);
 }

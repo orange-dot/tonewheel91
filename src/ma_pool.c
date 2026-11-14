@@ -28,6 +28,16 @@ static ma_character character(const ma_voice_pool *p, unsigned slot) {
     c.filter_time_bias.release = .08f * draw(&state);
     c.vca_bias = .03f * draw(&state);
     c.walk_state = tw_splitmix64(&state);
+    /* The card's VCO-2 cores (docs/ma-vco-plan.md), drawn after everything
+     * above so the older values keep their bits. The spreads of the extra
+     * current and the dead time are the two boards of the SPICE study; the
+     * temperatures are an assumption. */
+    c.temp_k = 2.0f * draw(&state);
+    c.vco2_temp_k = .5f * draw(&state);
+    for (int k = 0; k < 2; k++) {
+        c.vco_extra_hz[k] = .244f + .036f * draw(&state);
+        c.vco_dead_us[k] = 6.546f + .057f * draw(&state);
+    }
     return c;
 }
 
@@ -79,11 +89,13 @@ void ma_voice_pool_reset(ma_voice_pool *p) {
     float amount = p->slot[0].voice.character.amount;
     ma_voice_pool_config config = p->config;
     bool lanes_enabled = p->lanes_enabled;
+    ma_rack *rack = p->rack;
     ma_chorus_controls chorus = p->effects.chorus.controls;
     ma_reverb_controls reverb = p->effects.reverb.controls;
     *p = (ma_voice_pool){ 0 };
     p->config = config;
     p->lanes_enabled = lanes_enabled;
+    p->rack = rack;
     copy_voice(&p->control, &control);
     initialize_slots(p);
     ma_effects_init(&p->effects, p->control.sample_rate_hz);
@@ -268,6 +280,10 @@ void ma_voice_pool_set_glide(ma_voice_pool *p, bool enabled, float seconds) {
     for (unsigned i = 0; i < p->config.limit; i++)
         ma_synth_set_glide(&p->slot[i].voice, enabled, seconds);
 }
+void ma_voice_pool_attach_rack(ma_voice_pool *p, ma_rack *rack) {
+    p->rack = rack;
+}
+
 void ma_voice_pool_set_lfo(ma_voice_pool *p, float depth, float rate_hz) {
     ma_synth_set_lfo(&p->control, depth, rate_hz);
     for (unsigned i = 0; i < p->config.limit; i++)
@@ -306,37 +322,26 @@ static void update_pan(ma_voice_pool *p, float width, float dispersion) {
     }
 }
 
-/* One output frame. With lanes, every gathered voice is computed first, eight
- * per vector; the per-slot transition, pan, sum and sleep logic then runs in
- * slot order exactly as in the scalar path. Voices share no state, so
- * computing them ahead of that loop changes no result. A slot that falls
- * asleep is scattered at once, keeping its state frozen as in the scalar path. */
-static ma_frame pool_tick(ma_voice_pool *p, bool lanes) {
+/* One output frame's mix: transition, pan, sum, sleep and groups in slot
+ * order, then the output front. `run` < 0 is the scalar engine, where each
+ * awake voice ticks here. `run` >= 0 is a frame of a computed run
+ * (run_banks below): the voice outputs and the frame at which a slot falls
+ * asleep were found ahead, bank by bank, and the lane was scattered there.
+ * Both give the bits of computing every voice inside this loop. Voices share
+ * no state, and what decides a sleep (the group's released phase, the
+ * voice's own envelope) changes only at events or in that voice. */
+[[gnu::always_inline]] static inline ma_frame pool_front(ma_voice_pool *p, int run, bool *finite) {
     ma_voice_tick_controls(&p->control);
     ma_synth *control = &p->control;
     float width = control->width == 0 ? 0 : control->smoothers.width.current;
     update_pan(p, width, control->smoothers.spatial_dispersion.current);
     float left = 0, right = 0;
     bool live_group[MA_POOL_CAPACITY] = { false };
-    float voice_out[MA_POOL_CAPACITY];
-    if (lanes) {
-        for (unsigned b = 0; b * MA_LANES < p->config.limit; b++) {
-            if (!p->lanes[b].active) continue;
-            ma_synth *voice[MA_LANES];
-            float detune[MA_LANES];
-            for (unsigned l = 0; l < MA_LANES; l++) {
-                unsigned i = b * MA_LANES + l;
-                bool here = i < p->config.limit;
-                voice[l] = &p->slot[here ? i : 0].voice;
-                detune[l] = here ? p->slot[i].detune_cents : 0.0f;
-            }
-            ma_lanes_tick(&p->lanes[b], voice, detune, &voice_out[b * MA_LANES]);
-        }
-    }
     for (unsigned i = 0; i < p->config.limit; i++) {
         ma_pool_slot *s = &p->slot[i];
         float raw = s->awake
-            ? (lanes ? voice_out[i] : ma_voice_tick_detuned(&s->voice, s->detune_cents))
+            ? (run >= 0 ? p->run_out[i / MA_LANES][run][i % MA_LANES]
+                        : ma_voice_tick_detuned(&s->voice, s->detune_cents))
                 * p->group_gain
             : 0;
         if (s->transition_remaining) {
@@ -347,16 +352,14 @@ static ma_frame pool_tick(ma_voice_pool *p, bool lanes) {
         s->last_contribution = raw;
         left += raw * p->pan[i].left;
         right += raw * p->pan[i].right;
-        if (s->awake && p->group[s->group].phase == MA_CARD_RELEASED
-            && s->voice.amp_envelope.stage == MA_ENVELOPE_IDLE) {
+        bool sleeps = run >= 0
+            ? s->awake && p->run_sleep[i] == run
+            : s->awake && p->group[s->group].phase == MA_CARD_RELEASED
+                && s->voice.amp_envelope.stage == MA_ENVELOPE_IDLE;
+        if (sleeps) {
             s->awake = false;
             p->diagnostics.active_slots--;
             p->diagnostics.sleeps++;
-            if (lanes) {
-                ma_voice_lanes *bank = &p->lanes[i / MA_LANES];
-                ma_lanes_scatter(bank, i % MA_LANES, &s->voice);
-                bank->active &= (uint8_t)~(1u << (i % MA_LANES));
-            }
         }
         if (s->awake) live_group[s->group] = true;
     }
@@ -370,16 +373,80 @@ static ma_frame pool_tick(ma_voice_pool *p, bool lanes) {
         p->output.dc_lp_left = dc;
         p->output.dc_lp_right = dc;
     }
-    ma_frame dry = ma_output_render(&p->output, mid, side,
-        control->smoothers.body_drive.current,
-        control->smoothers.body_load_ratio.current, control->master_level);
-    return ma_effects_tick(&p->effects, dry);
+    return ma_output_front(&p->output, mid, side, control->smoothers.body_drive.current,
+        control->smoothers.body_load_ratio.current, finite);
 }
+
+/* The voice banks of one part over the run: eight voices per vector, then,
+ * lane by lane in slot order, the sleep test the mix applies per frame. A
+ * lane that falls asleep is scattered at once, its state frozen, exactly as
+ * the per-frame path does. Banks of different parts touch disjoint slots and
+ * lanes; the groups are only read. */
+static void run_banks(void *arg, unsigned part) {
+    ma_voice_pool *p = arg;
+    unsigned n = p->run_frames;
+    for (unsigned b = 0; b * MA_LANES < p->config.limit; b++) {
+        if (p->run_part[b] != part) continue;
+        ma_voice_lanes *bank = &p->lanes[b];
+        ma_synth *voice[MA_LANES];
+        float detune[MA_LANES];
+        for (unsigned l = 0; l < MA_LANES; l++) {
+            unsigned i = b * MA_LANES + l;
+            bool here = i < p->config.limit;
+            voice[l] = &p->slot[here ? i : 0].voice;   /* a lane past the limit is never active */
+            detune[l] = here ? p->slot[i].detune_cents : 0.0f;
+        }
+        for (unsigned f = 0; f < n && bank->active; f++) {
+            ma_lanes_tick(bank, voice, detune, p->run_out[b][f]);
+            for (unsigned l = 0; l < MA_LANES; l++) {
+                if (!(bank->active >> l & 1u)) continue;
+                ma_pool_slot *s = &p->slot[b * MA_LANES + l];
+                if (p->group[s->group].phase == MA_CARD_RELEASED
+                    && s->voice.amp_envelope.stage == MA_ENVELOPE_IDLE) {
+                    p->run_sleep[b * MA_LANES + l] = (int16_t)f;
+                    ma_lanes_scatter(bank, l, &s->voice);
+                    bank->active &= (uint8_t)~(1u << l);
+                }
+            }
+        }
+    }
+}
+
+/* Spread the active banks over at most `parts` parts, each bank to the
+ * least loaded part so far (by active voices). Returns the parts in use. */
+static unsigned plan_parts(ma_voice_pool *p, unsigned parts) {
+    if (parts > MA_POOL_BANKS) parts = MA_POOL_BANKS;
+    unsigned load[MA_POOL_BANKS] = { 0 }, used = 0;
+    for (unsigned b = 0; b * MA_LANES < p->config.limit; b++) {
+        unsigned best = 0;
+        for (unsigned k = 1; k < parts; k++)
+            if (load[k] < load[best]) best = k;
+        unsigned voices = (unsigned)__builtin_popcount(p->lanes[b].active);
+        p->run_part[b] = (uint8_t)(voices ? best : 0);
+        load[p->run_part[b]] += voices;
+    }
+    for (unsigned k = 0; k < parts; k++) used += load[k] != 0;
+    return used;
+}
+
+/* Master, safety and the effects after the rack. */
+[[gnu::always_inline]] static inline ma_frame pool_back(ma_voice_pool *p, ma_frame x, bool finite) {
+    return ma_effects_tick(&p->effects, ma_output_back(&p->output, x, p->control.master_level, finite));
+}
+
 ma_frame ma_voice_pool_tick(ma_voice_pool *p) {
-    return pool_tick(p, false);
+    bool finite;
+    ma_frame x = pool_front(p, -1, &finite);
+    if (finite && p->rack) x = ma_rack_tick(p->rack, x);
+    return pool_back(p, x, finite);
 }
 
 void ma_voice_pool_render(ma_voice_pool *p, ma_frame *frames, size_t count) {
+    ma_voice_pool_render_parallel(p, frames, count, nullptr);
+}
+
+void ma_voice_pool_render_parallel(ma_voice_pool *p, ma_frame *frames, size_t count,
+                                   const ma_pool_executor *executor) {
     if (!p->lanes_enabled || !count) {
         for (size_t i = 0; i < count; i++) frames[i] = ma_voice_pool_tick(p);
         return;
@@ -393,7 +460,29 @@ void ma_voice_pool_render(ma_voice_pool *p, ma_frame *frames, size_t count) {
                 ma_lanes_gather(&p->lanes[b], l, &p->slot[i].voice);
         }
     }
-    for (size_t i = 0; i < count; i++) frames[i] = pool_tick(p, true);
+    /* Run by run: the voice banks for the run (on the executor's parts when
+     * there is one), then the per-frame mix and output front, the rack over
+     * the run (its AVX2 wavefront where an EQ is settled), then master,
+     * safety and effects. Rack, output and effects share no state with the
+     * voices, so this is the per-frame result bit for bit (test/ma_rack.c,
+     * test/ma_pool_parallel.c). */
+    bool skip[MA_POOL_RUN];
+    for (size_t at = 0; at < count; at += MA_POOL_RUN) {
+        size_t n = count - at < MA_POOL_RUN ? count - at : MA_POOL_RUN;
+        p->run_frames = (uint16_t)n;
+        for (unsigned i = 0; i < p->config.limit; i++) p->run_sleep[i] = -1;
+        unsigned want = executor && executor->run && executor->parts > 1 ? executor->parts : 1;
+        unsigned parts = plan_parts(p, want);
+        if (parts > 1) executor->run(executor->context, run_banks, p, parts);
+        else run_banks(p, 0);
+        for (size_t i = 0; i < n; i++) {
+            bool finite;
+            frames[at + i] = pool_front(p, (int)i, &finite);
+            skip[i] = !finite;
+        }
+        if (p->rack) ma_rack_process(p->rack, frames + at, skip, n, true);
+        for (size_t i = 0; i < n; i++) frames[at + i] = pool_back(p, frames[at + i], !skip[i]);
+    }
     for (unsigned b = 0; b < banks; b++)
         for (unsigned l = 0; l < MA_LANES; l++)
             if (p->lanes[b].active >> l & 1u)

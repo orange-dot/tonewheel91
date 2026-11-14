@@ -1,0 +1,62 @@
+* Mamut VCO-2 study: exponential converter and reset-type saw core.
+* Step 2 of the oscillator track, 2026-11-12. A hand-written study circuit for
+* the digital model, not a board design: rails are ideal sources, parts are
+* the lab's declared engineering transistor models (models/*.lib).
+*
+* CV is 1 V/octave, 0 V = C0 (16.352 Hz). Trims: RSCALE (scale), VTUNE (pitch).
+* Parameters come from the bench that includes this file:
+*   rscale vtune tcs  ct  rlim  hfe early  is2 dt2  temp
+*
+* ---- rails (ideal) ----
+VCC  VCC  0 12
+VTOP VTOP 0 8
+*
+* ---- pitch sum: 100k per input into RSCALE; about 17.8 mV per octave at VB ----
+* RSCALE has the tempco of a +3300 ppm/K resistor when tcs is set.
+RCV   CV    VB 100k
+RTUNE TUNE  VB 100k
+VTUNE TUNE  0  {vtune}
+RSCALE VB   0  {rscale} tc1={tcs}
+*
+* ---- exponential converter: PNP follower into a grounded-emitter NPN ----
+* I(Q2) = I(Q1) * (Is2/Is1) * exp(VB/Vt). Q1 runs at about 100 uA.
+XQ1 0   VB  E1  BC557C hfe={hfe} early={early}
+RE1 VCC E1  113k
+XQ2 SAW E1  0   BC547C hfe={hfe} early={early} is_scale={is2} delta_temp={dt2}
+*
+* ---- timing capacitor and its Darlington follower ----
+* RB3 keeps the first transistor fast enough to follow the ramp down; its base
+* current (a few nA) is the price, paid at the bottom of the range.
+CT  SAW 0 {ct}
+XQ3 VCC SAW  B3  BC547C hfe={hfe} early={early}
+XQ4 VCC B3   BUF BC547C hfe={hfe} early={early}
+RB3  B3  0 2.2meg
+RBUF BUF 0 47k
+*
+* ---- comparator: PNP pair, NPN mirror, inverter; thresholds by R3 R4 R5 ----
+* SQUARE high = reset. The threshold side has the same Darlington drop; RB5
+* lets it fall to the lower threshold within a microsecond of the reset.
+R3  VCC VTH 75k
+R4  VTH 0   51k
+R5  SQUARE VTH 47k
+XQ5 VCC VTH  B5   BC547C hfe={hfe} early={early}
+XQ6 VCC B5   THIN BC547C hfe={hfe} early={early}
+RB5 B5   0 100k
+RTH THIN 0 47k
+XQ21 NC  BUF  ET BC557C hfe={hfe} early={early}
+XQ22 DRV THIN ET BC557C hfe={hfe} early={early}
+R6  VCC ET 2.2k
+XQ23 NC  NC 0 BC547C hfe={hfe} early={early}
+XQ24 DRV NC 0 BC547C hfe={hfe} early={early}
+R7  DRV DB 4.7k
+R8  DB  0  100k
+XQ25 SQUARE DB 0 BC547C hfe={hfe} early={early}
+R11 VCC SQUARE 4.7k
+*
+* ---- reset: SQUARE high turns QD on, QD turns the PNP switch on ----
+R12 SQUARE DBASE 100k
+XQD RB DBASE 0 BC547C hfe={hfe} early={early}
+R13 RBASE RB 3.3k
+R14 VTOP RBASE 10k
+XQR SAW RBASE RE BC557C hfe={hfe} early={early}
+RLIM VTOP RE {rlim}

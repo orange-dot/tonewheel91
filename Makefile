@@ -48,7 +48,7 @@ EP_OBJS := $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o
 
 # The Mamut Analog line is a sibling core. Keep it out of the organ and EP
 # products; the aggregate core test and symbol audit are its first hosts.
-MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_osc.o $(BUILD)/ma_sources.o $(BUILD)/ma_filter.o $(BUILD)/ma_controls.o $(BUILD)/ma_patches.o $(BUILD)/ma_lanes.o $(BUILD)/ma_raster_table.o $(BUILD)/ma_glas.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o
+MA_OBJS := $(BUILD)/ma_voice.o $(BUILD)/ma_osc.o $(BUILD)/ma_sources.o $(BUILD)/ma_filter.o $(BUILD)/ma_controls.o $(BUILD)/ma_patches.o $(BUILD)/ma_lanes.o $(BUILD)/ma_raster_table.o $(BUILD)/ma_glas.o $(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o $(BUILD)/ma_rack.o $(BUILD)/ma_rack_lanes.o
 MA_RUNTIME_OBJS := $(MA_OBJS) $(BUILD)/drive.o
 # The voice modules share ma_voice_impl.h; MA_EVIDENCE_OBJS is the same set
 # built with -DMA_SOURCE_EVIDENCE (see the evidence rule below).
@@ -73,7 +73,7 @@ $(BUILD)/ep_voice.o $(BUILD)/ep_piano.o: $(BUILD)/%.o: src/%.c | $(BUILD)
 $(MA_VOICE_OBJS): $(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CORE_CFLAGS) -c $< -o $@
 
-$(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o: $(BUILD)/%.o: src/%.c | $(BUILD)
+$(BUILD)/ma_bank.o $(BUILD)/ma_output.o $(BUILD)/ma_pool.o $(BUILD)/ma_effects.o $(BUILD)/ma_rack.o $(BUILD)/ma_rack_lanes.o: $(BUILD)/%.o: src/%.c | $(BUILD)
 
 # MA_SOURCE_EVIDENCE changes the ma_synth layout, so every voice module is
 # rebuilt with it into its own object set. Never mix the two sets.
@@ -185,8 +185,8 @@ $(BUILD)/exhibit_viz: driver/exhibit_viz.c $(BUILD)/viz.o $(CORE_OBJS) | $(BUILD
 $(BUILD)/exhibit_ep_voice: driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ep_voice.c $(BUILD)/wav.o $(EP_OBJS) $(CORE_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
-$(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/smf_schedule.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) $(MA_OBJS) $(MA_HOST_OBJS) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/smf_schedule.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(EP_OBJS) $(CORE_OBJS) $(MA_OBJS) $(MA_HOST_OBJS) $(LDFLAGS) -o $@ $(LDLIBS)
+$(BUILD)/render_midi: driver/render_midi.c $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/smf_schedule.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(BUILD)/ma_patch_file.o $(EP_OBJS) $(CORE_OBJS) $(MA_OBJS) $(MA_HOST_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/wav.o $(BUILD)/smf.o $(BUILD)/smf_schedule.o $(BUILD)/host_parse.o $(BUILD)/midi_map.o $(BUILD)/ep_midi_map.o $(BUILD)/ma_patch_file.o $(EP_OBJS) $(CORE_OBJS) $(MA_OBJS) $(MA_HOST_OBJS) $(LDFLAGS) -o $@ $(LDLIBS)
 
 $(BUILD)/render_ma_architecture: driver/render_ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/render_ma_architecture.c $(BUILD)/ma_architecture_score.o $(BUILD)/ma_architecture_render.o $(BUILD)/ma_architecture_cli.o $(BUILD)/ma_dark_lead.o $(BUILD)/wav.o $(BUILD)/host_parse.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
@@ -208,6 +208,11 @@ $(BUILD)/derive_ma_constants: driver/derive_ma_constants.c | $(BUILD)
 
 $(BUILD)/exhibit_ma_osc: driver/exhibit_ma_osc.c $(MA_EVIDENCE_OBJS) $(BUILD)/drive.o | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DMA_SOURCE_EVIDENCE driver/exhibit_ma_osc.c $(MA_EVIDENCE_OBJS) $(BUILD)/drive.o $(LDFLAGS) -o $@ -lm $(LDLIBS)
+
+# The MA oscillator alone, for the SPICE oscillator study (driver/spice/vco/README.md).
+# By hand, like the other SPICE references; never a build dependency.
+$(BUILD)/vco_ma_ref: driver/spice/vco/ma_ref.c $(MA_EVIDENCE_OBJS) $(BUILD)/drive.o | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DMA_SOURCE_EVIDENCE driver/spice/vco/ma_ref.c $(MA_EVIDENCE_OBJS) $(BUILD)/drive.o $(LDFLAGS) -o $@ -lm $(LDLIBS)
 
 $(BUILD)/exhibit_ma_voice: driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) driver/exhibit_ma_voice.c $(BUILD)/wav.o $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
@@ -317,6 +322,8 @@ test: $(BUILD)/test $(BUILD)/test_hosted $(BUILD)/test_midi_map $(BUILD)/test_ma
 	$(BUILD)/test_ma_pool
 	$(BUILD)/test_ma3_midi
 	$(BUILD)/test_ma_effects
+	$(BUILD)/test_ma_rack
+	$(BUILD)/test_ma_pool_parallel
 	python3 test/ma3_cli.py $(BUILD)/render_midi $(BUILD)/test_ma3_midi
 
 test-clang:
@@ -668,5 +675,43 @@ check-ma3-1: $(BUILD)/test_ma3_midi $(BUILD)/render_midi
 
 # The Workbench desk, CLI and (from W0) UI. See docs/workbench-plan.md.
 include workbench/workbench.mk
+# Patchbench, the sound-design desk over Mamut Analog. See docs/patchbench-plan.md.
+include workbench/pb/patchbench.mk
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
+
+# RK1 insert rack gates (docs/ma-rack-plan.md section 4).
+test: $(BUILD)/test_ma_rack
+$(BUILD)/test_ma_rack: test/ma_rack.c $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-rk1
+check-rk1: $(BUILD)/test_ma_rack
+	$(BUILD)/test_ma_rack
+
+# Live-path step 7: the voice banks over an executor's parts give the serial
+# render's bits (real threads and a reversed order).
+test: $(BUILD)/test_ma_pool_parallel
+$(BUILD)/test_ma_pool_parallel: test/ma_pool_parallel.c $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lpthread -lm $(LDLIBS)
+.PHONY: check-ma-pool-parallel
+check-ma-pool-parallel: $(BUILD)/test_ma_pool_parallel
+	$(BUILD)/test_ma_pool_parallel
+
+# Circuit-derived oscillator pitch (docs/ma-vco-plan.md): the law against the
+# SPICE study's tables, exact bypass, the pitch a voice plays, both render paths.
+test: check-ma-vco
+$(BUILD)/test_ma_vco_analog: test/ma_vco_analog.c $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma-vco
+check-ma-vco: $(BUILD)/test_ma_vco_analog
+	$(BUILD)/test_ma_vco_analog
+
+# Circuit-derived oscillator shape (docs/ma-vco-plan.md, V2 and V3): B1's
+# rise, the skewed triangle and its centring, the saw's bow, the two triangle
+# shapers against the SPICE study, exact zero, both render paths.
+test: check-ma-vco-shape
+$(BUILD)/test_ma_vco_shape: test/ma_vco_shape.c $(MA_RUNTIME_OBJS) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MA_RUNTIME_OBJS) $(LDFLAGS) -o $@ -lm $(LDLIBS)
+.PHONY: check-ma-vco-shape
+check-ma-vco-shape: $(BUILD)/test_ma_vco_shape
+	$(BUILD)/test_ma_vco_shape

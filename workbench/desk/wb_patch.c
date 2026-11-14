@@ -41,6 +41,8 @@ bool wb_patch_read_overrides(const char *path, wb_patch_overrides *p, wb_error *
     size_t size;
     if (!wb_read_file(path, &data, &size)) return fail(error, 0, "cannot read %s", path);
     bool header = false, name = false, parent = false, ok = true;
+    unsigned version = 0;
+    ma_rack_reader rack = { 0 };
     unsigned number = 0;
     for (char *line = data; ok && line && *line;) {
         number++;
@@ -55,8 +57,22 @@ bool wb_patch_read_overrides(const char *path, wb_patch_overrides *p, wb_error *
         *eq = 0;
         const char *v = eq + 1;
         if (!header) {
-            if (strcmp(line, "wbpatch") || strcmp(v, "1")) { ok = fail(error, number, "expected wbpatch=1 first"); break; }
+            if (strcmp(line, "wbpatch") || (strcmp(v, "1") && strcmp(v, "2"))) {
+                ok = fail(error, number, "expected wbpatch=1 or wbpatch=2 first");
+                break;
+            }
+            version = (unsigned)(v[0] - '0');
             header = true;
+        } else if (!strcmp(line, "rack")) {
+            if (version < 2 || p->has_rack || strcmp(v, "1")) {
+                ok = fail(error, number, "rack=1 needs wbpatch=2 and appears once");
+                break;
+            }
+            p->has_rack = true;
+        } else if (!strncmp(line, "rack.", 5)) {
+            const char *why = nullptr;
+            if (!p->has_rack) { ok = fail(error, number, "rack keys need rack=1 before them"); break; }
+            if (!ma_rack_read_key(&p->rack, &rack, line, v, &why)) { ok = fail(error, number, "%s", why); break; }
         } else if (!strcmp(line, "name")) {
             if (name || !*v || strlen(v) > MA_PATCH_NAME_MAX) { ok = fail(error, number, "invalid or duplicate name"); break; }
             snprintf(p->name, sizeof p->name, "%s", v);
@@ -85,12 +101,14 @@ bool wb_patch_read_overrides(const char *path, wb_patch_overrides *p, wb_error *
     }
     free(data);
     if (ok && (!header || !name || !parent)) ok = fail(error, number, "a .wbpatch needs wbpatch=1, name and parent");
+    const char *why = nullptr;
+    if (ok && p->has_rack && !ma_rack_read_finish(&p->rack, &rack, &why)) ok = fail(error, number, "%s", why);
     return ok;
 }
 
 bool wb_patch_write_overrides(const char *path, const wb_patch_overrides *p, wb_error *error) {
     wb_buf b = { 0 };
-    wb_buf_printf(&b, "wbpatch=1\nname=%s\nparent=%s\n", p->name, p->parent);
+    wb_buf_printf(&b, "wbpatch=%d\nname=%s\nparent=%s\n", p->has_rack ? 2 : 1, p->name, p->parent);
     for (unsigned i = 0; i < p->override_count; i++) {
         ma_patch_field_info info;
         if (!ma_patch_field_info_at(p->field[i], &info)) continue;
@@ -100,6 +118,14 @@ bool wb_patch_write_overrides(const char *path, const wb_patch_overrides *p, wb_
             wb_format_f32((float)p->value[i], text);
             wb_buf_printf(&b, "%s=%s\n", info.name, text);
         }
+    }
+    if (p->has_rack) {
+        char text[8192];
+        if (ma_rack_format(&p->rack, text, sizeof text) < 0) {
+            wb_buf_free(&b);
+            return fail(error, 0, "%s: invalid rack", path);
+        }
+        wb_buf_printf(&b, "rack=1\n%s", text);
     }
     bool ok = !b.failed && wb_write_file_atomic(path, b.data, b.length);
     wb_buf_free(&b);
@@ -144,11 +170,14 @@ static bool factory(const char *name, ma_patch *out) {
     return false;
 }
 
-static bool flatten(const char *dir, const char *relative, ma_patch *out, char *name, unsigned depth,
-                    wb_error *error) {
+/* `rack` (may be null) receives the rack of the .mapatch at the root of the
+ * chain: a .wbpatch inherits its parent's rack (RKD12 round trip). */
+static bool flatten(const char *dir, const char *relative, ma_patch *out, ma_rack_spec *rack, char *name,
+                    unsigned depth, wb_error *error) {
     if (depth > WB_PATCH_DEPTH) return fail(error, 0, "patch parent chain deeper than %d (a cycle?)", WB_PATCH_DEPTH);
     if (!strncmp(relative, "factory:", 8)) {
         if (!factory(relative + 8, out)) return fail(error, 0, "unknown factory patch '%s'", relative + 8);
+        if (rack) *rack = (ma_rack_spec){ 0 };
         if (name) snprintf(name, MA_PATCH_NAME_MAX + 1, "%s", relative + 8);
         return true;
     }
@@ -159,12 +188,14 @@ static bool flatten(const char *dir, const char *relative, ma_patch *out, char *
         ma_patch_error pe = { 0 };
         if (!ma_patch_load(path, &doc, &pe)) return fail(error, pe.line, "%s: %s", relative, pe.message);
         *out = doc.value;
+        if (rack) *rack = doc.rack;
         if (name) snprintf(name, MA_PATCH_NAME_MAX + 1, "%s", doc.name);
         return true;
     }
     wb_patch_overrides p;
     if (!wb_patch_read_overrides(path, &p, error)) return false;
-    if (!flatten(dir, p.parent, out, nullptr, depth + 1, error)) return false;
+    if (!flatten(dir, p.parent, out, rack, nullptr, depth + 1, error)) return false;
+    if (rack && p.has_rack) *rack = p.rack;
     for (unsigned i = 0; i < p.override_count; i++)
         if (!ma_patch_field_set(out, p.field[i], p.value[i]))
             return fail(error, 0, "%s: override outside its domain", relative);
@@ -174,9 +205,15 @@ static bool flatten(const char *dir, const char *relative, ma_patch *out, char *
 
 bool wb_patch_load(const char *dir, const char *relative, ma_patch_document *doc, wb_error *error) {
     *doc = (ma_patch_document){ 0 };
-    return flatten(dir, relative, &doc->value, doc->name, 0, error);
+    return flatten(dir, relative, &doc->value, &doc->rack, doc->name, 0, error);
 }
 
 bool wb_patch_parent(const char *dir, const wb_patch_overrides *p, ma_patch *parent, wb_error *error) {
-    return flatten(dir, p->parent, parent, nullptr, 1, error);
+    return flatten(dir, p->parent, parent, nullptr, nullptr, 1, error);
+}
+
+bool wb_patch_parent_rack(const char *dir, const wb_patch_overrides *p, ma_patch *parent, ma_rack_spec *rack,
+                          wb_error *error) {
+    *rack = (ma_rack_spec){ 0 };
+    return flatten(dir, p->parent, parent, rack, nullptr, 1, error);
 }

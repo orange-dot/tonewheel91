@@ -38,7 +38,7 @@ float ma_voice_effective_filter_cutoff(const ma_synth *s,
 ma_frame ma_voice_render_output(ma_synth *s,
                                 const ma_render_controls *controls,
                                 float mono) {
-    return ma_output_render(&s->output, mono, 0.0f, controls->body_drive,
+    return ma_output_render(&s->output, nullptr, mono, 0.0f, controls->body_drive,
                              controls->body_load_ratio, s->master_level);
 }
 

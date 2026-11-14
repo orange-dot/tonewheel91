@@ -33,6 +33,12 @@ static ma_character card_character(uint8_t slot) {
         .vca_bias = .03f * character_draw(slot, 0x4d410130),
         .walk_state = character_seed(slot, 0x4d410103),
         .assigned = true,
+        .temp_k = 2.0f * character_draw(slot, 0x4d410140),
+        .vco2_temp_k = .5f * character_draw(slot, 0x4d410141),
+        .vco_extra_hz = { .244f + .036f * character_draw(slot, 0x4d410142),
+                          .244f + .036f * character_draw(slot, 0x4d410143) },
+        .vco_dead_us = { 6.546f + .057f * character_draw(slot, 0x4d410144),
+                         6.546f + .057f * character_draw(slot, 0x4d410145) },
     };
 }
 
@@ -261,7 +267,7 @@ ma_frame ma_card_bank_tick_stereo(ma_card_bank *bank) {
         stereo->output.dc_lp_left = dc;
         stereo->output.dc_lp_right = dc;
     }
-    return ma_output_render(&stereo->output, mid, side,
+    return ma_output_render(&stereo->output, nullptr, mid, side,
         control->smoothers.body_drive.current,
         control->smoothers.body_load_ratio.current, control->master_level);
 }

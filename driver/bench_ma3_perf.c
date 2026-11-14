@@ -43,6 +43,45 @@ static ma_pool_engine engine_mode(void) {
     fputs("Invalid MA3_PERF_ENGINE\n",stderr); exit(2);
 }
 static ma_pool_engine bench_engine=MA_POOL_ENGINE_AUTO;
+/* MA3_PERF_RACK=none|empty|eq8|eq64 (default none): the insert rack
+ * attached to the pool. empty = attached with no blocks; eq8 = eight EQ
+ * blocks of four active bands (low cut, low shelf, bell, high shelf: the RK1
+ * shape); eq64 = eight EQ blocks of eight active bands (docs/ma-rack-plan.md,
+ * RK1 gate 7). */
+static ma_rack bench_rack;
+static int rack_mode(void) {
+    const char *s=getenv("MA3_PERF_RACK");
+    if(!s||!strcmp(s,"none")) return 0;
+    if(!strcmp(s,"empty")) return 1;
+    if(!strcmp(s,"eq8")) return 2;
+    if(!strcmp(s,"eq64")) return 3;
+    fputs("Invalid MA3_PERF_RACK\n",stderr); exit(2);
+}
+static void attach_rack(void) {
+    int mode=rack_mode();
+    if(!mode) return;
+    ma_rack_spec spec={0};
+    static const struct { ma_eq_type type; float hz, db, q; } BANDS[8]={
+        {MA_EQ_LOW_CUT,30,0,.7071f},{MA_EQ_LOW_SHELF,120,.5f,.7071f},{MA_EQ_BELL,1000,-.5f,.7071f},
+        {MA_EQ_HIGH_SHELF,6000,.5f,.7071f},{MA_EQ_BELL,300,.5f,1},{MA_EQ_NOTCH,9000,0,4},
+        {MA_EQ_BELL,2500,-.5f,2},{MA_EQ_HIGH_CUT,18000,0,.7071f}};
+    if(mode>=2)
+        for(unsigned i=0;i<MA_RACK_SLOTS;i++) {
+            ma_rack_slot_init(&spec.slot[i],MA_RACK_EQ,i+1);
+            unsigned n=mode==2?4:8;
+            spec.slot[i].param[MA_EQ_BAND_COUNT]=(float)n;
+            for(unsigned b=0;b<n;b++) {
+                spec.slot[i].param[MA_EQ_BAND(b,MA_EQ_TYPE)]=BANDS[b].type;
+                spec.slot[i].param[MA_EQ_BAND(b,MA_EQ_FREQ_HZ)]=BANDS[b].hz;
+                spec.slot[i].param[MA_EQ_BAND(b,MA_EQ_GAIN_DB)]=BANDS[b].db;
+                spec.slot[i].param[MA_EQ_BAND(b,MA_EQ_Q)]=BANDS[b].q;
+            }
+        }
+    ma_rack_init(&bench_rack,RATE);
+    if(!ma_rack_apply(&bench_rack,&spec)) exit(1);
+    for(unsigned i=0;i<2048;i++) (void)ma_rack_tick(&bench_rack,(ma_frame){0,0}); /* past the fades */
+    ma_voice_pool_attach_rack(&pool,&bench_rack);
+}
 static int pmu_event(uint64_t config,int group) {
     struct perf_event_attr a; memset(&a,0,sizeof a);
     a.type=PERF_TYPE_HARDWARE; a.size=sizeof a; a.config=config;
@@ -156,7 +195,9 @@ static uint64_t run_case(const char *patch_name,const ma_patch *patch,unsigned b
     ma_patch p=*patch;
     p.bcs_amount=bcs?ma_patch_granica.bcs_amount:0;
     p.bcs_regime=ma_patch_granica.bcs_regime;
-    if(!ma_voice_pool_init(&pool,RATE,&c,&p)||!populate(limit,unison,scenario)) exit(1);
+    if(!ma_voice_pool_init(&pool,RATE,&c,&p)) exit(1);
+    attach_rack();
+    if(!populate(limit,unison,scenario)) exit(1);
     arm_effects(arm);
     unsigned count=scenario==0?0:scenario==1?1:scenario==2?8:limit;
     release_setup(scenario,count);
@@ -238,7 +279,7 @@ static uint64_t run_case(const char *patch_name,const ma_patch *patch,unsigned b
 }
 int main(int argc,char **argv) {
     if(argc!=2||(strcmp(argv[1],"--run")&&strcmp(argv[1],"--list")&&strcmp(argv[1],"--overhead"))) {
-        puts("Usage: bench_ma3_perf --run|--list|--overhead\nRun alone under taskset -c N. Filters: MA3_PERF_PATCH, _BCS, _LIMIT, _FRAMES, _SCENARIO, _ARM.\nOptional measured block CSV: MA3_PERF_RAW. Run label: MA3_PERF_RUN_ID.\nHardware counters: MA3_PERF_PMU=auto|required|off (default auto).\nPool engine: MA3_PERF_ENGINE=auto|scalar (default auto).");
+        puts("Usage: bench_ma3_perf --run|--list|--overhead\nRun alone under taskset -c N. Filters: MA3_PERF_PATCH, _BCS, _LIMIT, _FRAMES, _SCENARIO, _ARM.\nOptional measured block CSV: MA3_PERF_RAW. Run label: MA3_PERF_RUN_ID.\nHardware counters: MA3_PERF_PMU=auto|required|off (default auto).\nPool engine: MA3_PERF_ENGINE=auto|scalar (default auto).\nInsert rack: MA3_PERF_RACK=none|empty|eq8|eq64 (default none).");
         return argc==1?0:1;
     }
     unsigned warmup=env_u("MA3_PERF_WARMUP",DEFAULT_WARMUP),blocks=env_u("MA3_PERF_BLOCKS",DEFAULT_BLOCKS);

@@ -105,25 +105,25 @@ static void shared_body(void) {
     CHECK(difference > .01, "five-note bank must produce audible stereo differences");
     ma_output_state dry = bank.stereo.output;
     tw_drive frozen = dry.body;
-    ma_frame output = ma_output_render(&dry, .15f, .05f, 0, 1.5f, 1);
+    ma_frame output = ma_output_render(&dry, nullptr, .15f, .05f, 0, 1.5f, 1);
     CHECK(dry.post_body == .15f && memcmp(&dry.body, &frozen, sizeof frozen) == 0
           && output.left != output.right, "zero body drive preserves state and bypasses load scaling");
 
     ma_output_state side_only = { 0 };
     tw_drive_init(&side_only.body, 48000);
-    output = ma_output_render(&side_only, 0, .2f, 1, 1.5f, 1);
+    output = ma_output_render(&side_only, nullptr, 0, .2f, 1, 1.5f, 1);
     CHECK(output.left == .2f && output.right == -.2f,
           "side-only input must not pass through nonlinear body");
 
     ma_output_state invalid = bank.stereo.output;
     frozen = invalid.body;
-    output = ma_output_render(&invalid, NAN, .1f, 1, 1, 1);
+    output = ma_output_render(&invalid, nullptr, NAN, .1f, 1, 1, 1);
     CHECK(output.left == 0 && output.right == 0
           && invalid.diagnostics.sanitization_count == 2
           && memcmp(&frozen, &invalid.body, sizeof frozen) == 0,
           "nonfinite bus input must be counted without poisoning the chassis");
     ma_output_state loud = { 0 };
-    output = ma_output_render(&loud, 2, 1, 0, 1, 1);
+    output = ma_output_render(&loud, nullptr, 2, 1, 0, 1, 1);
     CHECK(output.left == 1 && output.right == 1
           && loud.diagnostics.pre_peak == 3
           && loud.diagnostics.post_peak == 1

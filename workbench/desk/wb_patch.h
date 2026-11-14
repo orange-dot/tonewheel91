@@ -4,6 +4,10 @@
  *   name=keys
  *   parent=factory:tepih | patches/pluck.mapatch | patches/base.wbpatch
  *   filter.cutoff_hz=1250          overrides only, any .mapatch field
+ *   rack=1                         optional (wbpatch=2): the child replaces
+ *   rack.1.kind=eq ...             the parent's insert rack with these
+ *                                  rack.<n>.* keys (none = an empty rack);
+ *                                  without rack=1 the rack is inherited
  *
  * A .wbpatch stores what differs from its parent; flattening resolves the
  * chain (at most eight levels, no cycles) into a full ma_patch.  Parent paths
@@ -26,6 +30,8 @@ typedef struct {
     unsigned override_count;
     unsigned field[WB_PATCH_FIELDS];   /* catalog index */
     double value[WB_PATCH_FIELDS];
+    bool has_rack;                     /* rack=1: `rack` replaces the parent's */
+    ma_rack_spec rack;
 } wb_patch_overrides;
 
 bool wb_patch_is_chain(const char *path);
@@ -39,6 +45,10 @@ bool wb_patch_load(const char *session_dir, const char *relative, ma_patch_docum
 /* The parent's flattened value (for "reset to parent" and dim display). */
 bool wb_patch_parent(const char *session_dir, const wb_patch_overrides *patch, ma_patch *parent,
                      wb_error *error);
+/* The same, with the rack the parent resolves to (an empty one for a
+ * factory parent). */
+bool wb_patch_parent_rack(const char *session_dir, const wb_patch_overrides *patch, ma_patch *parent,
+                          ma_rack_spec *rack, wb_error *error);
 /* Set or clear (`clear`) one override, keeping catalog order. */
 void wb_patch_override(wb_patch_overrides *patch, unsigned field, double value, bool clear);
 bool wb_patch_overridden(const wb_patch_overrides *patch, unsigned field);

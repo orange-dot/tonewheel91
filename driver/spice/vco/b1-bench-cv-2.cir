@@ -1,0 +1,96 @@
+* B1 DUT from native KiCad XML. VREFMON is an ideal series measurement probe.
+.include "/home/dev/work-base/workspace/research/mamut-synthesis-research/artifacts/mamut-vco-b1-tht-sim/20261016T103633.864779Z/source/sim/mamut-vco-b1-tht/models/bc547c.lib"
+.include "/home/dev/work-base/workspace/research/mamut-synthesis-research/artifacts/mamut-vco-b1-tht-sim/20261016T103633.864779Z/source/sim/mamut-vco-b1-tht/models/bc557c.lib"
+.include "/home/dev/work-base/workspace/research/mamut-synthesis-research/artifacts/mamut-vco-b1-tht-sim/20261016T103633.864779Z/source/sim/mamut-vco-b1-tht/models/support.lib"
+.temp 25
+VINPUT VIN 0 12
+VCV CV 0 2
+VREFMON VCC REF_K 0
+VREFMON2 VREF_MID REF_MID_SENSE 0
+RLOADT TRI_OUT 0 100k
+RLOADP PULSE_OUT 0 100k
+CLOADT TRI_OUT 0 100p
+CLOADP PULSE_OUT 0 100p
+XD1 VP VIN 1N4148
+R40 VP VCC {220*1.0}
+XU1 REF_K VREF_MID VREF_MID LM4040_4V096 offset=0 tc=0 temp_c=25 rz=0.25
+XU2 REF_MID_SENSE 0 0 LM4040_4V096 offset=0 tc=0 temp_c=25 rz=0.25
+C2 VCC 0 100n
+C6 VCC 0 {10u*1}
+R2 CV VSET {10k*1.0}
+C1 VSET 0 10n
+XD2 VSET 0 1N4148
+XD3 VSET 0 BZX55C6V8
+R41 VCC BQ {1meg*1.0}
+XQ27 BQ BQ VSET BC547C hfe=600 early=100
+XD4 BQ VSET 1N4148
+XQ11 PB BQ ESET BC547C hfe=600 early=100
+R1 ESET ER {20k*1.0}
+XRV2 0 ER ER POT_B1 total=5000 pos=0.4
+XQ1 PB PB EP1 BC557C hfe=600 early=100
+R21 VCC EP1 {1k*1.0}
+XQ2 TRI PB EP2 BC557C hfe=600 early=100
+R22 VCC EP2 {1k*1.0}
+XQ3 NB PB EP3 BC557C hfe=600 early=100
+R23 VCC EP3 {1k*1.0}
+XQ4 NB PB EP4 BC557C hfe=600 early=100
+R24 VCC EP4 {1k*1.0}
+XQ5 NB NB EN5 BC547C hfe=600 early=100
+XQ6 TRI NB EN6 BC547C hfe=600 early=100 is_scale=1
+R25 EN5 0 {1k*1.0}
+R26 EN6 0 {1k*1.0}
+XQ10 NB CLAMP_B 0 BC547C hfe=600 early=100
+R9 SQUARE CLAMP_B {100k*1.0}
+R10 CLAMP_B 0 {100k*1.0}
+C3 TRI 0 {22n*1.0}
+XQ14 VCC TRI TIN BC547C hfe=600 early=100
+R17 TIN 0 {47k*1.0}
+XQ26 VCC VTH THIN BC547C hfe=600 early=100
+R18 THIN 0 {47k*1.0}
+R3 VCC VTH {100k*1.0}
+R4 VTH 0 {100k*1.0}
+R5 SQUARE VTH {100k*1.0}
+XQ21 NC TIN ET BC557C hfe=600 early=100
+XQ22 DRV THIN ET BC557C hfe=600 early=100
+R6 VCC ET {2.2k*1.0}
+XQ23 NC NC 0 BC547C hfe=600 early=100
+XQ24 DRV NC 0 BC547C hfe=600 early=100
+R7 DRV DB {4.7k*1.0}
+R8 DB 0 {100k*1.0}
+XQ25 SQUARE DB 0 BC547C hfe=600 early=100
+R11 VCC SQUARE {4.7k*1.0}
+R30 VCC PW_HI {15k*1.0}
+XRV1 PW_LO PW_REF PW_HI POT_B1 total=10000 pos=0.5
+R31 PW_LO 0 {15k*1.0}
+XQ36 VCC PW_REF PW_IN BC547C hfe=600 early=100
+R32 PW_IN 0 {47k*1.0}
+XQ31 PNC TIN PET BC557C hfe=600 early=100
+XQ32 PDRV PW_IN PET BC557C hfe=600 early=100
+R33 VCC PET {2.2k*1.0}
+XQ33 PNC PNC 0 BC547C hfe=600 early=100
+XQ34 PDRV PNC 0 BC547C hfe=600 early=100
+R34 PDRV PDB {4.7k*1.0}
+R35 PDB 0 {100k*1.0}
+XQ35 PWM_RAW PDB 0 BC547C hfe=600 early=100
+R36 VCC PWM_RAW {4.7k*1.0}
+XQ12 VCC TIN TBUF BC547C hfe=600 early=100
+R12 TBUF 0 {4.7k*1.0}
+C4 TBUF TAC {4.7u*1}
+R13 TAC TRI_OUT {100*1.0}
+R14 TRI_OUT 0 {22k*1.0}
+R15 PWM_RAW PBO {15k*1.0}
+R16 PBO 0 {10k*1.0}
+XQ13 0 PBO PBUF BC557C hfe=600 early=100
+R19 VCC PBUF {4.7k*1.0}
+C5 PBUF PAC {4.7u*1}
+R20 PAC PULSE_OUT {100*1.0}
+R37 PULSE_OUT 0 {22k*1.0}
+.options reltol=1e-5 vntol=1e-8 abstol=1e-12 method=gear
+.control
+set wr_singlescale
+set wr_vecnames
+tran 1u .35 .25 2u
+wrdata trace.tsv v(TRI) v(PWM_RAW) v(TRI_OUT) v(PULSE_OUT) i(VINPUT) v(VCC) i(VREFMON) v(VSET) v(VP) v(VREF_MID) i(VREFMON2)
+quit
+.endc
+.end

@@ -97,6 +97,43 @@ class RenderCLI(unittest.TestCase):
         values = struct.unpack("<" + "f" * (len(pcm(path)) // 4), pcm(path))
         self.assertTrue(all(-1 <= v <= 1 for v in values))
 
+    def test_rack_from_patch_file(self):
+        # RK1: --rack reads the rack of a .mapatch v5; a bypassed rack is
+        # bit-identical to none, an active one changes the render, block size
+        # does not, and two runs agree.
+        lead = Path(__file__).resolve().parents[1] / "patches/mamutanalog/lead.mapatch"
+        # The factory file is version 3: v5 also needs the Glas fields (their
+        # values do not matter here, --rack takes only the rack).
+        text = lead.read_text().replace("mamutanalog_patch=3", "mamutanalog_patch=5") + (
+            "glas.formant_mix=0\nglas.formant_vowel=0\nglas.formant_shift=0\n"
+            "glas.formant_orbita=0\nglas.grain_mix=0\n")
+        def racked(name, eq_mid_db, enabled):
+            body = text + (
+                "rack.2.kind=eq\nrack.2.id=7\nrack.2.enabled=%d\nrack.2.mix=1\n"
+                "rack.2.bands=2\nrack.2.output_db=0\n"
+                "rack.2.band.1.type=low_cut\nrack.2.band.1.freq_hz=60\nrack.2.band.1.gain_db=0\n"
+                "rack.2.band.1.q=0.7071\nrack.2.band.1.on=1\n"
+                "rack.2.band.2.type=bell\nrack.2.band.2.freq_hz=900\nrack.2.band.2.gain_db=%s\n"
+                "rack.2.band.2.q=1\nrack.2.band.2.on=1\n" % (enabled, eq_mid_db))
+            path = self.root / name
+            path.write_text(body)
+            return str(path)
+        base = ["-I", "mamutanalog", "--patch", "Lead", "--voice-limit", "8", "-t", ".2"]
+        path, _ = self.run_render(base)
+        dry = pcm(path)
+        path, log = self.run_render(base + ["--rack", racked("off.mapatch", "6", 0)])
+        self.assertEqual(pcm(path), dry)
+        self.assertIn("rack 1 block from", log)
+        path, log = self.run_render(base + ["--rack", racked("on.mapatch", "6", 1)])
+        active = pcm(path)
+        self.assertNotEqual(active, dry)
+        self.assertIn("two runs identical", log)
+        for block in (1, 17, 4096):
+            path, _ = self.run_render(base + ["--block-frames", str(block), "--rack", racked("on.mapatch", "6", 1)])
+            self.assertEqual(pcm(path), active)
+        self.run_render(base + ["--rack", str(lead)], code=2)              # no rack in it
+        self.run_render(base + ["--rack", racked("bad.mapatch", "40", 1)], code=2)
+
     def test_channels_rates_and_seed(self):
         for rate in (44100, 48000, 96000, 192000):
             path, log = self.run_render(["-I", "mamutanalog", "-c", "1",

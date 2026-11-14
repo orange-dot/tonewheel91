@@ -101,6 +101,8 @@ static ma_vco_controls next_vco_controls(ma_vco_smoothers *smoothers) {
         .triangle_level = next_smoother(&smoothers->triangle_level),
         .sine_level = next_smoother(&smoothers->sine_level),
         .pulse_width = next_smoother(&smoothers->pulse_width),
+        .tri_sine_level = next_smoother(&smoothers->tri_sine_level),
+        .tri_saw_level = next_smoother(&smoothers->tri_saw_level),
     };
 }
 
@@ -206,6 +208,97 @@ float ma_safety_curve(float sample) {
     return sample < 0.0f ? -limited : limited;
 }
 
+/* e^y for y <= 0 (2^z as a power of two times (2^(f/4))^4), down to about
+ * 2^-126; the shape's few uses need a few parts in a million. */
+static float vco_exp_negative(float y) {
+    float z = y * VCO_INV_LN2;
+    if (z < -126.0f) return 0.0f;
+    int n = (int)z;
+    if ((float)n > z) n--;
+    float q = ma_octave_ratio_small(0.25f * (z - (float)n));
+    q *= q;
+    q *= q;
+    union { uint32_t bits; float value; } power = { .bits = (uint32_t)(n + 127) << 23 };
+    return q * power.value;
+}
+
+/* B1's rise less 0.5 for a pitch `octaves` from A4 (V2). */
+static float vco_rise(float octaves) {
+    float x = octaves < VCO_RISE_X_LOW ? VCO_RISE_X_LOW
+            : octaves > VCO_RISE_X_HIGH ? VCO_RISE_X_HIGH : octaves;
+    float p = VCO_RISE_POLY[4];
+    for (int i = 3; i >= 0; i--) p = p * x + VCO_RISE_POLY[i];
+    if (octaves < VCO_RISE_X_LOW) p += VCO_RISE_SLOPE_LOW * (octaves - VCO_RISE_X_LOW);
+    if (octaves > VCO_RISE_X_HIGH) p += VCO_RISE_SLOPE_HIGH * (octaves - VCO_RISE_X_HIGH);
+    float a = vco_exp_negative(p);
+    return a < VCO_RISE_MAX - 0.5f ? a : VCO_RISE_MAX - 0.5f;
+}
+
+/* The swing the shapers see at a pitch, less A4's (V2, V3, V2b): `octaves`
+ * from A4 below the join, the core's frequency above it. */
+static float vco_swell(float octaves, float hz) {
+    float x = octaves < VCO_SWELL_X_LOW ? VCO_SWELL_X_LOW
+            : octaves > VCO_SWELL_X_HIGH ? VCO_SWELL_X_HIGH : octaves;
+    float w = x * (VCO_SWELL_POLY[0] + x * (VCO_SWELL_POLY[1] + x * VCO_SWELL_POLY[2]));
+    if (octaves > VCO_SWELL_X_HIGH && hz > VCO_SWELL_JOIN_HZ) {
+        float top = hz < VCO_SWELL_TOP_HZ ? hz : VCO_SWELL_TOP_HZ;
+        w += VCO_SWELL_PER_HZ * (top - VCO_SWELL_JOIN_HZ);
+    }
+    return w;
+}
+
+/* This frame's circuit shapes (V2): with the law off, the old oscillator. */
+static void analog_shape(ma_synth *s, float amount, float octaves1, float octaves2,
+                         float hz1, float hz2) {
+    s->vco_skew[0] = amount * vco_rise(octaves1);
+    s->vco_skew[1] = amount * vco_rise(octaves2);
+    s->vco_swell[0] = amount * vco_swell(octaves1, hz1);
+    s->vco_swell[1] = amount * vco_swell(octaves2, hz2);
+    s->vco_bow = amount * VCO_SAW_BOW;
+}
+
+static void plain_shape(ma_synth *s) {
+    s->vco2_bend = 0.0f;
+    s->vco_skew[0] = s->vco_skew[1] = 0.0f;
+    s->vco_swell[0] = s->vco_swell[1] = 0.0f;
+    s->vco_bow = 0.0f;
+}
+
+/* The VCO-2 pitch law on this frame's pitch (docs/ma-vco-plan.md): returns
+ * VCO1's frequency and leaves VCO2's law, relative to it, in vco2_bend. Every
+ * circuit term scales with the amount, so a small amount is a small
+ * departure. A voice without a card is the nominal board at its trim
+ * temperature. */
+static float analog_pitch(ma_synth *s, float base_hz, float note_position,
+                          float pitch_delta, float detune_cents, float fine_cents) {
+    float amount = s->vco_analog;
+    const ma_character *c = &s->character;
+    bool card = c->assigned;
+    float dead = amount * s->vco_dead_time * 1e-6f;
+    float temp = card ? amount * (c->temp_k + c->walk_cents * VCO_WALK_K_PER_CENT) : 0.0f;
+    float octaves = (note_position - 69.0f + pitch_delta) * (1.0f / 12.0f)
+                  + detune_cents * (1.0f / 1200.0f);
+    float vco1_hz = vco_law_hz(base_hz, octaves,
+        amount * (card ? c->vco_extra_hz[0] : VCO_NOMINAL_EXTRA_HZ),
+        dead * (card ? c->vco_dead_us[0] : VCO_NOMINAL_DEAD_US), temp);
+    float ratio = interval_ratio(s->vco2_interval)
+                * ma_octave_ratio_small(fine_cents / 1200.0f);
+    float octaves2 = octaves + (float)s->vco2_interval * (1.0f / 12.0f)
+                   + fine_cents * (1.0f / 1200.0f);
+    float vco2_hz = vco_law_hz(base_hz * ratio, octaves2,
+        amount * (card ? c->vco_extra_hz[1] : VCO_NOMINAL_EXTRA_HZ),
+        dead * (card ? c->vco_dead_us[1] : VCO_NOMINAL_DEAD_US),
+        card ? temp + amount * c->vco2_temp_k : 0.0f);
+    s->vco2_bend = vco2_hz / (ratio * vco1_hz) - 1.0f;
+    analog_shape(s, amount, octaves, octaves2, vco1_hz, vco2_hz);
+    return vco1_hz;
+}
+
+float ma_voice_vco_law_hz(float hz, float octaves, float extra_hz, float dead_s,
+                          float temp_k) {
+    return vco_law_hz(hz, octaves, extra_hz, dead_s, temp_k);
+}
+
 #if defined(MA_SOURCE_EVIDENCE)
 static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     ma_render_controls controls = next_render_controls(s);
@@ -220,6 +313,11 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     if (character > 0.0f)
         base_hz *= ma_octave_ratio_small(character
             * (s->character.vco1_cents + s->character.walk_cents) / 1200.0f);
+    if (s->vco_analog > 0.0f)
+        base_hz = analog_pitch(s, base_hz, note_position, pitch_delta, detune_cents,
+                               controls.vco2_fine_cents);
+    else
+        plain_shape(s);
     if (controls.bcs_amount > 0.0f) {
         float bcs = ma_voice_render_bcs(s, base_hz, controls.bcs_amount,
                                         controls.bcs_regime, s->ladder.y4_guess);
@@ -297,6 +395,11 @@ void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
     if (character > 0.0f)
         base_hz *= ma_octave_ratio_small(character
             * (s->character.vco1_cents + s->character.walk_cents) / 1200.0f);
+    if (s->vco_analog > 0.0f)
+        base_hz = analog_pitch(s, base_hz, note_position, pitch_delta, detune_cents,
+                               controls->vco2_fine_cents);
+    else
+        plain_shape(s);
     f->character = character;
     f->note_position = note_position;
     f->base_hz = base_hz;

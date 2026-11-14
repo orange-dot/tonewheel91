@@ -1,0 +1,21 @@
+* B1 declared engineering support models. Not vendor-validated macro models.
+.subckt 1N4148 K A
+D1 A K DSIG
+.model DSIG D(Is=2n N=1.8 Rs=.8 Cjo=4p Tt=4n Bv=100 Ibv=5u)
+.ends
+.subckt BZX55C6V8 K A params: vz=6.8
+D1 A K DZ
+.model DZ D(Is=1n N=1.5 Rs=20 Cjo=50p Bv={vz} Ibv=5m)
+.ends
+.subckt LM4040_4V096 K A N params: offset=0 tc=0 temp_c=25 rz=.25
+* Finite positive slope shunt. Dropout, noise, startup dynamics are not characterized.
+BREF K A I={max((v(K,A)-4.096*(1+offset+tc*(temp_c-25)))/rz,0)}
+DREV A K DFOR
+.model DFOR D(Is=1n N=1.5 Rs=2)
+RLEAK K A 500meg
+CPAR K A 200p
+.ends
+.subckt POT_B1 L W H params: total=10000 pos=.5
+RL L W {max(total*pos,1)}
+RH W H {max(total*(1-pos),1)}
+.ends

@@ -236,7 +236,7 @@ static ma_frame pool_tick_timed(ma_voice_pool *p) {
         p->output.dc_lp_right = dc;
     }
     uint64_t t3 = tsc();
-    ma_frame dry = ma_output_render(&p->output, mid, side,
+    ma_frame dry = ma_output_render(&p->output, p->rack, mid, side,
         control->smoothers.body_drive.current,
         control->smoothers.body_load_ratio.current, control->master_level);
     ma_frame wet = ma_effects_tick(&p->effects, dry);

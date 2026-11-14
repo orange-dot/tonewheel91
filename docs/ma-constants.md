@@ -154,6 +154,27 @@ starts at phase zero with state `-1`, which is the seed there. A voice with
 no triangle state yet is seeded once, before the first substep of its first
 frame.
 
+With the circuit shape on (`vco.analog > 0`, docs/ma-vco-plan.md V2) the
+triangle has B1's unequal ramps [ALGORITHM REVISION 2026-11-14]. The rise
+takes `r = 0.5 + skew` of the turn; the pulse the integrator reads has its
+second edge at `r` instead of `.5`, and the integrator takes
+`c + h * pulse(p, r, d)` with `h = 1 / (4 r (1 - r))` and
+`c = (1 - 2r) / (4 r (1 - r))`, which is `+1/(2r)` on the rise and
+`-1/(2(1-r))` on the fall, so both ramps span two. The edges are `h` times
+as tall, so `gain = 1 / (1 - 1.25 * h * e)`; the seed is the two-ramp
+trajectory. When `r` changes the state takes the difference between the two
+steady trajectories at its phase, and once a frame, away from both edges, it
+is pulled `1/64` of the way back to its trajectory (the f32 rounding of
+unequal steps does not cancel). At `skew = 0` all of this is the text above,
+bit for bit: `h = 1`, `c = 0`, no move, no pull.
+
+The saw then carries VCO-2's bow, `bow * (4p(1-p) - 2/3)` added to its
+term, and two shapers read the triangle as the circuit sees it,
+`x = swing * state / gain` (ramps between +-1 at A4): the long-tailed pair's
+static curve `x * odd(x^2) + even(x^2)` and the switched pair
+`pulse(p, r, d) * (x - 1) / 2`, whose two steps take the pulse's smoothed
+edges. Their levels join the waveform divisor after the older four.
+
 Under cross-mod VCO1's step changes every substep. Its increment is then
 `pulse * 4d * gain(d0)` and its seed is `seed(p, d0)`, with `d0` the frame's
 unmodulated step [DECISION: the gain follows the note, not the modulation].

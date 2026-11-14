@@ -276,9 +276,10 @@ static void test_ma_patch_files(void) {
     bool legacy_copy = file && legacy && fseek(file, 0, SEEK_SET) == 0;
     char line[256];
     while (legacy_copy && fgets(line, sizeof line, file)) {
-        if (!strncmp(line, "raster.", 7) || !strncmp(line, "bcs.", 4))
+        if (!strncmp(line, "raster.", 7) || !strncmp(line, "bcs.", 4)
+            || !strncmp(line, "glas.", 5))
             continue;
-        char const *output = !strcmp(line, "mamutanalog_patch=3\n")
+        char const *output = !strcmp(line, "mamutanalog_patch=4\n")
                            ? "mamutanalog_patch=1\n" : line;
         legacy_copy = fputs(output, legacy) >= 0;
     }
@@ -293,8 +294,8 @@ static void test_ma_patch_files(void) {
     FILE *version2 = tmpfile();
     bool version2_copy = file && version2 && fseek(file, 0, SEEK_SET) == 0;
     while (version2_copy && fgets(line, sizeof line, file)) {
-        if (!strncmp(line, "bcs.", 4)) continue;
-        char const *output = !strcmp(line, "mamutanalog_patch=3\n")
+        if (!strncmp(line, "bcs.", 4) || !strncmp(line, "glas.", 5)) continue;
+        char const *output = !strcmp(line, "mamutanalog_patch=4\n")
                            ? "mamutanalog_patch=2\n" : line;
         version2_copy = fputs(output, version2) >= 0;
     }
@@ -306,6 +307,39 @@ static void test_ma_patch_files(void) {
           "legacy v2 MA patch did not migrate with BCS bypassed: %s",
           error.message);
     if (version2) fclose(version2);
+    FILE *version3 = tmpfile();
+    bool version3_copy = file && version3 && fseek(file, 0, SEEK_SET) == 0;
+    while (version3_copy && fgets(line, sizeof line, file)) {
+        if (!strncmp(line, "glas.", 5)) continue;
+        char const *output = !strcmp(line, "mamutanalog_patch=4\n")
+                           ? "mamutanalog_patch=3\n" : line;
+        version3_copy = fputs(output, version3) >= 0;
+    }
+    version3_copy = version3_copy && !ferror(file) && fflush(version3) == 0
+                  && fseek(version3, 0, SEEK_SET) == 0;
+    migrated = (ma_patch_document){ 0 };
+    CHECK(version3_copy && ma_patch_read(version3, &migrated, &error)
+          && !memcmp(&migrated.value, &source.value, sizeof source.value),
+          "legacy v3 MA patch did not migrate with Glas bypassed: %s",
+          error.message);
+    if (version3) fclose(version3);
+    if (file) fclose(file);
+
+    /* Version 4 carries a Glas patch exactly. */
+    ma_patch_document glas_source = { .name = "Glas", .value = ma_patch_tepih };
+    glas_source.value.formant_mix = .6f;
+    glas_source.value.formant_vowel = .4f;
+    glas_source.value.formant_shift = -.35f;
+    glas_source.value.formant_orbita = .3f;
+    glas_source.value.grain_mix = .2f;
+    file = tmpfile();
+    ma_patch_document glas_roundtrip = { 0 };
+    CHECK(file && ma_patch_write(file, &glas_source) && fflush(file) == 0
+          && fseek(file, 0, SEEK_SET) == 0
+          && ma_patch_read(file, &glas_roundtrip, &error)
+          && !memcmp(&glas_roundtrip.value, &glas_source.value,
+                     sizeof glas_source.value),
+          "MA patch v4 did not round-trip its Glas fields: %s", error.message);
     if (file) fclose(file);
 
     ma_patch_document invalid = { 0 };
@@ -332,7 +366,7 @@ static void test_ma_patch_files(void) {
                            &invalid, &error)
           && strstr(error.message, "domain"),
           "fractional MA patch integer was accepted");
-    CHECK(!read_patch_text("mamutanalog_patch=4\nname=x\n",
+    CHECK(!read_patch_text("mamutanalog_patch=8\nname=x\n",
                            &invalid, &error)
           && strstr(error.message, "version"),
           "unsupported MA patch version was accepted");
@@ -344,8 +378,13 @@ static void test_ma_patch_files(void) {
     CHECK(!read_patch_text("mamutanalog_patch=2\nname=x\n"
                            "bcs.amount=.2\n",
                            &invalid, &error)
-          && strstr(error.message, "version 3"),
+          && strstr(error.message, "newer"),
           "MA patch v2 accepted a BCS field");
+    CHECK(!read_patch_text("mamutanalog_patch=3\nname=x\n"
+                           "glas.grain_mix=.2\n",
+                           &invalid, &error)
+          && strstr(error.message, "version 4"),
+          "MA patch v3 accepted a Glas field");
     CHECK(!read_patch_text("mamutanalog_patch=1\nname=bad=name\n",
                            &invalid, &error)
           && strstr(error.message, "name"),
@@ -389,7 +428,7 @@ static void test_ma_patch_files(void) {
               builtins[i].name, error.line, error.message);
     }
 
-    CHECK(ma_patch_field_count() == 50,
+    CHECK(ma_patch_field_count() == 61,
           "MA patch field catalog count changed unexpectedly");
     ma_patch_field_info field = { 0 };
     double value = 0.0;
@@ -417,6 +456,10 @@ static void test_ma_patch_files(void) {
           && !ma_patch_field_get(&edited, ma_patch_field_count(), &value)
           && !ma_patch_field_set(&edited, ma_patch_field_count(), 0.0),
           "MA patch field catalog accepted an invalid index");
+    CHECK(ma_patch_field_info_at(52, &field)
+          && !strcmp(field.name, "glas.formant_shift")
+          && field.minimum == -1.0 && field.maximum == 1.0,
+          "MA patch Glas shift field metadata drifted");
     ma_patch_document unwritable = source;
     unwritable.value.filter_cutoff_hz = 0.0f / 0.0f;
     file = tmpfile();
@@ -431,6 +474,186 @@ static void test_ma_patch_files(void) {
     if (file) fclose(file);
 }
 
+/* Whole text of a written patch, for line-level edits in the tests. */
+static bool patch_text(const ma_patch_document *doc, char *out, size_t size) {
+    FILE *file = tmpfile();
+    if (!file) return false;
+    bool ok = ma_patch_write(file, doc) && fflush(file) == 0 && fseek(file, 0, SEEK_SET) == 0;
+    size_t n = ok ? fread(out, 1, size - 1, file) : 0;
+    out[n] = 0;
+    fclose(file);
+    return ok && n < size - 1;
+}
+
+/* Replace the first occurrence of `from` in text (in place, bounded). */
+static bool edit_text(char *text, size_t size, const char *from, const char *to) {
+    char *at = strstr(text, from);
+    if (!at) return false;
+    size_t head = (size_t)(at - text), tail = strlen(at + strlen(from));
+    if (head + strlen(to) + tail + 1 > size) return false;
+    memmove(at + strlen(to), at + strlen(from), tail + 1);
+    memcpy(at, to, strlen(to));
+    return true;
+}
+
+/* Version 6 carries the oscillator pitch block (docs/ma-vco-plan.md); a patch
+ * without it keeps writing version 4 or 5, without the vco.* keys. */
+static void test_ma_patch_vco(void) {
+    ma_patch_document plain = { .name = "Lead", .value = ma_patch_lead };
+    static char text[16384], older[16384];
+    CHECK(patch_text(&plain, older, sizeof older) && !strncmp(older, "mamutanalog_patch=4\n", 20)
+          && !strstr(older, "vco."), "a patch without the pitch law must keep writing version 4");
+
+    ma_patch_document analog = plain;
+    analog.value.vco_analog = .75f;
+    analog.value.vco_dead_time = .25f;
+    CHECK(patch_text(&analog, text, sizeof text) && !strncmp(text, "mamutanalog_patch=6\n", 20)
+          && strstr(text, "vco.analog=0.75\n") && strstr(text, "vco.dead_time=0.25\n"),
+          "the pitch law did not write as version 6");
+    ma_patch_document back = { 0 };
+    ma_patch_error error = { 0 };
+    CHECK(read_patch_text(text, &back, &error) && !memcmp(&back.value, &analog.value, sizeof analog.value),
+          "the pitch law did not round-trip: line %u %s", error.line, error.message);
+    /* The dead time alone is kept too, although it does nothing at amount zero. */
+    analog.value.vco_analog = 0;
+    CHECK(patch_text(&analog, text, sizeof text) && !strncmp(text, "mamutanalog_patch=6\n", 20)
+          && read_patch_text(text, &back, &error) && back.value.vco_dead_time == .25f,
+          "a dead time without an amount was lost");
+    /* With a rack as well: version 6, both blocks. */
+    analog.value.vco_analog = 1;
+    ma_rack_slot_init(&analog.rack.slot[0], MA_RACK_UTILITY, 1);
+    CHECK(patch_text(&analog, text, sizeof text) && !strncmp(text, "mamutanalog_patch=6\n", 20)
+          && strstr(text, "rack.1.kind=utility\n") && read_patch_text(text, &back, &error)
+          && !memcmp(&back.rack, &analog.rack, sizeof analog.rack) && back.value.vco_analog == 1,
+          "version 6 with a rack did not round-trip: line %u %s", error.line, error.message);
+
+    struct { const char *from, *to, *why; } bad[] = {
+        { "mamutanalog_patch=6", "mamutanalog_patch=5", "version 6" },
+        { "vco.dead_time=0.25\n", "", "missing" },
+        { "vco.analog=1", "vco.analog=1.5", "domain" },
+        { "vco.analog=1\n", "vco.analog=1\nvco.analog=1\n", "duplicate" },
+    };
+    for (unsigned i = 0; i < sizeof bad / sizeof *bad; i++) {
+        static char edited[16384];
+        snprintf(edited, sizeof edited, "%s", text);
+        bool replaced = edit_text(edited, sizeof edited, bad[i].from, bad[i].to);
+        CHECK(replaced && !read_patch_text(edited, &back, &error) && strstr(error.message, bad[i].why),
+              "malformed version 6 patch %u accepted or wrong reason: '%s'", i, error.message);
+    }
+    /* An older file loads with the block at its bypass. */
+    CHECK(read_patch_text(older, &back, &error) && back.value.vco_analog == 0 && back.value.vco_dead_time == 0,
+          "a version 4 patch did not load with the pitch law off");
+}
+
+/* Version 7 carries the triangle shapers (docs/ma-vco-plan.md, V3); a patch
+ * without them keeps writing version 6 or below. */
+static void test_ma_patch_shapers(void) {
+    ma_patch_document plain = { .name = "Lead", .value = ma_patch_lead };
+    static char text[16384], older[16384];
+    CHECK(patch_text(&plain, older, sizeof older) && !strstr(older, "tri_"),
+          "a patch without the shapers wrote their keys");
+    ma_patch_document shaped = plain;
+    shaped.value.vco1.tri_sine_level = .5f;
+    shaped.value.vco2.tri_saw_level = .25f;
+    CHECK(patch_text(&shaped, text, sizeof text) && !strncmp(text, "mamutanalog_patch=7\n", 20)
+          && strstr(text, "vco1.tri_sine=0.5\n") && strstr(text, "vco2.tri_saw=0.25\n")
+          && strstr(text, "vco1.tri_saw=0\n") && strstr(text, "vco.analog=0\n"),
+          "the shapers did not write as version 7 with the pitch block");
+    ma_patch_document back = { 0 };
+    ma_patch_error error = { 0 };
+    CHECK(read_patch_text(text, &back, &error) && !memcmp(&back.value, &shaped.value, sizeof shaped.value),
+          "the shapers did not round-trip: line %u %s", error.line, error.message);
+    struct { const char *from, *to, *why; } bad[] = {
+        { "mamutanalog_patch=7", "mamutanalog_patch=6", "version 7" },
+        { "vco2.tri_sine=0\n", "", "missing" },
+        { "vco1.tri_sine=0.5", "vco1.tri_sine=2", "domain" },
+    };
+    for (unsigned i = 0; i < sizeof bad / sizeof *bad; i++) {
+        static char edited[16384];
+        snprintf(edited, sizeof edited, "%s", text);
+        bool replaced = edit_text(edited, sizeof edited, bad[i].from, bad[i].to);
+        CHECK(replaced && !read_patch_text(edited, &back, &error) && strstr(error.message, bad[i].why),
+              "malformed version 7 patch %u accepted or wrong reason: '%s'", i, error.message);
+    }
+    CHECK(read_patch_text(older, &back, &error) && back.value.vco1.tri_sine_level == 0
+          && back.value.vco2.tri_saw_level == 0, "an older patch did not load with the shapers off");
+}
+
+/* RK1: .mapatch version 5 carries the rack (docs/ma-rack-plan.md RKD12). */
+static void test_ma_patch_rack(void) {
+    ma_patch_document plain = { .name = "Lead", .value = ma_patch_lead };
+    static char text[16384], edited[16384];
+    CHECK(patch_text(&plain, text, sizeof text) && !strncmp(text, "mamutanalog_patch=4\n", 20)
+          && !strstr(text, "rack."), "an empty rack must keep writing version 4");
+
+    ma_patch_document racked = plain;
+    ma_rack_slot_init(&racked.rack.slot[0], MA_RACK_EQ, 5);
+    racked.rack.slot[0].param[MA_EQ_BAND_COUNT] = 2;
+    racked.rack.slot[0].param[MA_EQ_BAND(0, MA_EQ_TYPE)] = MA_EQ_LOW_CUT;
+    racked.rack.slot[0].param[MA_EQ_BAND(0, MA_EQ_FREQ_HZ)] = 60;
+    racked.rack.slot[0].param[MA_EQ_BAND(1, MA_EQ_GAIN_DB)] = -3.25f;
+    racked.rack.slot[0].param[MA_EQ_BAND(1, MA_EQ_Q)] = 1.7f;
+    racked.rack.slot[0].param[MA_EQ_OUTPUT_DB] = 1.5f;
+    racked.rack.slot[0].mix = .8f;
+    ma_rack_slot_init(&racked.rack.slot[3], MA_RACK_UTILITY, 9);
+    racked.rack.slot[3].enabled = false;
+    racked.rack.slot[3].param[MA_UTILITY_WIDTH] = 1.25f;
+    CHECK(patch_text(&racked, text, sizeof text) && !strncmp(text, "mamutanalog_patch=5\n", 20)
+          && strstr(text, "rack.1.kind=eq\n") && strstr(text, "rack.4.kind=utility\n")
+          && strstr(text, "rack.4.enabled=0\n") && strstr(text, "rack.1.band.2.q=1.70000005\n")
+          && strstr(text, "rack.1.band.1.type=low_cut\n") && strstr(text, "rack.1.bands=2\n")
+          && !strstr(text, "rack.1.band.3."),
+          "rack did not write as version 5");
+    ma_patch_document back = { 0 };
+    ma_patch_error error = { 0 };
+    CHECK(read_patch_text(text, &back, &error)
+          && !memcmp(&back.value, &racked.value, sizeof racked.value)
+          && !memcmp(&back.rack, &racked.rack, sizeof racked.rack),
+          "rack did not round-trip: line %u %s", error.line, error.message);
+
+    struct { const char *from, *to, *why; } bad[] = {
+        { "mamutanalog_patch=5", "mamutanalog_patch=4", "version 5" },
+        { "rack.1.band.2.gain_db=-3.25\n", "", "missing" },
+        { "rack.1.kind=eq\n", "rack.1.kind=eq\nrack.1.kind=eq\n", "duplicate" },
+        { "rack.1.kind=eq", "rack.1.kind=flanger", "unknown rack kind" },
+        { "rack.4.id=9", "rack.4.id=5", "unique" },
+        { "rack.4.id=9", "rack.4.id=0", "integer" },
+        { "rack.1.band.2.gain_db=-3.25", "rack.1.band.2.gain_db=25", "domain" },
+        { "rack.1.band.1.on=1", "rack.1.band.1.on=0.5", "toggle" },
+        { "rack.1.band.1.type=low_cut", "rack.1.band.1.type=wah", "unknown EQ band type" },
+        { "rack.1.bands=2", "rack.1.bands=1.5", "whole" },
+        { "rack.1.bands=2", "rack.1.bands=1", "past the band count" },
+        { "rack.1.bands=2", "rack.1.bands=3", "missing" },
+        { "rack.1.mix=0.800000012", "rack.1.mix=1.5", "mix" },
+        { "rack.4.enabled=0", "rack.4.enabled=2", "enabled" },
+        { "rack.1.band.2.q", "rack.9.band.2.q", "1..8" },
+        { "rack.4.width", "rack.4.band.1.q", "unknown rack key" },
+        { "rack.1.kind=eq\n", "", "kind must come first" },
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) {
+        memcpy(edited, text, sizeof text);
+        ma_patch_document doc = { 0 };
+        error = (ma_patch_error){ 0 };
+        bool edited_ok = edit_text(edited, sizeof edited, bad[i].from, bad[i].to);
+        CHECK(edited_ok && !read_patch_text(edited, &doc, &error) && strstr(error.message, bad[i].why),
+              "rack case %zu (%s) gave \"%s\"", i, bad[i].why, error.message);
+    }
+
+    static const char *factory[] = { "dubina", "granica", "lead", "prizma", "raster", "tepih" };
+    for (size_t i = 0; i < sizeof factory / sizeof *factory; i++) {
+        char path[128];
+        snprintf(path, sizeof path, "patches/mamutanalog/%s.mapatch", factory[i]);
+        ma_patch_document doc = { 0 };
+        CHECK(ma_patch_load(path, &doc, &error) && ma_rack_spec_empty(&doc.rack),
+              "%s: %s", path, error.message);
+    }
+    ma_patch_document invalid = racked;
+    invalid.rack.slot[3].id = 5;
+    FILE *file = tmpfile();
+    CHECK(file && !ma_patch_write(file, &invalid), "writer accepted duplicate rack ids");
+    if (file) fclose(file);
+}
+
 int main(void) {
     test_smf_valid();
     test_smf_malformed();
@@ -438,6 +661,9 @@ int main(void) {
     test_host_parse();
     test_live_layout();
     test_ma_patch_files();
+    test_ma_patch_rack();
+    test_ma_patch_vco();
+    test_ma_patch_shapers();
     printf("hosted: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
 }

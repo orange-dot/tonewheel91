@@ -526,6 +526,45 @@ static void test_patch_chain(void) {
     CHECK(wb_patch_load(dir, "patches/grand.wbpatch", &doc, &e) && !memcmp(&doc.value, &want, sizeof want));
     ma_patch parent;
     CHECK(wb_patch_parent(dir, &o, &parent, &e) && parent.filter_cutoff_hz == 1234);
+
+    /* RK1: a child inherits its parent's rack; rack=1 (wbpatch=2) replaces
+     * it, with no keys meaning an empty rack; the rack round-trips. */
+    ma_patch_document racked = { .value = ma_patch_dubina };
+    snprintf(racked.name, sizeof racked.name, "racked");
+    ma_rack_slot_init(&racked.rack.slot[0], MA_RACK_EQ, 4);
+    racked.rack.slot[0].param[MA_EQ_BAND_COUNT] = 1;
+    racked.rack.slot[0].param[MA_EQ_BAND(0, MA_EQ_GAIN_DB)] = -6;
+    snprintf(path, sizeof path, "%s/patches/racked.mapatch", dir);
+    CHECK(ma_patch_save(path, &racked, &pe));
+    static const struct { const char *file, *text; } RACKS[] = {
+        { "rchild.wbpatch", "wbpatch=1\nname=rc\nparent=patches/racked.mapatch\nfilter.cutoff_hz=900\n" },
+        { "rnone.wbpatch", "wbpatch=2\nname=rn\nparent=patches/racked.mapatch\nrack=1\n" },
+        { "rown.wbpatch", "wbpatch=2\nname=ro\nparent=patches/racked.mapatch\nrack=1\n"
+                          "rack.3.kind=utility\nrack.3.id=9\nrack.3.enabled=1\nrack.3.mix=1\n"
+                          "rack.3.gain_db=-4.5\nrack.3.width=1\nrack.3.pan=0\n" },
+        { "rold.wbpatch", "wbpatch=1\nname=rx\nparent=patches/racked.mapatch\nrack=1\n" },
+        { "rkey.wbpatch", "wbpatch=2\nname=rk\nparent=patches/racked.mapatch\nrack.1.kind=eq\n" },
+    };
+    for (size_t i = 0; i < sizeof RACKS / sizeof *RACKS; i++) {
+        snprintf(path, sizeof path, "%s/patches/%s", dir, RACKS[i].file);
+        CHECK(wb_write_file_atomic(path, RACKS[i].text, strlen(RACKS[i].text)));
+    }
+    CHECK(wb_patch_load(dir, "patches/racked.mapatch", &doc, &e) && !memcmp(&doc.rack, &racked.rack, sizeof doc.rack));
+    CHECK(wb_patch_load(dir, "patches/rchild.wbpatch", &doc, &e) && !memcmp(&doc.rack, &racked.rack, sizeof doc.rack)
+          && doc.value.filter_cutoff_hz == 900);
+    CHECK(wb_patch_load(dir, "patches/rnone.wbpatch", &doc, &e) && ma_rack_spec_empty(&doc.rack));
+    CHECK(wb_patch_load(dir, "patches/rown.wbpatch", &doc, &e) && doc.rack.slot[2].kind == MA_RACK_UTILITY
+          && doc.rack.slot[2].param[MA_UTILITY_GAIN_DB] == -4.5f && doc.rack.slot[0].kind == MA_RACK_EMPTY);
+    CHECK(!wb_patch_load(dir, "patches/rold.wbpatch", &doc, &e) && strstr(e.message, "wbpatch=2"));
+    CHECK(!wb_patch_load(dir, "patches/rkey.wbpatch", &doc, &e) && strstr(e.message, "rack=1"));
+    wb_patch_overrides ro;
+    snprintf(path, sizeof path, "%s/patches/rown.wbpatch", dir);
+    CHECK(wb_patch_load(dir, "patches/rown.wbpatch", &doc, &e));
+    ma_rack_spec own = doc.rack, parent_rack;
+    CHECK(wb_patch_read_overrides(path, &ro, &e) && ro.has_rack && wb_patch_write_overrides(path, &ro, &e)
+          && wb_patch_load(dir, "patches/rown.wbpatch", &doc, &e) && !memcmp(&doc.rack, &own, sizeof own));
+    CHECK(wb_patch_parent_rack(dir, &ro, &parent, &parent_rack, &e)
+          && !memcmp(&parent_rack, &racked.rack, sizeof parent_rack));
     cleanup(dir);
 }
 

@@ -1,0 +1,11 @@
+* Mamut Rev B engineering approximation, NOT a vendor-validated model.
+* Is fitted to |VBE|=.660V at |IC|=2mA, |VCE|=5V, 25C.
+* VAF=100V and BF=600 are declared assumptions; corners are mandatory.
+* Junction capacitances/transit time seed: Diotec simplified vendor model.
+* No characterized flicker noise, high-current rolloff or breakdown.
+.subckt BC557C C B E params: hfe=600 early=100 is_scale=1 delta_temp=0
+Q C B E Transistor dtemp={delta_temp}
+.model Transistor PNP(Is={1.34792603482e-14*is_scale} Bf={hfe} Vaf={early}
++ Vje=.58 Tf=1.06103295395e-09 Eg=1.11 Xti=3 Tnom=25
++ Cjc=7p Cje=2e-11 Rc=1 Rb=.1 Re=.1)
+.ends BC557C
