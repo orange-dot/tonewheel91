@@ -56,6 +56,42 @@ sawtooth fitted to `G`:
 - **The octave and the fifth lock too**, a little more strongly than unison
   for the same supply.
 
+## 2b. The other simple ratios (V4b)
+
+Every ratio with p + q <= 11 that an interval of the core sits near, at A3,
+core B 8 cents above the simple ratio, both supplies (`vco4_fit.py`,
+`fits4.json`). For p:q the rate is taken over p of A's cycles, one turn of
+the pattern, so that B is back where it was in its own cycle and the
+interpolation of its phase between resets cancels (per cycle it does not:
+a first pass gave residuals up to twice L).
+
+| interval | ratio | ET minus the ratio (cents) | L / f_low, good board | soft rail | jump (good / soft) | residual over L |
+|---|---|---:|---:|---:|---|---|
+| +3 | 6:5 | -15.6 | 9.792e-05 | 8.470e-04 | 0.06 / 0.04 | 0.28 / 0.64 |
+| +4 | 5:4 | +13.7 | 1.160e-04 | 9.395e-04 | 0.00 / 0.98 | 0.11 / 0.36 |
+| +5 | 4:3 | +2.0 | 1.232e-04 | 1.218e-03 | 0.02 / 0.06 | 0.08 / 0.19 |
+| +9 | 5:3 | +15.6 | 1.456e-04 | 1.349e-03 | 0.04 / 0.98 | 0.29 / 0.10 |
+| +10 | 7:4 | +31.2 | 1.228e-04 | 1.216e-03 | 0.02 / 0.98 | 0.19 / 0.15 |
+| +16 | 5:2 | +13.7 | 1.733e-04 | 1.582e-03 | 0.02 / 0.94 | 0.09 / 0.17 |
+| +17 | 8:3 | +2.0 | 1.302e-04 | 8.071e-04 | 0.02 / 0.17 | 0.34 / 0.67 |
+| +19 | 3:1 | -2.0 | 2.108e-04 | 1.963e-03 | 0.98 / 0.02 | 0.01 / 0.11 |
+| +24 | 4:1 | +0.0 | 2.689e-04 | 2.444e-03 | 0.96 / 0.92 | 0.01 / 0.10 |
+
+- **Every one locks with the resets together** (the jump within 0.06 of 0;
+  8:3 on the soft rail, 0.17, is the noisiest fit, 0.67 of L).
+- **The strength barely falls with the order**: 0.8 to 2.4e-3 of the lower
+  core on the soft rail, against 1.0e-3 at unison; the twelfth and the two
+  octaves pull hardest, the minor third and the eleventh least.
+- **They lock at the simple ratio, not at the equal-tempered interval.** On
+  the soft rail the lock range in cents of the upper core is a fraction of
+  a cent for the thirds and sixths, so an equal-tempered third (14 to 16
+  cents off) never locks, only beats a little unevenly; the fine tuning
+  brings it there. The fourth and the fifth are 2 cents off: on the soft
+  rail they lock once tuned to within about half a cent (fourth) or
+  three quarters of a cent (fifth) of just.
+- These were simulated at A3 only; unison showed the share constant from C2
+  to C6, and the core assumes the same for every ratio.
+
 ## 3. Method and limits
 
 - ngspice-47, Gear, reltol 1e-5, 0.5 us maximum step (or period / 4000),
@@ -65,5 +101,7 @@ sawtooth fitted to `G`:
 - Two boards, nominal temperature, no noise: nothing here about drift or
   jitter, and how the pull is shared between the two cores is not
   observable from the phase difference; the core splits it evenly.
-- Unison, the octave and the fifth at A4 (unison also at C2 and C6). Other
-  intervals were not simulated.
+- Unison, the octave and the fifth at A4 (unison also at C2 and C6); the
+  other simple ratios at A3, 1.5 s each (8 to 12 turns of the pattern).
+  Ratios with p + q above 11 (seconds, sevenths, the tritone) were not
+  simulated and do not couple in the core.

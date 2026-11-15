@@ -44,6 +44,7 @@ void ma_lanes_gather(ma_voice_lanes *b, unsigned lane, const ma_synth *s) {
         b->guard_frames[k][lane] = osc[k]->guard_frames;
         b->triangle_initialized[k][lane] = osc[k]->triangle_initialized ? -1 : 0;
         b->rise[k][lane] = osc[k]->rise;
+        b->shaper_dc[k][lane] = osc[k]->shaper_dc;
         uint8_t own = s->oversample_history_pos[k];
         b->own_history_pos[k][lane] = own;
         for (int j = 0; j < 31; j++)
@@ -95,6 +96,7 @@ void ma_lanes_scatter(const ma_voice_lanes *b, unsigned lane, ma_synth *s) {
         osc[k]->guard_frames = (uint16_t)b->guard_frames[k][lane];
         osc[k]->triangle_initialized = b->triangle_initialized[k][lane] != 0;
         osc[k]->rise = b->rise[k][lane];
+        osc[k]->shaper_dc = b->shaper_dc[k][lane];
         uint8_t own = b->own_history_pos[k][lane];
         for (int j = 0; j < 31; j++)
             s->oversample_history[k][(own + j) % 31] = b->history[k][j][lane];
@@ -139,6 +141,8 @@ typedef struct {
     /* the triangles' rise and swing, and the saw's bow (V2, V3) */
     alignas(32) float skew1[MA_LANES], skew2[MA_LANES], swell1[MA_LANES], swell2[MA_LANES];
     alignas(32) float bow[MA_LANES];
+    alignas(32) float ramp_bow[4][MA_LANES];      /* VCO1 rise, fall; VCO2 rise, fall (V2c) */
+    alignas(32) float tri_buffer[MA_LANES];       /* B1's buffer bend, the amount (V2d) */
     /* the two cores' coupling (V4): lock range (0 = none), p, q, jump */
     alignas(32) float couple[4][MA_LANES];
     alignas(32) float div1[MA_LANES], div2[MA_LANES], mixdiv[MA_LANES], rate[MA_LANES];
@@ -187,6 +191,11 @@ static void ml_benign(ml_in *in) {
     in->swell1[l] = f->source.vco1_swell;
     in->swell2[l] = f->source.vco2_swell;
     in->bow[l] = f->source.saw_bow;
+    for (int k = 0; k < 2; k++) {
+        in->ramp_bow[k][l] = f->source.vco1_ramp_bow[k];
+        in->ramp_bow[2 + k][l] = f->source.vco2_ramp_bow[k];
+    }
+    in->tri_buffer[l] = f->source.tri_buffer;
     in->couple[0][l] = f->source.couple_hz;
     in->couple[1][l] = f->source.couple_p;
     in->couple[2][l] = f->source.couple_q;
@@ -257,6 +266,7 @@ static ml_osc ml_osc_load(const ma_voice_lanes *b, int k) {
         .triangle_initialized =
             (ml_m)_mm256_loadu_si256((const ml_i *)b->triangle_initialized[k]),
         .rise = ml_ld(b->rise[k]),
+        .shaper_dc = ml_ld(b->shaper_dc[k]),
     };
 }
 static void ml_osc_store(ma_voice_lanes *b, int k, const ml_osc *o) {
@@ -269,6 +279,7 @@ static void ml_osc_store(ma_voice_lanes *b, int k, const ml_osc *o) {
     _mm256_storeu_si256((ml_i *)b->guard_frames[k], (ml_i)o->guard_frames);
     _mm256_storeu_si256((ml_i *)b->triangle_initialized[k], (ml_i)o->triangle_initialized);
     _mm256_storeu_ps(b->rise[k], o->rise);
+    _mm256_storeu_ps(b->shaper_dc[k], o->shaper_dc);
 }
 static ml_osc_pair ml_pair_load(const ma_voice_lanes *b) {
     return (ml_osc_pair){
@@ -311,6 +322,7 @@ static ml_source ml_source_load(const ml_in *in) {
         .vco2_divisor = ml_ld(in->div2),
         .mixer_divisor = ml_ld(in->mixdiv),
         .rate_hz = ml_ld(in->rate),
+        .shaper_g = ml_shaper_g(ml_ld(in->rate)),
         .vco1_hz = ml_ld(in->v1hz),
         .vco1_step = ml_ld(in->v1step),
         .vco1_seed_step = ml_ld(in->v1seed),
@@ -322,8 +334,11 @@ static ml_source ml_source_load(const ml_in *in) {
         .vco2_triangle_gain = ml_ld(in->v2tg),
         .vco2_triangle_step = ml_ld(in->v2ts),
         .vco2_step_q48 = ml_u64_ld(in->v2q),
-        .vco1_tri = ml_tri_view(ml_tri_of(ml_ld(in->skew1), ml_ld(in->swell1)), ml_ld(in->v1tg)),
-        .vco2_tri = ml_tri_view(ml_tri_of(ml_ld(in->skew2), ml_ld(in->swell2)), ml_ld(in->v2tg)),
+        .vco1_tri = ml_tri_view(ml_tri_of(ml_ld(in->skew1), ml_ld(in->swell1), ml_ld(in->ramp_bow[0]),
+                                          ml_ld(in->ramp_bow[1]), ml_ld(in->tri_buffer)), ml_ld(in->v1tg)),
+        .vco2_tri = ml_tri_view(ml_tri_of(ml_ld(in->skew2), ml_ld(in->swell2), ml_ld(in->ramp_bow[2]),
+                                          ml_ld(in->ramp_bow[3]), ml_ld(in->tri_buffer)), ml_ld(in->v2tg)),
+        .tri_buffer = ml_ld(in->tri_buffer),
         .saw_bow = ml_ld(in->bow),
         .couple_hz = ml_ld(in->couple[0]),
         .couple_p = ml_ld(in->couple[1]),
@@ -468,6 +483,8 @@ typedef struct {
     float vco[2][7][MA_LANES];                       /* saw pulse tri sine pw tsine tsaw */
     float skew[2][MA_LANES], swell[2][MA_LANES], bow[MA_LANES];
     float couple[4][MA_LANES];
+    float ramp_bow[4][MA_LANES];
+    float tri_buffer[MA_LANES];
     float sync_amount[MA_LANES], sync_softness[MA_LANES], v2level[MA_LANES];
     float noise_level[MA_LANES], crossmod[MA_LANES], fine_cents[MA_LANES];
     float base[MA_LANES], interval[MA_LANES], g1[MA_LANES], g2[MA_LANES];
@@ -507,6 +524,11 @@ static void ml_front_gather(ml_front_in *x, unsigned l, const ma_synth *s,
         x->skew[k][l] = s->vco_skew[k]; x->swell[k][l] = s->vco_swell[k];
     }
     x->bow[l] = s->vco_bow;
+    for (int k = 0; k < 2; k++) {
+        x->ramp_bow[k][l] = s->vco_ramp_bow[0][k];
+        x->ramp_bow[2 + k][l] = s->vco_ramp_bow[1][k];
+    }
+    x->tri_buffer[l] = s->vco_buffer;
     x->couple[0][l] = s->vco_couple_hz; x->couple[1][l] = s->vco_couple_p;
     x->couple[2][l] = s->vco_couple_q; x->couple[3][l] = s->vco_couple_jump;
     x->sync_amount[l] = c->sync_amount; x->sync_softness[l] = c->sync_softness;
@@ -574,6 +596,11 @@ static void ml_front_math(const ml_front_in *x, ml_in *in, float cutoff_out[MA_L
         .couple_p = ml_ld(x->couple[1]),
         .couple_q = ml_ld(x->couple[2]),
         .couple_jump = ml_ld(x->couple[3]),
+        .vco1_bow_up = ml_ld(x->ramp_bow[0]),
+        .vco1_bow_down = ml_ld(x->ramp_bow[1]),
+        .vco2_bow_up = ml_ld(x->ramp_bow[2]),
+        .vco2_bow_down = ml_ld(x->ramp_bow[3]),
+        .tri_buffer = ml_ld(x->tri_buffer),
     };
     ml_source src = {};
     ml_prepare_source(&source_in, level * amount, &src);
@@ -603,6 +630,11 @@ static void ml_front_math(const ml_front_in *x, ml_in *in, float cutoff_out[MA_L
     ml_store(in->swell1, src.vco1_tri.swell);
     ml_store(in->swell2, src.vco2_tri.swell);
     ml_store(in->bow, src.saw_bow);
+    ml_store(in->ramp_bow[0], src.vco1_tri.bow_up);
+    ml_store(in->ramp_bow[1], src.vco1_tri.bow_down);
+    ml_store(in->ramp_bow[2], src.vco2_tri.bow_up);
+    ml_store(in->ramp_bow[3], src.vco2_tri.bow_down);
+    ml_store(in->tri_buffer, src.tri_buffer);
     for (int k = 0; k < 4; k++)
         ml_store(in->couple[k], k == 0 ? src.couple_hz : k == 1 ? src.couple_p
                                 : k == 2 ? src.couple_q : src.couple_jump);

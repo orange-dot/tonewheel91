@@ -54,6 +54,9 @@ python3 driver/spice/vco/shapers_render.py         # listen/
 # V4: two VCO-2 cores on one supply (build/vco/vco4/)
 python3 driver/spice/vco/vco4.py case NAME RS CB NOTE DETUNE_CENTS SECONDS [INTERVAL]
 python3 driver/spice/vco/vco4.py analyze NAME ...
+build/vco/vco4/run_set3.sh                         # the other simple ratios (P:Q as the interval)
+python3 driver/spice/vco/vco4_fit.py NAME ...      # sawtooth per pair -> fits4.json
+python3 driver/spice/vco/b1_low.py analyze         # (and the ramp bows: build/vco/b1low/bow.json)
 python3 driver/spice/vco/vco4_render.py            # listen/
 ```
 

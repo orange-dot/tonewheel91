@@ -40,12 +40,17 @@ static ma_synth bare(void) {
  * `skew`, `swell` and `bow` held, the levels from `v`. */
 static float source[SUB * 2];
 static double end_phase, sub_step;     /* VCO1's phase after the render, and its step */
+static float ramp_bow_up, ramp_bow_down;   /* B1's ramp bows for the next render (V2c) */
+static float buffer_amount;                /* B1's buffer bend for the next render (V2d) */
 static size_t render(ma_vco_controls v, float hz, float skew, float swell, float bow, double seconds) {
     static ma_synth s;
     s = bare();
     s.vco_skew[0] = skew;
     s.vco_swell[0] = swell;
     s.vco_bow = bow;
+    s.vco_ramp_bow[0][0] = ramp_bow_up;
+    s.vco_ramp_bow[0][1] = ramp_bow_down;
+    s.vco_buffer = buffer_amount;
     ma_render_controls c = { 0 };
     c.vco1 = v;
     c.vco2.pulse_width = .5f;
@@ -131,6 +136,34 @@ static const struct { double hz, rise; } B1[] = {
     { 800.555, .50443 }, { 1183.541, .50260 }, { 1564.697, .50159 }, { 1943.399, .50094 },
 };
 
+/* build/vco/b1low/bow.json (2026-11-14): each ramp's parabola height at
+ * mid-ramp over half the swing, rise and fall. */
+static const struct { double hz, up, down; } B1_BOW[] = {
+    { 27.387, +0.01493, -0.02148 },
+    { 33.590, +0.01301, -0.01977 },
+    { 40.067, +0.01162, -0.01842 },
+    { 50.162, +0.01013, -0.01682 },
+    { 67.675, +0.00850, -0.01485 },
+    { 93.051, +0.00710, -0.01288 },
+    { 130.208, +0.00587, -0.01094 },
+    { 167.904, +0.00507, -0.00954 },
+    { 224.939, +0.00424, -0.00804 },
+    { 416.511, +0.00280, -0.00533 },
+    { 800.555, +0.00170, -0.00322 },
+    { 1183.541, +0.00123, -0.00232 },
+    { 1564.697, +0.00097, -0.00182 },
+    { 1943.399, +0.00080, -0.00151 },
+};
+
+static double b1_bow(double hz, bool up) {
+    unsigned n = sizeof B1_BOW / sizeof *B1_BOW, i = 0;
+    while (i + 2 < n && B1_BOW[i + 1].hz < hz) i++;
+    double t = log(hz / B1_BOW[i].hz) / log(B1_BOW[i + 1].hz / B1_BOW[i].hz);
+    double a = up ? B1_BOW[i].up : -B1_BOW[i].down, b = up ? B1_BOW[i + 1].up : -B1_BOW[i + 1].down;
+    double v = exp(log(a) + t * (log(b) - log(a)));
+    return up ? v : -v;
+}
+
 /* B1's rise at a pitch, log-log between the simulated points. */
 static double b1_skew(double hz) {
     unsigned n = sizeof B1 / sizeof *B1, i = 0;
@@ -168,6 +201,21 @@ static void test_front(void) {
     /* The quartic is within 3 % at the simulated pitches; between them this
      * compares with a log-log line through the two neighbours. */
     CHECK(worst < .06, "rise: %.3f of the asymmetry away from SPICE", worst);
+    double worst_bow = 0;
+    for (int note = 29; note <= 94; note++) {
+        ma_patch p = plain_patch();
+        p.vco_analog = 1;
+        ma_synth_init_patch(&s, RATE, &p);
+        ma_synth_set_lfo(&s, 0, 5);
+        ma_synth_note_on(&s, 0, (uint8_t)note, 100);
+        (void)ma_synth_tick(&s);
+        double hz = 440.0 * pow(2.0, (note - 69) / 12.0);
+        double e = fmax(fabs(s.vco_ramp_bow[0][0] / b1_bow(hz, true) - 1),
+                        fabs(s.vco_ramp_bow[0][1] / b1_bow(hz, false) - 1));
+        if (e > worst_bow) worst_bow = e;
+    }
+    printf("  ramp bows against B1 in SPICE, F1..A#6: within %.1f %%\n", 100 * worst_bow);
+    CHECK(worst_bow < .04, "ramp bow: %.3f away from SPICE", worst_bow);
 
     /* Half the amount, half the departure; zero, none; the bottom is capped. */
     ma_patch p = plain_patch();
@@ -302,6 +350,32 @@ static void test_centred(void) {
     CHECK(both < plain + .01, "new rises add %.4f to the old walk", both - plain);
 }
 
+/* B1's triangle at its buffer (TBUF) in SPICE (shapers bench, 2026-11-14):
+ * its second harmonic, where the skew alone leaves less and less. */
+static const struct { double hz, h2; } TBUF_SPICE[] = {
+    { 225.08, -32.7 }, { 440.09, -37.0 }, { 801.03, -41.3 }, { 1184.23, -43.9 }, { 1944.50, -45.9 },
+};
+
+static void test_buffer(void) {
+    for (unsigned i = 0; i < sizeof TBUF_SPICE / sizeof *TBUF_SPICE; i++) {
+        double hz = TBUF_SPICE[i].hz;
+        ma_vco_controls v = { .triangle_level = 1, .pulse_width = .5f };
+        ramp_bow_up = (float)b1_bow(hz, true);
+        ramp_bow_down = (float)b1_bow(hz, false);
+        buffer_amount = 1;
+        size_t n = render(v, (float)hz, (float)b1_skew(hz), 0, 0, .25);
+        double with = db(level(source, n, hz, 2) / level(source, n, hz, 1));
+        buffer_amount = 0;
+        n = render(v, (float)hz, (float)b1_skew(hz), 0, 0, .25);
+        double without = db(level(source, n, hz, 2) / level(source, n, hz, 1));
+        ramp_bow_up = ramp_bow_down = 0;
+        printf("  triangle H2 at %6.1f Hz: %.1f dB with B1's buffer, %.1f without (SPICE TBUF %.1f)\n", hz, with,
+               without, TBUF_SPICE[i].h2);
+        CHECK(fabs(with - TBUF_SPICE[i].h2) < 1.0, "triangle H2 at %g Hz: %.2f dB, SPICE %.2f", hz, with,
+              TBUF_SPICE[i].h2);
+    }
+}
+
 /* ---- the saw's bow --------------------------------------------------------------------- */
 
 static void test_bow(void) {
@@ -320,6 +394,26 @@ static void test_bow(void) {
     }
     printf("  saw bow %.5f: the difference is its parabola within %.2g\n", (double)bow, worst);
     CHECK(worst < 2e-6, "bow differs from its parabola by %.3g", worst);
+
+    /* B1's ramp bows (V2c) on a skewed triangle: the difference to the
+     * straight one is the two parabolas, the state untouched */
+    ma_vco_controls t = { .triangle_level = 1, .pulse_width = .5f };
+    float skew = .0446f;
+    n = render(t, 27.5f, skew, 0, 0, .5);
+    static float plain[SUB];
+    memcpy(plain, source, n * sizeof *source);
+    ramp_bow_up = .0149f; ramp_bow_down = -.0215f;
+    (void)render(t, 27.5f, skew, 0, 0, .5);
+    ramp_bow_up = ramp_bow_down = 0;
+    double r = .5 + skew, worst_t = 0;
+    for (size_t i = 0; i < n; i++) {
+        double ph = phase_at(i, n), u = ph < r ? ph / r : (ph - r) / (1 - r);
+        double want = (ph < r ? .0149 : -.0215) * 4 * u * (1 - u);
+        double e = fabs((double)(source[i] - plain[i]) - want);
+        if (e > worst_t) worst_t = e;
+    }
+    printf("  ramp bows +0.0149 / -0.0215 at 27.5 Hz: the difference is the two parabolas within %.2g\n", worst_t);
+    CHECK(worst_t < 1e-5, "ramp bow differs from its parabolas by %.3g", worst_t);
 }
 
 /* ---- the shapers ------------------------------------------------------------------------- */
@@ -420,21 +514,30 @@ static void test_shapers(void) {
     for (unsigned i = 0; i < sizeof SINE_SPICE / sizeof *SINE_SPICE; i++) {
         ma_vco_controls v = { .tri_sine_level = 1, .pulse_width = .5f };
         float hz = (float)SINE_SPICE[i].hz;
+        ramp_bow_up = (float)b1_bow(hz, true);
+        ramp_bow_down = (float)b1_bow(hz, false);
+        buffer_amount = 1;
         size_t n = render(v, hz, (float)b1_skew(hz), swell_spice(hz), 0, hz < 100 ? 1.0 : .25);
+        ramp_bow_up = ramp_bow_down = 0;
+        buffer_amount = 0;
         double h2, h3, t = thd(source, n, hz, &h2, &h3);
         printf("  shaper sine at %6.1f Hz: THD %5.1f dB (SPICE %5.1f), H2 %5.1f (%5.1f), H3 %5.1f (%5.1f,"
                " static curve %5.1f)\n", (double)hz, t, SINE_SPICE[i].thd, h2, SINE_SPICE[i].h2, h3,
                SINE_SPICE[i].h3, SINE_SPICE[i].static_h3);
-        /* THD and H2 follow B1's skew up to 1.2 kHz. Above it SPICE has
-         * second harmonic from elsewhere (the vertices) and the core 5 dB
-         * less. H3 is printed only: B1's ramps bow a little (-39 dB at
-         * 27 Hz) and the core's are straight, and the static curve on
-         * SPICE's own triangle leaves out the input coupling. */
+        /* H2 follows B1's skew and, above 1 kHz, its buffer (V2d): within
+         * 1.5 dB to 440 Hz. Above it the core has more: the pair's static
+         * curve on the board's own TBUF already gives 2.5 to 3 dB more than
+         * the board in transient at 0.8 to 1.2 kHz, and at 1.9 kHz the
+         * core's own triangle (its edge zone) adds about 4 dB. H3 follows
+         * the bowed ramps (V2c) and the sine's input coupling (V3b). */
+        CHECK(fabs(h2 - SINE_SPICE[i].h2) < (hz < 500 ? 1.5 : 4.0), "sine H2 at %g Hz: %.2f dB, SPICE %.2f",
+              (double)hz, h2, SINE_SPICE[i].h2);
         if (hz > 1200) continue;
+        CHECK(fabs(h3 - SINE_SPICE[i].h3) < 1.5, "sine H3 at %g Hz: %.2f dB, SPICE %.2f", (double)hz, h3,
+              SINE_SPICE[i].h3);
         CHECK(fabs(t - SINE_SPICE[i].thd) < 2.5, "sine THD at %g Hz: %.2f dB, SPICE %.2f", (double)hz, t,
               SINE_SPICE[i].thd);
-        CHECK(fabs(h2 - SINE_SPICE[i].h2) < 2.5, "sine H2 at %g Hz: %.2f dB, SPICE %.2f", (double)hz, h2,
-              SINE_SPICE[i].h2);
+        (void)0;
     }
     /* The saw: halves of rise and 1 - rise, centred on -1/2 and +1/2; its
      * step at the top vertex against the switched pair in SPICE (relative to
@@ -539,6 +642,7 @@ int main(void) {
     test_triangle();
     test_centred();
     test_bow();
+    test_buffer();
     test_shapers();
     test_pool();
     printf("ma vco shape: %u checks, %u failures\n", checks, failures);

@@ -55,6 +55,11 @@ ma_source_frame ma_voice_prepare_source_frame_guarded(
         .guard2 = guard2_gain,
         .vco1_skew = s->vco_skew[0],
         .vco2_skew = s->vco_skew[1],
+        .vco1_bow_up = s->vco_ramp_bow[0][0],
+        .vco1_bow_down = s->vco_ramp_bow[0][1],
+        .vco2_bow_up = s->vco_ramp_bow[1][0],
+        .vco2_bow_down = s->vco_ramp_bow[1][1],
+        .tri_buffer = s->vco_buffer,
         .vco1_swell = s->vco_swell[0],
         .vco2_swell = s->vco_swell[1],
         .saw_bow = s->vco_bow,
@@ -87,6 +92,9 @@ ma_source_frame ma_voice_prepare_source_frame_guarded(
         .vco2_triangle_step = src.vco2_triangle_step,
         .vco1_skew = src.vco1_tri.skew,
         .vco2_skew = src.vco2_tri.skew,
+        .vco1_ramp_bow = { src.vco1_tri.bow_up, src.vco1_tri.bow_down },
+        .vco2_ramp_bow = { src.vco2_tri.bow_up, src.vco2_tri.bow_down },
+        .tri_buffer = src.tri_buffer,
         .vco1_swell = src.vco1_tri.swell,
         .vco2_swell = src.vco2_tri.swell,
         .saw_bow = src.saw_bow,
@@ -122,6 +130,7 @@ static ml_osc osc_load(const ma_oscillator *o) {
         .guard_frames = o->guard_frames,
         .triangle_initialized = o->triangle_initialized,
         .rise = o->rise,
+        .shaper_dc = o->shaper_dc,
     };
 }
 
@@ -135,6 +144,7 @@ static void osc_store(ma_oscillator *o, const ml_osc *x) {
     o->guard_frames = (uint16_t)x->guard_frames;
     o->triangle_initialized = x->triangle_initialized;
     o->rise = x->rise;
+    o->shaper_dc = x->shaper_dc;
 }
 
 static ml_osc_pair pair_load(const ma_synth *s) {
@@ -167,6 +177,7 @@ static ml_source source_of(const ma_synth *s, const ma_render_controls *controls
         .vco2_divisor = f->vco2_divisor,
         .mixer_divisor = f->mixer_divisor,
         .rate_hz = f->rate_hz,
+        .shaper_g = ml_shaper_g(f->rate_hz),
         .vco1_hz = f->vco1_hz,
         .vco1_step = f->vco1_step,
         .vco1_seed_step = f->vco1_seed_step,
@@ -178,8 +189,11 @@ static ml_source source_of(const ma_synth *s, const ma_render_controls *controls
         .vco2_triangle_gain = f->vco2_triangle_gain,
         .vco2_triangle_step = f->vco2_triangle_step,
         .vco2_step_q48 = f->vco2_step_q48,
-        .vco1_tri = ml_tri_view(ml_tri_of(f->vco1_skew, f->vco1_swell), f->vco1_triangle_gain),
-        .vco2_tri = ml_tri_view(ml_tri_of(f->vco2_skew, f->vco2_swell), f->vco2_triangle_gain),
+        .vco1_tri = ml_tri_view(ml_tri_of(f->vco1_skew, f->vco1_swell, f->vco1_ramp_bow[0],
+                                          f->vco1_ramp_bow[1], f->tri_buffer), f->vco1_triangle_gain),
+        .vco2_tri = ml_tri_view(ml_tri_of(f->vco2_skew, f->vco2_swell, f->vco2_ramp_bow[0],
+                                          f->vco2_ramp_bow[1], f->tri_buffer), f->vco2_triangle_gain),
+        .tri_buffer = f->tri_buffer,
         .saw_bow = f->saw_bow,
         .couple_hz = f->couple_hz,
         .couple_p = f->couple_p,
@@ -214,9 +228,9 @@ void ma_voice_render_source_block(ma_synth *s, const ma_render_controls *control
 void ma_voice_seed_triangles(ma_synth *s, const ma_source_frame *source) {
     ml_osc_pair v = pair_load(s);
     ml_seed_triangle(&v.vco1, source->vco1_seed_step, source->vco1_triangle_gain,
-                     ml_tri_of(source->vco1_skew, source->vco1_swell).rise);
+                     ml_tri_of(source->vco1_skew, source->vco1_swell, 0, 0, 0).rise);
     ml_seed_triangle(&v.vco2, source->vco2_step, source->vco2_triangle_gain,
-                     ml_tri_of(source->vco2_skew, source->vco2_swell).rise);
+                     ml_tri_of(source->vco2_skew, source->vco2_swell, 0, 0, 0).rise);
     pair_store(s, &v);
 }
 

@@ -116,15 +116,37 @@ static inline ml_f ml_raw_triangle_rise(ml_f phase, ml_f rise) {
  * fall, so both ramps span two. `swing` is the triangle's size relative to
  * its size at the trim note, as the shapers see it. Rise 0.5, h 1, c 0 and
  * swing 1 are the old oscillator. */
-typedef struct { ml_f rise, h, c, swing, skew, swell, view; } ml_tri;
+typedef struct { ml_f rise, h, c, swing, skew, swell, view, bow_up, bow_down, k2, k3, gain; } ml_tri;
 
-/* From the departures the front end hands over: skew = rise - 0.5 and
- * swell = swing - 1, so a zeroed frame is the old oscillator. */
-static inline ml_tri ml_tri_of(ml_f skew, ml_f swell) {
+/* From the departures the front end hands over: skew = rise - 0.5, swell =
+ * swing - 1 and the two ramps' bows, so a zeroed frame is the old
+ * oscillator. */
+static inline ml_tri ml_tri_of(ml_f skew, ml_f swell, ml_f bow_up, ml_f bow_down, ml_f buffer) {
     ml_f rise = 0.5f + skew;
     ml_f q = 4.0f * rise * (1.0f - rise);
     ml_f swing = 1.0f + swell;
-    return (ml_tri){ rise, 1.0f / q, (1.0f - 2.0f * rise) / q, swing, skew, swell, swing };
+    return (ml_tri){ rise, 1.0f / q, (1.0f - 2.0f * rise) / q, swing, skew, swell, swing,
+                     bow_up, bow_down, VCO_BUFFER_K2 * buffer, VCO_BUFFER_K3 * buffer, ML(1.0f) };
+}
+
+/* What the triangle output and the shapers read of the integrator's state,
+ * which itself stays on its straight trajectory. B1's ramps bow (V2c): a
+ * parabola on each ramp by phase, zero at both vertices, its height at
+ * mid-ramp `bow_up` on the rise and `bow_down` on the fall. Then the buffer
+ * bends it (V2d): x + k2 (x^2 - 1) + k3 (x^3 - x), the vertices fixed, on
+ * the state over the integrator's gain (its ramps run between +-gain).
+ * Lanes without either keep the state bit for bit. */
+static inline ml_f ml_tri_bowed(ml_f triangle, ml_f phase, const ml_tri *t) {
+    ml_m bowed = (t->bow_up != 0.0f) | (t->bow_down != 0.0f) | (t->k2 != 0.0f);
+    if (!ml_any(bowed)) return triangle;
+    ml_m rising = phase < t->rise;
+    ml_f u = ml_if(rising, phase / t->rise, (phase - t->rise) / (1.0f - t->rise));
+    ml_f arch = 4.0f * u * (1.0f - u);
+    ml_f bow = ml_if(rising, t->bow_up, t->bow_down);
+    ml_f x = ml_fmadd(bow, arch, triangle) / t->gain;
+    ml_f x2 = x * x;
+    ml_f bent = ml_fmadd(t->k3, (x2 - 1.0f) * x, ml_fmadd(t->k2, x2 - 1.0f, x));
+    return ml_if(bowed, bent * t->gain, triangle);
 }
 
 /* What the shapers multiply the triangle state by. The state's straight
@@ -134,6 +156,7 @@ static inline ml_tri ml_tri_of(ml_f skew, ml_f swell) {
  * trim note, as the trim left them. */
 static inline ml_tri ml_tri_view(ml_tri t, ml_f gain) {
     t.view = t.swing / gain;
+    t.gain = gain;
     return t;
 }
 
@@ -165,6 +188,11 @@ static inline ml_f ml_triangle_seed(ml_f phase, ml_f step, ml_f gain, ml_f rise)
 
 /* ---- the triangle core's shapers (V3, driver/spice/vco/shapers.cir) ----
  * Both read the triangle the shaper sees, `swing * triangle`. */
+
+/* The sine's coupling, per substep at `rate` (V3b). */
+static inline ml_f ml_shaper_g(ml_f rate) {
+    return 1.0f / (SHAPER_SINE_TAU_S * rate);
+}
 
 /* The degenerated long-tailed pair, trimmed on a distortion meter at A4:
  * its static curve, normalized to a peak of one at the trim swing. */
@@ -199,6 +227,7 @@ typedef struct {
     ml_int guard_frames;
     ml_m triangle_initialized;
     ml_f rise;                  /* the rise the triangle last ran on; 0: none yet */
+    ml_f shaper_dc;             /* the sine shaper's coupling capacitor (V3b) */
 } ml_osc;
 
 /* Both VCOs. Only VCO2 is a sync slave, so its run and carried edges (wrap,
@@ -232,6 +261,8 @@ typedef struct {
     ml_tri vco1_tri, vco2_tri;
     ml_f saw_bow;
     ml_f couple_hz, couple_p, couple_q, couple_jump;   /* V4; couple_hz 0 = none */
+    ml_f shaper_g;                      /* the sine shaper's coupling, per substep (V3b) */
+    ml_f tri_buffer;                    /* V2d: the circuit amount for B1's buffer */
     ml_f envelope_ratio, sync;
     ml_f base_hz, noise, guard1, guard2;
     ml_f crossmod_amount, vco2_level, noise_level;
@@ -251,6 +282,8 @@ typedef struct {
     ml_f sync_amount, sync_softness, crossmod_amount;
     ml_f vco2_level, noise_level, guard1, guard2;
     ml_f vco1_skew, vco2_skew, vco1_swell, vco2_swell, saw_bow;   /* V2, V3 */
+    ml_f vco1_bow_up, vco1_bow_down, vco2_bow_up, vco2_bow_down;   /* V2c */
+    ml_f tri_buffer;                                                /* V2d: the amount */
     ml_f couple_hz, couple_p, couple_q, couple_jump;               /* V4 */
 } ml_source_in;
 
@@ -280,6 +313,7 @@ static inline void ml_prepare_source(const ml_source_in *x, ml_f modulation, ml_
     src->vco1_divisor = ml_waveform_divisor(&x->vco1);
     src->vco2_divisor = ml_waveform_divisor(&x->vco2);
     src->rate_hz = 8.0f * x->sample_rate_hz;
+    src->shaper_g = ml_shaper_g(src->rate_hz);
     src->sync = x->sync_amount * ml_clamp(1.0f - 0.75f * x->sync_softness, 0.0f, 1.0f);
     src->vco1.pulse_width = ml_clamp(x->vco1.pulse_width + 0.120f * modulation, 0.05f, 0.95f);
     src->vco2.pulse_width = ml_clamp(x->vco2.pulse_width - 0.080f * modulation, 0.05f, 0.95f);
@@ -294,8 +328,11 @@ static inline void ml_prepare_source(const ml_source_in *x, ml_f modulation, ml_
     ml_f vco1_hz = x->base_hz * src->envelope_ratio;
     ml_u64 vco1_step_q48 = ml_f_to_u64(ml_phase_step(vco1_hz, src->rate_hz) * 0x1p48f);
     ml_f vco1_step = ml_turns(vco1_step_q48);
-    src->vco1_tri = ml_tri_of(x->vco1_skew, x->vco1_swell);
-    src->vco2_tri = ml_tri_of(x->vco2_skew, x->vco2_swell);
+    src->vco1_tri = ml_tri_of(x->vco1_skew, x->vco1_swell, x->vco1_bow_up, x->vco1_bow_down,
+                              x->tri_buffer);
+    src->vco2_tri = ml_tri_of(x->vco2_skew, x->vco2_swell, x->vco2_bow_up, x->vco2_bow_down,
+                              x->tri_buffer);
+    src->tri_buffer = x->tri_buffer;
     src->saw_bow = x->saw_bow;
     src->couple_hz = x->couple_hz;
     src->couple_p = x->couple_p;
@@ -329,10 +366,13 @@ static inline void ml_prepare_source(const ml_source_in *x, ml_f modulation, ml_
 
 /* The circuit terms of a mix (V2, V3): the saw's bow, and the two shapers
  * on the triangle. Lanes without them keep `sample` bit for bit. `square` is
- * the smoothed pulse of width `rise` at this phase. */
+ * the smoothed pulse of width `rise` at this phase. The sine's pair reads the
+ * triangle through its coupling capacitor (V3b): less `shaper_dc`, what the
+ * capacitor holds; the saw's pair is DC-coupled. */
 [[gnu::always_inline]]
 static inline ml_f ml_circuit_mix(ml_f sample, ml_f phase, const ml_vco *c, ml_shapes on,
-                                  ml_f triangle, ml_f square, const ml_tri *t, ml_f bow) {
+                                  ml_f triangle, ml_f square, const ml_tri *t, ml_f bow,
+                                  ml_f shaper_dc) {
     ml_m bowed = on.saw & (bow != 0.0f);
     if (ml_any(bowed)) {
         ml_f arch = ml_fmadd(4.0f * phase, 1.0f - phase, -2.0f / 3.0f);
@@ -341,7 +381,7 @@ static inline ml_f ml_circuit_mix(ml_f sample, ml_f phase, const ml_vco *c, ml_s
     ml_m shaped = on.tri_sine | on.tri_saw;
     if (ml_any(shaped)) {
         ml_f x = t->view * ml_clamp(triangle, -1.25f, 1.25f);
-        ml_f sine = ml_keep(on.tri_sine, ml_shaper_sine(x));
+        ml_f sine = ml_keep(on.tri_sine, ml_shaper_sine(x - shaper_dc));
         ml_f saw = ml_keep(on.tri_saw, ml_shaper_saw(x, square));
         ml_f added = ml_fmadd(c->tri_saw_level, saw, ml_fmadd(c->tri_sine_level, sine, sample));
         sample = ml_if(shaped, added, sample);
@@ -355,7 +395,8 @@ static inline ml_f ml_circuit_mix(ml_f sample, ml_f phase, const ml_vco *c, ml_s
 static inline ml_f ml_wave_mix_since(ml_f phase, const ml_vco *c, ml_shapes on, ml_f step,
                                      ml_f divisor, ml_f since, ml_f wrap_carry,
                                      ml_f width_carry, ml_f triangle, ml_f square,
-                                     const ml_tri *t, ml_f bow) {
+                                     const ml_tri *t, ml_f bow, ml_f shaper_dc) {
+    triangle = ml_tri_bowed(triangle, phase, t);
     ml_f blep = ml_poly_blep_since(phase, step, since, wrap_carry);
     ml_f saw = ml_keep(on.saw, ml_saw(phase, blep));
     ml_f pulse = ml_if(phase < c->pulse_width, 1.0f, -1.0f) + blep;
@@ -368,7 +409,7 @@ static inline ml_f ml_wave_mix_since(ml_f phase, const ml_vco *c, ml_shapes on, 
     ml_m sine = c->sine_level > 0.0f;
     if (ml_any(sine))
         sample = ml_if(sine, ml_fmadd(c->sine_level, ml_mamut_sine(phase), sample), sample);
-    sample = ml_circuit_mix(sample, phase, c, on, triangle, square, t, bow);
+    sample = ml_circuit_mix(sample, phase, c, on, triangle, square, t, bow, shaper_dc);
     return sample / divisor;
 }
 
@@ -381,17 +422,30 @@ static inline ml_f ml_wave_mix_since(ml_f phase, const ml_vco *c, ml_shapes on, 
 static inline ml_f ml_preview(const ml_osc *o, const ml_vco *c, ml_shapes on, ml_f step,
                               ml_f divisor, ml_f square, const ml_tri *t, ml_f bow) {
     ml_f phase = ml_turns(o->phase_q48);
+    ml_f triangle = ml_tri_bowed(o->triangle, phase, t);
     ml_f blep = ml_poly_blep(phase, step);
     ml_f saw = ml_keep(on.saw, ml_saw(phase, blep));
     ml_f pulse = ml_keep(on.pulse, ml_pulse_with_blep(phase, c->pulse_width, step, blep));
-    ml_f tri = ml_keep(on.triangle, ml_clamp(o->triangle, -1.0f, 1.0f));
+    ml_f tri = ml_keep(on.triangle, ml_clamp(triangle, -1.0f, 1.0f));
     ml_f sample = ml_fmadd(c->triangle_level, tri,
                            ml_fmadd(c->pulse_level, pulse, c->saw_level * saw));
     ml_m sine = c->sine_level > 0.0f;
     if (ml_any(sine))
         sample = ml_if(sine, ml_fmadd(c->sine_level, ml_mamut_sine(phase), sample), sample);
-    sample = ml_circuit_mix(sample, phase, c, on, o->triangle, square, t, bow);
+    sample = ml_circuit_mix(sample, phase, c, on, triangle, square, t, bow, o->shaper_dc);
     return sample / divisor;
+}
+
+/* The sine shaper's coupling capacitor follows what the pair would see
+ * without it, once a substep, before the triangle moves: a first-order
+ * high-pass at 1.40 Hz (10 uF into 10 k and the 1.38 k trimmer,
+ * driver/spice/vco/shapers.cir), `g` = 1 / (tau * rate). Only while the
+ * sine shaper sounds; other lanes keep their state. */
+static inline void ml_shaper_track(ml_osc *o, ml_m sine_on, const ml_tri *t, ml_f g) {
+    if (!ml_any(sine_on)) return;
+    ml_f phase = ml_turns(o->phase_q48);
+    ml_f x = t->view * ml_clamp(ml_tri_bowed(o->triangle, phase, t), -1.25f, 1.25f);
+    o->shaper_dc = ml_if(sine_on, ml_fmadd(g, x - o->shaper_dc, o->shaper_dc), o->shaper_dc);
 }
 
 /* A voice's triangle starts on its steady trajectory: once, before the
@@ -485,7 +539,7 @@ static ml_f ml_held_preview(const ml_osc_pair *v, const ml_source *in, ml_f *squ
     *square = ml_pulse_since(phase, in->vco2_tri.rise, step, since, carry[0], carry[2]);
     return ml_wave_mix_since(phase, &in->vco2, in->vco2_on, step, in->vco2_divisor, since,
                              carry[0], carry[1], v->vco2.triangle, *square, &in->vco2_tri,
-                             in->saw_bow);
+                             in->saw_bow, v->vco2.shaper_dc);
 }
 
 /* The step VCO2's output takes at a sync reset. Edges crossed before the
@@ -530,10 +584,10 @@ static ml_f ml_sync_jump(ml_osc_pair *v, const ml_source *in, ml_u64 event_advan
                                   ML(0.0f), behind[0], behind[1],
                                   ml_triangle_seed(reset_phase, step, in->vco2_triangle_gain,
                                                    t->rise),
-                                  reset_square, t, in->saw_bow)
+                                  reset_square, t, in->saw_bow, v->vco2.shaper_dc)
               - ml_wave_mix_since(event_phase, &in->vco2, in->vco2_on, step, in->vco2_divisor,
                                   event_since, carry[0], carry[1], event_triangle,
-                                  event_square, t, in->saw_bow);
+                                  event_square, t, in->saw_bow, v->vco2.shaper_dc);
     for (int k = 0; k < 3; k++) carry[k] = ml_if(event, behind[k], carry[k]);
     return jump;
 }
@@ -650,6 +704,8 @@ static inline ml_f ml_source_substep(ml_osc_pair *v, const ml_source *in) {
     ml_f vco1_square = ml_pulse(ml_turns(vco1->phase_q48), in->vco1_tri.rise, vco1_step);
     ml_f vco1_preview = ml_preview(vco1, &in->vco1, in->vco1_on, vco1_step, in->vco1_divisor,
                                    vco1_square, &in->vco1_tri, in->saw_bow);
+    ml_shaper_track(vco1, in->vco1_on.tri_sine, &in->vco1_tri, in->shaper_g);
+    ml_shaper_track(vco2, in->vco2_on.tri_sine, &in->vco2_tri, in->shaper_g);
     ml_f vco1_out = ml_render_oscillator(vco1, vco1_preview, vco1_square, &in->vco1_tri,
                                          vco1_triangle_step, ML(0.0f));
     /* Cross-mod already read VCO2 at this phase, before sync correction. */
@@ -673,10 +729,19 @@ static inline ml_f ml_source_substep(ml_osc_pair *v, const ml_source *in) {
 
 /* VCO2's guard target, the triangle seeds, eight 8x source substeps, and
  * both guard steps. */
-/* x * n for n = 1, 2 or 3, on Q48 phases (mod 2^48). */
+/* x * n for whole n from 0 to 15, on Q48 phases (mod 2^48): n's bits, from
+ * the top, each taken off n as it is used. */
 static inline ml_u64 ml_u64_times(ml_u64 x, ml_f n) {
-    ml_u64 sum = ml_u64_add(x, ml_u64_keep(n >= 2.0f, x));
-    return ml_u64_add(sum, ml_u64_keep(n >= 3.0f, x));
+    ml_m b8 = n >= 8.0f;
+    n = n - ml_keep(b8, ML(8.0f));
+    ml_m b4 = n >= 4.0f;
+    n = n - ml_keep(b4, ML(4.0f));
+    ml_m b2 = n >= 2.0f;
+    n = n - ml_keep(b2, ML(2.0f));
+    ml_m b1 = n >= 1.0f;
+    ml_u64 sum = ml_u64_add(ml_u64_keep(b1, x), ml_u64_keep(b2, ml_u64_shl(x, 1)));
+    sum = ml_u64_add(sum, ml_u64_keep(b4, ml_u64_shl(x, 2)));
+    return ml_u64_add(sum, ml_u64_keep(b8, ml_u64_shl(x, 3)));
 }
 
 /* A signed number of turns added to a Q48 phase. */

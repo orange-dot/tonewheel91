@@ -183,6 +183,8 @@ typedef struct {
     float vco2_triangle_step;
     float vco1_skew, vco2_skew;     /* V2: the triangles' rise less 0.5 */
     float vco1_swell, vco2_swell;   /* V3: the triangle the shapers see, less 1 */
+    float vco1_ramp_bow[2], vco2_ramp_bow[2];   /* V2c: rise and fall bow, 0 = straight */
+    float tri_buffer;               /* V2d: B1's buffer bend, the amount */
     float saw_bow;                  /* V2: VCO-2's saw bow, 0 = straight */
     float couple_hz, couple_p, couple_q, couple_jump;   /* V4: lock range, p:q, jump */
     float envelope_ratio;
@@ -341,6 +343,30 @@ static constexpr float VCO_RISE_X_HIGH = 2.14301f;
 static constexpr float VCO_RISE_SLOPE_LOW = -0.259835f;
 static constexpr float VCO_RISE_SLOPE_HIGH = -1.59015f;
 static constexpr float VCO_RISE_MAX = 0.6f;
+/* Each ramp also bows (driver/spice/vco/b1_low.py traces, a parabola per
+ * ramp leaves -85 dB or less): both slow toward the vertex they run to, the
+ * rise above its chord, the fall below it. The bow is the parabola's height
+ * at mid-ramp over half the swing, exp(P(x)) with P a cubic in octaves from
+ * A4 (within 1.4 %), run on along its end slopes outside the simulated range
+ * (the same as the rise's) and capped at 0.05. */
+static constexpr float VCO_BOW_UP_POLY[4] = { -5.919696f, -0.484658f, -0.030785f, -0.003966f };
+static constexpr float VCO_BOW_DOWN_POLY[4] = { -5.275927f, -0.492701f, -0.03694f, -0.00065f };
+static constexpr float VCO_BOW_UP_SLOPE_LOW = -0.4289f;
+static constexpr float VCO_BOW_UP_SLOPE_HIGH = -0.6712f;
+static constexpr float VCO_BOW_DOWN_SLOPE_LOW = -0.228f;
+static constexpr float VCO_BOW_DOWN_SLOPE_HIGH = -0.66f;
+static constexpr float VCO_BOW_MAX = 0.05f;
+/* B1's triangle reaches its output and the shapers through two emitter
+ * followers (TBUF). Their Vbe follows their current, so TBUF is the
+ * capacitor's triangle bent a little: x + k2 (x^2 - 1) on the triangle
+ * normalized to its vertices, which stay put (driver/spice/vco/shapers.py
+ * traces, 225 Hz to 14 kHz; V2d). The same bend at every pitch: it adds
+ * -47 dB of second harmonic, which the skew hides below 1 kHz and which is
+ * all there is above 2 kHz. A cubic term the fit also offers is left out: on
+ * the board's own triangle it puts the sine shaper's third harmonic 2 to
+ * 3 dB above what TBUF gives, so it is not the buffer's. */
+static constexpr float VCO_BUFFER_K2 = 0.0093f;
+static constexpr float VCO_BUFFER_K3 = 0.0f;
 /* Its swing grows with pitch (each reversal overshoots by the comparator's
  * delay). The shapers see that growth relative to A4, where they are
  * trimmed, a little less than the capacitor has it: the saw's pair swaps
@@ -370,15 +396,36 @@ static constexpr float VCO_SAW_BOW = 0.01205f;
  * same from C2 to C6; it is `good` for a board with 1 ohm and 10 uF on its
  * rails and `soft` for 10 ohm and 100 nF. Every pair locks with its resets
  * together: the jump is at psi = 0 in the core's phase (0 at the reset)
- * within 0.03 in every SPICE case. The intervals below VCO1 mirror the ones
- * above it. Other intervals do not couple. */
+ * within 0.06 in every SPICE case. The rows are the intervals whose simple
+ * ratio (p + q <= 11) lies within 31 cents of them; the simple ratio is
+ * where they lock, so an equal-tempered third, 14 to 16 cents away, beats
+ * on, slowed, until the fine tuning brings it there. The intervals below
+ * VCO1 mirror the ones above it. Other intervals do not couple. */
 typedef struct { int8_t interval, p, q; float jump, good, soft_octaves; } vco_couple_row;
-static constexpr vco_couple_row VCO_COUPLE[5] = {     /* soft = good * 2^soft_octaves */
-    { 0, 1, 1, 0.0f, 0.000106f, 3.2944f },   /* soft 0.00104 */
-    { 12, 2, 1, 0.0f, 0.00016f, 3.2854f },   /* soft 0.00156 */
-    { -12, 1, 2, 0.0f, 0.00016f, 3.2854f },   /* soft 0.00156 */
-    { 7, 3, 2, 0.0f, 0.000132f, 3.3219f },   /* soft 0.00132 */
-    { -7, 2, 3, 0.0f, 0.000132f, 3.3219f },   /* soft 0.00132 */
+static constexpr vco_couple_row VCO_COUPLE[23] = {     /* soft = good * 2^soft_octaves */
+    { 0, 1, 1, 0.0f, 0.000106f, 3.2944f },   /* 1:1, soft 0.00104 */
+    { 3, 6, 5, 0.0f, 9.79e-05f, 3.1130f },   /* 6:5, soft 0.000847 */
+    { -3, 5, 6, 0.0f, 9.79e-05f, 3.1130f },   /* 5:6 */
+    { 4, 5, 4, 0.0f, 0.000116f, 3.0178f },   /* 5:4, soft 0.0009395 */
+    { -4, 4, 5, 0.0f, 0.000116f, 3.0178f },   /* 4:5 */
+    { 5, 4, 3, 0.0f, 0.0001232f, 3.3054f },   /* 4:3, soft 0.001218 */
+    { -5, 3, 4, 0.0f, 0.0001232f, 3.3054f },   /* 3:4 */
+    { 7, 3, 2, 0.0f, 0.0001318f, 3.2775f },   /* 3:2, soft 0.001278 */
+    { -7, 2, 3, 0.0f, 0.0001318f, 3.2775f },   /* 2:3 */
+    { 9, 5, 3, 0.0f, 0.0001456f, 3.2118f },   /* 5:3, soft 0.001349 */
+    { -9, 3, 5, 0.0f, 0.0001456f, 3.2118f },   /* 3:5 */
+    { 10, 7, 4, 0.0f, 0.0001228f, 3.3078f },   /* 7:4, soft 0.001216 */
+    { -10, 4, 7, 0.0f, 0.0001228f, 3.3078f },   /* 4:7 */
+    { 12, 2, 1, 0.0f, 0.0001615f, 3.2710f },   /* 2:1, soft 0.001559 */
+    { -12, 1, 2, 0.0f, 0.0001615f, 3.2710f },   /* 1:2 */
+    { 16, 5, 2, 0.0f, 0.0001733f, 3.1904f },   /* 5:2, soft 0.001582 */
+    { -16, 2, 5, 0.0f, 0.0001733f, 3.1904f },   /* 2:5 */
+    { 17, 8, 3, 0.0f, 0.0001302f, 2.6320f },   /* 8:3, soft 0.0008071 */
+    { -17, 3, 8, 0.0f, 0.0001302f, 2.6320f },   /* 3:8 */
+    { 19, 3, 1, 0.0f, 0.0002108f, 3.2191f },   /* 3:1, soft 0.001963 */
+    { -19, 1, 3, 0.0f, 0.0002108f, 3.2191f },   /* 1:3 */
+    { 24, 4, 1, 0.0f, 0.0002689f, 3.1841f },   /* 4:1, soft 0.002444 */
+    { -24, 1, 4, 0.0f, 0.0002689f, 3.1841f },   /* 1:4 */
 };
 
 /* ---- the triangle core's shapers (docs/ma-vco-plan.md, V3) ----
@@ -386,6 +433,9 @@ static constexpr vco_couple_row VCO_COUPLE[5] = {     /* soft = good * 2^soft_oc
  * A4, on the triangle normalized to +-1 at A4's vertices and scaled to peaks
  * of +-1: x * odd(x^2) + even(x^2), within 5e-5 over +-1 and 1.3e-4 over
  * +-1.1. The even part is the trimmed offset. */
+/* The sine's input coupling (V3b): 10 uF into the 10 k series resistor and
+ * the trimmer to ground (1.383 k at the A4 trim), a 1.40 Hz high-pass. */
+static constexpr float SHAPER_SINE_TAU_S = 10e-6f * (10000.0f + 1382.516f);
 enum { SHAPER_SINE_TERMS = 6 };
 static constexpr float SHAPER_SINE_ODD[SHAPER_SINE_TERMS] = {
     1.54028599f, -0.561557056f, -0.192092654f, 0.307457722f, -0.0962403955f, 0.00214095014f,

@@ -1741,3 +1741,29 @@ Notes:
   frame; Patchbench `supply` in the SYNC module.
 - Gate `make check-ma-vco-couple` (19 checks). Listening renders in
   `build/vco/vco4/listen/`; operator verdict open.
+
+### 2026-11-14 — V4b, V2c: every simple interval couples; B1's ramps bow
+
+- V4b: the other simple ratios (6:5 .. 4:1, p + q <= 11) on both supplies
+  at A3. Measured per cycle the higher ratios looked like noise (residuals up
+  to twice L): B's phase between its resets is interpolated, and the error
+  repeats with the pattern. Over p of A's cycles it cancels; then every
+  ratio is a sawtooth that locks the resets together, 0.8 to 2.4e-3 of the
+  lower core on the soft rail. The core couples 23 intervals; an
+  equal-tempered third does not lock, a just one does.
+- V2c: a parabola per B1 ramp leaves -85 dB; both ramps slow toward their
+  vertex (rise +1.5 %, fall -2.1 % of half the swing at 27 Hz). Added by
+  phase to what the triangle and the shapers read; the shaper sine's H3 now
+  follows the static curve (-45.5 dB at 27 Hz, straight ramps gave -52.4).
+- Gates: check-ma-vco-shape 61, check-ma-vco-couple 31.
+- V3b (same day): the sine shaper's input coupling, a 1.40 Hz high-pass on
+  what its pair reads. With it the core's sine has the board's third
+  harmonic in transient within 1.5 dB from 27 Hz to 1.2 kHz (-37.0 dB at
+  27 Hz against SPICE -36.6). Gate check-ma-vco-shape 62.
+- V2d (same day): the 1.9 kHz second-harmonic gap was not the vertices. The
+  capacitor's triangle has exactly its skew's H2; the two emitter followers
+  to TBUF add a static bend (k2 = 0.0093, -46.8 dB H2 at every pitch). Bent
+  the same way, the core's triangle output matches TBUF within 0.2 dB to
+  1.9 kHz. The sine shaper's H2 is now 2.3 to 3.5 dB above the board from
+  0.8 kHz (the static curve itself is 2.5 to 3 dB high there; the core's
+  edge zone adds 4 dB at 1.9 kHz). Gate check-ma-vco-shape 68.

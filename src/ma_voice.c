@@ -234,6 +234,18 @@ static float vco_rise(float octaves) {
     return a < VCO_RISE_MAX - 0.5f ? a : VCO_RISE_MAX - 0.5f;
 }
 
+/* B1's ramp bow at a pitch (V2c): exp of a cubic in octaves from A4, run on
+ * along its end slopes, capped. */
+static float vco_ramp_bow(const float poly[4], float slope_low, float slope_high, float octaves) {
+    float x = octaves < VCO_RISE_X_LOW ? VCO_RISE_X_LOW
+            : octaves > VCO_RISE_X_HIGH ? VCO_RISE_X_HIGH : octaves;
+    float p = ((poly[3] * x + poly[2]) * x + poly[1]) * x + poly[0];
+    if (octaves < VCO_RISE_X_LOW) p += slope_low * (octaves - VCO_RISE_X_LOW);
+    if (octaves > VCO_RISE_X_HIGH) p += slope_high * (octaves - VCO_RISE_X_HIGH);
+    float b = vco_exp_negative(p);
+    return b < VCO_BOW_MAX ? b : VCO_BOW_MAX;
+}
+
 /* The swing the shapers see at a pitch, less A4's (V2, V3, V2b): `octaves`
  * from A4 below the join, the core's frequency above it. */
 static float vco_swell(float octaves, float hz) {
@@ -255,6 +267,14 @@ static void analog_shape(ma_synth *s, float amount, float octaves1, float octave
     s->vco_swell[0] = amount * vco_swell(octaves1, hz1);
     s->vco_swell[1] = amount * vco_swell(octaves2, hz2);
     s->vco_bow = amount * VCO_SAW_BOW;
+    s->vco_buffer = amount;
+    float octaves[2] = { octaves1, octaves2 };
+    for (int k = 0; k < 2; k++) {
+        s->vco_ramp_bow[k][0] = amount * vco_ramp_bow(VCO_BOW_UP_POLY, VCO_BOW_UP_SLOPE_LOW,
+                                                      VCO_BOW_UP_SLOPE_HIGH, octaves[k]);
+        s->vco_ramp_bow[k][1] = -amount * vco_ramp_bow(VCO_BOW_DOWN_POLY, VCO_BOW_DOWN_SLOPE_LOW,
+                                                       VCO_BOW_DOWN_SLOPE_HIGH, octaves[k]);
+    }
 }
 
 /* 2^x for 0 <= x <= 4. */
@@ -286,6 +306,8 @@ static void plain_shape(ma_synth *s) {
     s->vco_skew[0] = s->vco_skew[1] = 0.0f;
     s->vco_swell[0] = s->vco_swell[1] = 0.0f;
     s->vco_bow = 0.0f;
+    for (int k = 0; k < 2; k++) s->vco_ramp_bow[k][0] = s->vco_ramp_bow[k][1] = 0.0f;
+    s->vco_buffer = 0.0f;
 }
 
 /* The VCO-2 pitch law on this frame's pitch (docs/ma-vco-plan.md): returns

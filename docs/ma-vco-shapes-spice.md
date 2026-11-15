@@ -38,6 +38,36 @@ core does not take that.
 every row. The swing grows by 20.4 uV/Hz (each reversal overshoots by the
 comparator's delay), within 1.4 mV of a straight line.
 
+## 1b. The bow in each ramp (V2c)
+
+Two straight ramps leave -39 dB at 27 Hz and -62 dB at 1.9 kHz. A parabola
+per ramp (the same traces, `build/vco/b1low/bow.json`) leaves -85 dB or
+less: each ramp slows toward the vertex it runs to, the rise above its chord,
+the fall below it, the fall about twice as much. Height at mid-ramp over half
+the swing:
+
+| f (Hz) | rise | fall | a parabola per ramp leaves (rise / fall) |
+|---:|---:|---:|---:|
+| 27.39 | +0.01493 | -0.02148 | -87 / -85 dB |
+| 33.59 | +0.01301 | -0.01977 | -89 / -87 dB |
+| 40.07 | +0.01162 | -0.01842 | -90 / -88 dB |
+| 50.16 | +0.01013 | -0.01682 | -92 / -90 dB |
+| 67.67 | +0.00850 | -0.01485 | -95 / -93 dB |
+| 93.05 | +0.00710 | -0.01288 | -98 / -95 dB |
+| 130.21 | +0.00587 | -0.01094 | -101 / -98 dB |
+| 167.90 | +0.00507 | -0.00954 | -103 / -101 dB |
+| 224.94 | +0.00424 | -0.00804 | -105 / -104 dB |
+| 416.51 | +0.00280 | -0.00533 | -110 / -110 dB |
+| 800.56 | +0.00170 | -0.00322 | -114 / -118 dB |
+| 1183.54 | +0.00123 | -0.00232 | -116 / -123 dB |
+| 1564.70 | +0.00097 | -0.00182 | -118 / -127 dB |
+| 1943.40 | +0.00080 | -0.00151 | -119 / -128 dB |
+
+Like the skew, it grows toward the bass about as f^-0.55. The core adds the
+two parabolas by phase to what the triangle output and the shapers read
+(`ln |bow|` a cubic in octaves from A4, within 1.4 %); the integrator stays
+on its straight trajectory.
+
 ## 2. The shapers (`shapers.cir`)
 
 Two study circuits hung on B1's buffered triangle (TBUF), with ideal rails,
@@ -147,9 +177,51 @@ pair's swell at each pitch:
 | 1944.5 | -50.9 (-46.4) | -55.5 (-49.9) | -56.9 (-64.1) | -0.00945 (-0.00872) |
 
 Both shapers follow SPICE where the circuit's character is (the sine's H2,
-the saw's step). The core's sine has less third harmonic than the board's
-in the lower octaves, because its ramps are straight, and at 1.9 kHz 5 dB
-less second harmonic (SPICE has more there from the vertices).
+the saw's step). The sine's third harmonic took two more pieces of the
+circuit:
+
+| f (Hz) | straight ramps | ramps bowed (V2c) | and the input coupling (V3b) | SPICE |
+|---:|---:|---:|---:|---:|
+| 27.4 | -52.4 | -45.5 | -37.0 | -36.6 |
+| 40.1 | -59.6 | -47.8 | -39.7 | -39.4 |
+| 67.7 | -74.8 | -50.2 | -43.3 | -43.2 |
+| 130.3 | -60.4 | -52.4 | -47.4 | -47.4 |
+| 225.1 | -58.1 | -53.9 | -50.5 | -49.8 |
+| 440.1 | -58.5 | -56.2 | -54.1 | -53.2 |
+| 801.0 | -63.0 | -60.6 | -58.6 | -57.2 |
+| 1184.2 | -82.7 | -67.2 | -63.7 | -62.7 |
+
+The coupling capacitor (10 uF into 10 k and the 1.38 k trimmer, a 1.40 Hz
+corner) tilts each ramp a little toward the middle; at low notes the trimmed
+pair turns that into third harmonic. With both, the core's sine is within
+1.5 dB of the board in transient to 1.2 kHz.
+
+**The second harmonic above 1 kHz is the buffer's (V2d).** The capacitor's
+own triangle has exactly the second harmonic its skew gives, to 1.9 kHz
+(-56.5 dB against -56.6). TBUF, two emitter followers later, has more: the
+followers' Vbe follows their current, a static bend `x + k2 (x^2 - 1)` with
+k2 = 0.0093 at every pitch (225 Hz to 14 kHz), which adds -46.8 dB of second
+harmonic. Below 1 kHz the skew hides it; above 2 kHz it is all there is. The
+module's triangle output comes from TBUF too, so the core bends both its
+triangle output and what the shapers read:
+
+| f (Hz) | triangle H2, core (straight) | core (bent) | SPICE TBUF | sine H2, core | SPICE |
+|---:|---:|---:|---:|---:|---:|
+| 225.1 | -32.9 | -32.7 | -32.7 | -35.3 | -35.5 |
+| 440.1 | -37.7 | -37.1 | -37.0 | -39.4 | -40.4 |
+| 801.0 | -43.2 | -41.4 | -41.3 | -43.1 | -45.4 |
+| 1184.2 | -47.8 | -43.9 | -43.9 | -45.0 | -48.2 |
+| 1944.5 | -56.7 | -46.0 | -45.9 | -46.4 | -49.9 |
+
+The sine's second harmonic is now above the board's from 0.8 kHz, by 2.3 to
+3.5 dB instead of 5 dB below it at 1.9 kHz. Two things are left, both
+outside the buffer: the pair's static curve on the board's own TBUF already
+gives 2.5 to 3 dB more than the board in transient at 0.8 to 1.2 kHz (a
+dynamic effect in the pair), and at 1.9 kHz the core's own triangle, rounded
+over its edge zone, adds about 4 dB. The sine's THD is within 1.5 dB of the
+board at every pitch. The fit also offers a cubic term; on the board's own
+triangle it puts the sine's third harmonic 2 to 3 dB above what TBUF gives,
+so it is not the buffer's and is left out.
 
 Above 2 kHz, against the range-switched board: the saw's step -0.0179
 (SPICE -0.0185) at 3.8 kHz and -0.0310 (-0.0278) at 6.2 kHz; the sine's H3

@@ -42,11 +42,14 @@ def core(suffix, p):
         out.append(' '.join([f'{name}_{suffix}'] + nodes + tail))
     return out
 
-def case(name, rs, cb, note, detune, seconds, settle=.05, interval=0):
+def case(name, rs, cb, note, detune, seconds, settle=.05, interval=0, ratio=None):
+    """`ratio` = (p, q): core B at p/q of A (a just interval) plus `detune`
+    cents, instead of `interval` equal-tempered semitones."""
     a = dict(vco2.DEFAULTS); a.update(BOARDS['A']); a.update(trims('A'))
     b = dict(vco2.DEFAULTS); b.update(BOARDS['B']); b.update(trims('B'))
     cv = vco2.note_cv(note)
-    T = 1 / vco2.note_hz(note)
+    up = np.log2(ratio[0] / ratio[1]) if ratio else interval / 12
+    T = 1 / (vco2.note_hz(note) * 2 ** max(up, 0))      # the faster core's period
     vecs = 'v(SAW_A) v(SAW_B) v(VCC) v(VTOP)'
     lines = ['* V4: two VCO-2 cores on one supply', '.temp 25']
     lines += [f'.include "{paths.SRC}/models/{m}"' for m in ('bc547c.lib', 'bc557c.lib')]
@@ -56,7 +59,7 @@ def case(name, rs, cb, note, detune, seconds, settle=.05, interval=0):
               f'RSUP SUP VCC {rs:.6g}', f'RSTOP STOP VTOP {rs:.6g}',
               f'CBUS VCC 0 {cb:.6g}', f'CBTOP VTOP 0 {cb:.6g}']
     lines += core('A', a) + core('B', b)
-    lines += [f'VCV_A CV_A 0 {cv:.9g}', f'VCV_B CV_B 0 {cv + interval / 12 + detune / 1200:.9g}']
+    lines += [f'VCV_A CV_A 0 {cv:.9g}', f'VCV_B CV_B 0 {cv + up + detune / 1200:.9g}']
     lines += ['.options reltol=1e-5 vntol=1e-8 abstol=1e-13 method=gear', '.control',
               'set wr_singlescale', 'set wr_vecnames', f'save {vecs}',
               f'tran {1 / vco2.FS_SPICE:.10g} {settle + seconds:.9g} {settle:.9g} {min(.5e-6, T / 4000):.6g}',
@@ -66,7 +69,7 @@ def case(name, rs, cb, note, detune, seconds, settle=.05, interval=0):
     folder.mkdir(parents=True, exist_ok=True)
     (folder / 'bench.cir').write_text('\n'.join(lines) + '\n')
     (folder / 'case.json').write_text(json.dumps(dict(rs=rs, cb=cb, note=note, detune=detune, seconds=seconds,
-                                                      interval=interval)))
+                                                      interval=interval, ratio=ratio)))
     r = subprocess.run(['ngspice', '-b', 'bench.cir'], cwd=folder, capture_output=True, text=True)
     (folder / 'ngspice.log').write_text(r.stdout + r.stderr)
 
@@ -84,7 +87,7 @@ def analyze(name):
     fa = 1 / np.diff(ta).mean()
     # B's phase at each of A's cycles, in turns; its rate per cycle of A
     # B against A near p:q (B's frequency over A's): the phase q*B - p*A
-    p, q = RATIOS[c.get('interval', 0)]
+    p, q = c['ratio'] if c.get('ratio') else RATIOS[c.get('interval', 0)]
     pb = np.interp(ta, tb, np.arange(len(tb)))
     phase = q * pb - p * np.arange(len(ta))
     rate = np.diff(phase) * fa                    # Hz: B's frequency minus A's, cycle by cycle
@@ -106,7 +109,11 @@ def analyze(name):
 if __name__ == '__main__':
     if sys.argv[1] == 'case':
         n, rs, cb, note, det, sec = sys.argv[2:8]
-        iv = int(sys.argv[8]) if len(sys.argv) > 8 else 0
-        case(n, float(rs), float(cb), int(note), float(det), float(sec), interval=iv)
+        iv = sys.argv[8] if len(sys.argv) > 8 else '0'
+        if ':' in iv:
+            pp, qq = map(int, iv.split(':'))
+            case(n, float(rs), float(cb), int(note), float(det), float(sec), ratio=(pp, qq))
+        else:
+            case(n, float(rs), float(cb), int(note), float(det), float(sec), interval=int(iv))
     else:
         for n in sys.argv[2:]: analyze(n)

@@ -168,12 +168,21 @@ is pulled `1/64` of the way back to its trajectory (the f32 rounding of
 unequal steps does not cancel). At `skew = 0` all of this is the text above,
 bit for bit: `h = 1`, `c = 0`, no move, no pull.
 
+The triangle the output and the shapers read also carries B1's ramp bow
+(V2c): `bow_up * 4u(1-u)` on the rise (`u = p / r`) and `bow_down * 4u(1-u)`
+on the fall (`u = (p - r) / (1 - r)`), zero at both vertices; the
+integrator's state stays straight. Then B1's buffer bends it (V2d): on
+`u = state / gain`, `u + 0.0093 (u^2 - 1)`, times the gain again.
+
 The saw then carries VCO-2's bow, `bow * (4p(1-p) - 2/3)` added to its
 term, and two shapers read the triangle as the circuit sees it,
 `x = swing * state / gain` (ramps between +-1 at A4): the long-tailed pair's
 static curve `x * odd(x^2) + even(x^2)` and the switched pair
 `pulse(p, r, d) * (x - 1) / 2`, whose two steps take the pulse's smoothed
-edges. Their levels join the waveform divisor after the older four.
+edges. Their levels join the waveform divisor after the older four. The
+sine's pair reads `x - dc` (V3b): `dc` is its coupling capacitor, per
+oscillator, `dc += (x - dc) / (tau * 8 fs)` once a substep while the sine
+shaper sounds, `tau = 10 uF * 11.38 k` (1.40 Hz).
 
 With `vco.supply` (and the law on, docs/ma-vco-plan.md V4) the two cores
 pull each other near unison, the octave and the fifth, as two VCO-2 cores on
@@ -187,8 +196,9 @@ p1    -= G / (2 p) / sample_rate              (turns, on the Q48 phase)
 p2    += G / (2 q) / sample_rate
 ```
 
-`L = 0` (no law, or an interval that does not couple) leaves both phases bit
-for bit.
+`p` and `q` run to 8 (the eleventh, 8:3; V4b); `q * p2` and `p * p1` are
+whole multiples of the Q48 phases, so `psi` is exact. `L = 0` (no law, or an
+interval that does not couple) leaves both phases bit for bit.
 
 Under cross-mod VCO1's step changes every substep. Its increment is then
 `pulse * 4d * gain(d0)` and its seed is `seed(p, d0)`, with `d0` the frame's

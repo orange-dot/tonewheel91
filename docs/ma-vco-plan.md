@@ -70,9 +70,12 @@ and accepted them.
 | VD19 | **File version 7** carries the four shaper levels. A patch without them keeps writing version 6 or below byte for byte; versions below 7 refuse the keys. A Patchbench snapshot may leave out the pitch block and the shaper block, each whole. |
 | VD20 | **The cores couple through their supply** (V4, operator 2026-11-14): a new control `vco.supply`, 0 = a well-decoupled board (1 ohm, 10 uF), 1 = a soft rail (10 ohm, 100 nF), geometric in between; the coupling scales with `vco.analog`, so amount zero is still the old voice. |
 | VD21 | **The coupling is the SPICE sawtooth**, not a sine: with `psi = q phi2 - p phi1`, `G(psi) = 2 L (wrap(psi) - 1/2)`, the jump at the resets (psi = 0, within 0.03 of every case), `L` a constant share of the lower core's frequency (C2 to C6). |
-| VD22 | **Unison, the octave and the fifth**, above and below VCO1 (operator chose both intervals measured); the intervals below mirror the ones above. Other intervals do not couple. |
+| VD22 | **Every interval near a simple ratio couples** (V4b, operator 2026-11-14): unison, the minor and major third, fourth, fifth, major sixth, minor seventh (7:4), octave, tenth (5:2), eleventh (8:3), twelfth, two octaves, above and below VCO1 (mirrored); each at its own measured strength, locking at the simple ratio. Ratios with p + q above 11 were not simulated and do not couple. |
 | VD23 | **A phase nudge once a frame**, split evenly: VCO1 by -G / 2p, VCO2 by +G / 2q, in the kernel, where the lanes hold the phases. About 1e-5 turn a frame; the steps, the BLEPs and the triangles do not change. |
 | VD24 | **File version 8** carries `vco.supply`; a patch without it keeps writing version 7 or below. Patchbench snapshots may leave it out on its own. |
+| VD25 | **B1's ramps bow** (V2c, operator 2026-11-14): a parabola on each ramp by phase, added to what the triangle output and the shapers read, not to the integrator (the pull of VD14 keeps the state straight). Rise and fall heights from SPICE per pitch (a cubic in octaves, within 1.4 %), under `vco.analog`. |
+| VD26 | **The sine shaper's input is AC-coupled** (V3b, operator 2026-11-14): a first-order high-pass at 1.40 Hz (the 10 uF coupling capacitor into 10 k and the trimmer) on what the sine's pair reads, its state per oscillator, tracked once a substep while the sine shaper sounds. The saw's pair stays DC-coupled. It changes the committed V3 sine: its third harmonic at low notes is now the board's. |
+| VD27 | **B1's buffer bends the triangle** (V2d, operator 2026-11-14): `x + 0.0093 (x^2 - 1)` on the state over the integrator's gain, the vertices fixed, under `vco.analog`, on the triangle output and what both shapers read. It is the -47 dB second harmonic the old notes called "from the vertices": the capacitor's triangle has none beyond its skew. |
 
 ## 3. Steps
 
@@ -141,7 +144,7 @@ Evidence: `docs/ma-vco-shapes-spice.md`.
 - **Patchbench**: each VCO module has six level knobs ("tri sine", "tri
   saw"); the component traces cover them.
 
-Gate `make check-ma-vco-shape` (`test/ma_vco_shape.c`, 52 checks):
+Gate `make check-ma-vco-shape` (`test/ma_vco_shape.c`, 68 checks):
 
 | Check | Result |
 | --- | --- |
@@ -152,7 +155,8 @@ Gate `make check-ma-vco-shape` (`test/ma_vco_shape.c`, 52 checks):
 | A minute at 27.5 Hz with B1's skew there | peaks within 1e-5 of +-1 |
 | 400 notes with new rises and glides | centred within 1e-4 |
 | The bow | its parabola within 3.1e-8 |
-| Shaper sine against SPICE, 27 Hz..1.2 kHz | THD and H2 within 2.5 dB |
+| Shaper sine against SPICE | THD within 1.5 dB 27 Hz..1.9 kHz; H2 within 1.5 dB to 440 Hz, 4 dB above (V2d); H3 within 1.5 dB to 1.2 kHz (V2c, V3b) |
+| Triangle output H2 against SPICE TBUF, 225 Hz..1.9 kHz | within 0.2 dB (V2d) |
 | Shaper saw: quarter points, step at the vertex against SPICE | within 0.006 of -+1/2 (checked to 0.01); step within 3e-4 (1.9 kHz: 10 %) |
 | Pool block render against the frame-by-frame tick, every shape on, sync, new notes | 8192 frames, 0 differ |
 
@@ -176,14 +180,14 @@ Evidence: `docs/ma-vco4-spice.md`.
 - **Files**: `driver/ma_patch_file.c` (version 8), `workbench/pb/pb_state.c`.
 - **Patchbench**: `supply` under `dead time` in "SYNC · XMOD · PITCH".
 
-Gate `make check-ma-vco-couple` (`test/ma_vco_couple.c`, 19 checks):
+Gate `make check-ma-vco-couple` (`test/ma_vco_couple.c`, 31 checks):
 
 | Check | Result |
 | --- | --- |
-| A voice's sawtooth against SPICE, unison, octave, fifth, both supplies | lock within 1.5 %, jump within 0.03 |
+| A voice's sawtooth against SPICE, unison, octave, fifth (A4), fourth, major third, twelfth, two octaves (A3) | lock within 3 %, jump within a SPICE bin or two of the resets |
 | Soft rail, unison, 1 cent apart | locked (mean beat 0.0000 Hz), held at the resets |
 | Soft rail, unison, 3 cents apart | beats at 0.66 Hz against 0.76 free |
-| The front end's lock range against the table, 7 intervals, 3 supplies, 3 notes | within 0.4 % (the rest is zero) |
+| The front end's lock range against the table, 21 intervals, 3 supplies, 3 notes | within 1 % (the law's own move at C0), zero where the table has nothing |
 | The supply without the law | no coupling |
 | Pool block render against the frame-by-frame tick, coupling on | 8192 frames, 0 differ |
 

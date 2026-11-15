@@ -254,6 +254,7 @@ typedef struct {
     uint16_t guard_frames;
     bool triangle_initialized;
     float rise;             /* the triangle's last rise (V2); 0: none yet */
+    float shaper_dc;        /* the sine shaper's coupling capacitor (V3b) */
 } ma_oscillator;
 
 typedef struct {
@@ -390,6 +391,8 @@ typedef struct {
     float vco_skew[2];
     float vco_swell[2];
     float vco_bow;
+    float vco_ramp_bow[2][2];   /* each triangle's rise and fall bow (V2c), 0 = straight */
+    float vco_buffer;           /* B1's buffer bend (V2d): the amount, 0 = none */
     /* this frame's coupling of the two cores (V4): lock range in Hz (0 =
      * none), VCO2 over VCO1 near p:q, and the phase it locks at */
     float vco_couple_hz, vco_couple_p, vco_couple_q, vco_couple_jump;
@@ -808,6 +811,7 @@ typedef struct {
     int32_t guard_frames[2][MA_LANES];
     int32_t triangle_initialized[2][MA_LANES];   /* 0 or -1 */
     float rise[2][MA_LANES];
+    float shaper_dc[2][MA_LANES];
     float history[2][31][MA_LANES];
     float output_history[7][MA_LANES];
     float ladder_state[4][MA_LANES];

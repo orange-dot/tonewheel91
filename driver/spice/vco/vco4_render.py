@@ -52,7 +52,9 @@ def main():
         print(case, flush=True)
     for name, interval, cents, supply in (('unison-1c-soft', 0, 1, 1), ('unison-1c-good', 0, 1, 0),
                                           ('unison-3c-soft', 0, 3, 1), ('octave-2c-soft', 12, 2, 1),
-                                          ('fifth-2c-soft', 7, 2, 1)):
+                                          ('fifth-2c-soft', 7, 2, 1),
+                                          ('fourth-just-soft', 5, -1.955 + .3, 1),
+                                          ('major-third-et-soft', 4, 0, 1)):
         hz = 220.0
         pair(f'ma-{name}', ma(f'pair@0,0,{interval},{cents}', hz, 6.0),
              ma(f'pair@1,{supply},{interval},{cents}', hz, 6.0))
