@@ -6,9 +6,69 @@
 #define ML_W 1
 #include "ma_lane_ops.h"
 #include "ma_osc_kernel.h"
+#include "ma_vco_kernel.h"
 
 float ma_octave_ratio_small(float octaves) {
     return ml_octave_ratio_small(octaves);
+}
+
+float ma_voice_vco_law_hz(float hz, float octaves, float extra_hz, float dead_s,
+                          float temp_k) {
+    return ml_vco_law_hz(hz, octaves, extra_hz, dead_s, temp_k);
+}
+
+float ma_voice_vco_frame(ma_synth *s, float base_hz, float note_position,
+                         float pitch_delta, float detune_cents, float fine_cents) {
+    if (!(s->vco_analog > 0.0f)) {
+        s->vco_couple_hz = 0.0f;
+        s->vco2_bend = 0.0f;
+        s->vco_skew[0] = s->vco_skew[1] = 0.0f;
+        s->vco_swell[0] = s->vco_swell[1] = 0.0f;
+        s->vco_bow = 0.0f;
+        for (int k = 0; k < 2; k++) s->vco_ramp_bow[k][0] = s->vco_ramp_bow[k][1] = 0.0f;
+        s->vco_buffer = 0.0f;
+        return base_hz;
+    }
+    const ma_character *c = &s->character;
+    const vco_couple_row row = vco_couple_for(s->vco2_interval);
+    const ml_vco_in x = {
+        .amount = s->vco_analog,
+        .dead_time = s->vco_dead_time,
+        .supply = s->vco_supply,
+        .base_hz = base_hz,
+        .note_position = note_position,
+        .pitch_delta = pitch_delta,
+        .detune_cents = detune_cents,
+        .interval = (float)s->vco2_interval,
+        .interval_ratio = interval_ratio(s->vco2_interval),
+        .fine_cents = fine_cents,
+        .card = c->assigned,
+        .temp_k = c->temp_k,
+        .walk_cents = c->walk_cents,
+        .vco2_temp_k = c->vco2_temp_k,
+        .extra_hz = { c->vco_extra_hz[0], c->vco_extra_hz[1] },
+        .dead_us = { c->vco_dead_us[0], c->vco_dead_us[1] },
+        .couple_p = (float)row.p,
+        .couple_q = (float)row.q,
+        .couple_jump = row.jump,
+        .couple_good = row.good,
+        .couple_soft_octaves = row.soft_octaves,
+    };
+    const ml_vco_frame f = ml_vco_frame_of(&x);
+    s->vco2_bend = f.vco2_bend;
+    for (int k = 0; k < 2; k++) {
+        s->vco_skew[k] = f.skew[k];
+        s->vco_swell[k] = f.swell[k];
+        s->vco_ramp_bow[k][0] = f.ramp_bow[k][0];
+        s->vco_ramp_bow[k][1] = f.ramp_bow[k][1];
+    }
+    s->vco_bow = f.saw_bow;
+    s->vco_buffer = f.buffer;
+    s->vco_couple_hz = f.couple_hz;
+    s->vco_couple_p = f.couple_p;
+    s->vco_couple_q = f.couple_q;
+    s->vco_couple_jump = f.couple_jump;
+    return f.base_hz;
 }
 
 static ml_vco vco_of(ma_vco_controls c) {

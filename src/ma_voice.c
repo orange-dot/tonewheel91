@@ -208,144 +208,6 @@ float ma_safety_curve(float sample) {
     return sample < 0.0f ? -limited : limited;
 }
 
-/* e^y for y <= 0 (2^z as a power of two times (2^(f/4))^4), down to about
- * 2^-126; the shape's few uses need a few parts in a million. */
-static float vco_exp_negative(float y) {
-    float z = y * VCO_INV_LN2;
-    if (z < -126.0f) return 0.0f;
-    int n = (int)z;
-    if ((float)n > z) n--;
-    float q = ma_octave_ratio_small(0.25f * (z - (float)n));
-    q *= q;
-    q *= q;
-    union { uint32_t bits; float value; } power = { .bits = (uint32_t)(n + 127) << 23 };
-    return q * power.value;
-}
-
-/* B1's rise less 0.5 for a pitch `octaves` from A4 (V2). */
-static float vco_rise(float octaves) {
-    float x = octaves < VCO_RISE_X_LOW ? VCO_RISE_X_LOW
-            : octaves > VCO_RISE_X_HIGH ? VCO_RISE_X_HIGH : octaves;
-    float p = VCO_RISE_POLY[4];
-    for (int i = 3; i >= 0; i--) p = p * x + VCO_RISE_POLY[i];
-    if (octaves < VCO_RISE_X_LOW) p += VCO_RISE_SLOPE_LOW * (octaves - VCO_RISE_X_LOW);
-    if (octaves > VCO_RISE_X_HIGH) p += VCO_RISE_SLOPE_HIGH * (octaves - VCO_RISE_X_HIGH);
-    float a = vco_exp_negative(p);
-    return a < VCO_RISE_MAX - 0.5f ? a : VCO_RISE_MAX - 0.5f;
-}
-
-/* B1's ramp bow at a pitch (V2c): exp of a cubic in octaves from A4, run on
- * along its end slopes, capped. */
-static float vco_ramp_bow(const float poly[4], float slope_low, float slope_high, float octaves) {
-    float x = octaves < VCO_RISE_X_LOW ? VCO_RISE_X_LOW
-            : octaves > VCO_RISE_X_HIGH ? VCO_RISE_X_HIGH : octaves;
-    float p = ((poly[3] * x + poly[2]) * x + poly[1]) * x + poly[0];
-    if (octaves < VCO_RISE_X_LOW) p += slope_low * (octaves - VCO_RISE_X_LOW);
-    if (octaves > VCO_RISE_X_HIGH) p += slope_high * (octaves - VCO_RISE_X_HIGH);
-    float b = vco_exp_negative(p);
-    return b < VCO_BOW_MAX ? b : VCO_BOW_MAX;
-}
-
-/* The swing the shapers see at a pitch, less A4's (V2, V3, V2b): `octaves`
- * from A4 below the join, the core's frequency above it. */
-static float vco_swell(float octaves, float hz) {
-    float x = octaves < VCO_SWELL_X_LOW ? VCO_SWELL_X_LOW
-            : octaves > VCO_SWELL_X_HIGH ? VCO_SWELL_X_HIGH : octaves;
-    float w = x * (VCO_SWELL_POLY[0] + x * (VCO_SWELL_POLY[1] + x * VCO_SWELL_POLY[2]));
-    if (octaves > VCO_SWELL_X_HIGH && hz > VCO_SWELL_JOIN_HZ) {
-        float top = hz < VCO_SWELL_TOP_HZ ? hz : VCO_SWELL_TOP_HZ;
-        w += VCO_SWELL_PER_HZ * (top - VCO_SWELL_JOIN_HZ);
-    }
-    return w;
-}
-
-/* This frame's circuit shapes (V2): with the law off, the old oscillator. */
-static void analog_shape(ma_synth *s, float amount, float octaves1, float octaves2,
-                         float hz1, float hz2) {
-    s->vco_skew[0] = amount * vco_rise(octaves1);
-    s->vco_skew[1] = amount * vco_rise(octaves2);
-    s->vco_swell[0] = amount * vco_swell(octaves1, hz1);
-    s->vco_swell[1] = amount * vco_swell(octaves2, hz2);
-    s->vco_bow = amount * VCO_SAW_BOW;
-    s->vco_buffer = amount;
-    float octaves[2] = { octaves1, octaves2 };
-    for (int k = 0; k < 2; k++) {
-        s->vco_ramp_bow[k][0] = amount * vco_ramp_bow(VCO_BOW_UP_POLY, VCO_BOW_UP_SLOPE_LOW,
-                                                      VCO_BOW_UP_SLOPE_HIGH, octaves[k]);
-        s->vco_ramp_bow[k][1] = -amount * vco_ramp_bow(VCO_BOW_DOWN_POLY, VCO_BOW_DOWN_SLOPE_LOW,
-                                                       VCO_BOW_DOWN_SLOPE_HIGH, octaves[k]);
-    }
-}
-
-/* 2^x for 0 <= x <= 4. */
-static float vco_exp2(float x) {
-    float q = ma_octave_ratio_small(x * (1.0f / 16.0f));
-    for (int i = 0; i < 4; i++) q *= q;
-    return q;
-}
-
-/* The two cores' coupling this frame (V4): the row for VCO2's interval, the
- * supply between the two measured boards (geometric), the amount, and the
- * lower core's frequency. */
-static void analog_couple(ma_synth *s, float amount, float hz1, float hz2) {
-    s->vco_couple_hz = 0.0f;
-    for (unsigned i = 0; i < sizeof VCO_COUPLE / sizeof *VCO_COUPLE; i++) {
-        const vco_couple_row *r = &VCO_COUPLE[i];
-        if (r->interval != s->vco2_interval) continue;
-        float rel = r->good * vco_exp2(s->vco_supply * r->soft_octaves);
-        s->vco_couple_hz = amount * rel * (hz1 < hz2 ? hz1 : hz2);
-        s->vco_couple_p = (float)r->p;
-        s->vco_couple_q = (float)r->q;
-        s->vco_couple_jump = r->jump;
-    }
-}
-
-static void plain_shape(ma_synth *s) {
-    s->vco_couple_hz = 0.0f;
-    s->vco2_bend = 0.0f;
-    s->vco_skew[0] = s->vco_skew[1] = 0.0f;
-    s->vco_swell[0] = s->vco_swell[1] = 0.0f;
-    s->vco_bow = 0.0f;
-    for (int k = 0; k < 2; k++) s->vco_ramp_bow[k][0] = s->vco_ramp_bow[k][1] = 0.0f;
-    s->vco_buffer = 0.0f;
-}
-
-/* The VCO-2 pitch law on this frame's pitch (docs/ma-vco-plan.md): returns
- * VCO1's frequency and leaves VCO2's law, relative to it, in vco2_bend. Every
- * circuit term scales with the amount, so a small amount is a small
- * departure. A voice without a card is the nominal board at its trim
- * temperature. */
-static float analog_pitch(ma_synth *s, float base_hz, float note_position,
-                          float pitch_delta, float detune_cents, float fine_cents) {
-    float amount = s->vco_analog;
-    const ma_character *c = &s->character;
-    bool card = c->assigned;
-    float dead = amount * s->vco_dead_time * 1e-6f;
-    float temp = card ? amount * (c->temp_k + c->walk_cents * VCO_WALK_K_PER_CENT) : 0.0f;
-    float octaves = (note_position - 69.0f + pitch_delta) * (1.0f / 12.0f)
-                  + detune_cents * (1.0f / 1200.0f);
-    float vco1_hz = vco_law_hz(base_hz, octaves,
-        amount * (card ? c->vco_extra_hz[0] : VCO_NOMINAL_EXTRA_HZ),
-        dead * (card ? c->vco_dead_us[0] : VCO_NOMINAL_DEAD_US), temp);
-    float ratio = interval_ratio(s->vco2_interval)
-                * ma_octave_ratio_small(fine_cents / 1200.0f);
-    float octaves2 = octaves + (float)s->vco2_interval * (1.0f / 12.0f)
-                   + fine_cents * (1.0f / 1200.0f);
-    float vco2_hz = vco_law_hz(base_hz * ratio, octaves2,
-        amount * (card ? c->vco_extra_hz[1] : VCO_NOMINAL_EXTRA_HZ),
-        dead * (card ? c->vco_dead_us[1] : VCO_NOMINAL_DEAD_US),
-        card ? temp + amount * c->vco2_temp_k : 0.0f);
-    s->vco2_bend = vco2_hz / (ratio * vco1_hz) - 1.0f;
-    analog_shape(s, amount, octaves, octaves2, vco1_hz, vco2_hz);
-    analog_couple(s, amount, vco1_hz, vco2_hz);
-    return vco1_hz;
-}
-
-float ma_voice_vco_law_hz(float hz, float octaves, float extra_hz, float dead_s,
-                          float temp_k) {
-    return vco_law_hz(hz, octaves, extra_hz, dead_s, temp_k);
-}
-
 #if defined(MA_SOURCE_EVIDENCE)
 static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     ma_render_controls controls = next_render_controls(s);
@@ -360,11 +222,8 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
     if (character > 0.0f)
         base_hz *= ma_octave_ratio_small(character
             * (s->character.vco1_cents + s->character.walk_cents) / 1200.0f);
-    if (s->vco_analog > 0.0f)
-        base_hz = analog_pitch(s, base_hz, note_position, pitch_delta, detune_cents,
-                               controls.vco2_fine_cents);
-    else
-        plain_shape(s);
+    base_hz = ma_voice_vco_frame(s, base_hz, note_position, pitch_delta, detune_cents,
+                                 controls.vco2_fine_cents);
     if (controls.bcs_amount > 0.0f) {
         float bcs = ma_voice_render_bcs(s, base_hz, controls.bcs_amount,
                                         controls.bcs_regime, s->ladder.y4_guess);
@@ -424,9 +283,14 @@ static ma_frame synth_tick(ma_synth *s, bool raw, float detune_cents) {
  * gains are inputs because a lane bank may hold them. */
 /* Front end, part A: controls, character, glide, LFO and pitch. BCS comes
  * next and reads only its own state, so a lane bank may run it for all
- * voices between part A and part B. */
-void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
-                      ma_voice_front *restrict f) {
+ * voices between part A and part B.
+ *
+ * Part A ends with the circuit's frame (ma_vco_kernel.h): the pitch law on
+ * the pitch found here, and the shapes and coupling that follow from it.
+ * ma_voice_front_a_pitch stops before it and leaves what it reads in `f`; the
+ * lanes run it for eight voices at once, ma_voice_front_a for this one. */
+void ma_voice_front_a_pitch(ma_synth *restrict s, float detune_cents,
+                            ma_voice_front *restrict f) {
     /* Written in place (f never aliases s): a freestanding core must not
      * emit memcpy. */
     ma_render_controls *controls = &f->controls;
@@ -442,14 +306,18 @@ void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
     if (character > 0.0f)
         base_hz *= ma_octave_ratio_small(character
             * (s->character.vco1_cents + s->character.walk_cents) / 1200.0f);
-    if (s->vco_analog > 0.0f)
-        base_hz = analog_pitch(s, base_hz, note_position, pitch_delta, detune_cents,
-                               controls->vco2_fine_cents);
-    else
-        plain_shape(s);
     f->character = character;
     f->note_position = note_position;
+    f->pitch_delta = pitch_delta;
+    f->detune_cents = detune_cents;
     f->base_hz = base_hz;
+}
+
+void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
+                      ma_voice_front *restrict f) {
+    ma_voice_front_a_pitch(s, detune_cents, f);
+    f->base_hz = ma_voice_vco_frame(s, f->base_hz, f->note_position, f->pitch_delta,
+                                    detune_cents, f->controls.vco2_fine_cents);
 }
 
 /* Front end, part B, shared by the scalar tick and the lanes: the BCS

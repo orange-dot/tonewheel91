@@ -257,6 +257,8 @@ typedef struct {
     ma_source_frame source;
     float character;
     float note_position;
+    float pitch_delta;                  /* bend and LFO, semitones */
+    float detune_cents;
     float base_hz;
     float filter_g;
     float guard1;
@@ -401,32 +403,37 @@ static constexpr float VCO_SAW_BOW = 0.01205f;
  * where they lock, so an equal-tempered third, 14 to 16 cents away, beats
  * on, slowed, until the fine tuning brings it there. The intervals below
  * VCO1 mirror the ones above it. Other intervals do not couple. */
-typedef struct { int8_t interval, p, q; float jump, good, soft_octaves; } vco_couple_row;
-static constexpr vco_couple_row VCO_COUPLE[23] = {     /* soft = good * 2^soft_octaves */
-    { 0, 1, 1, 0.0f, 0.000106f, 3.2944f },   /* 1:1, soft 0.00104 */
-    { 3, 6, 5, 0.0f, 9.79e-05f, 3.1130f },   /* 6:5, soft 0.000847 */
-    { -3, 5, 6, 0.0f, 9.79e-05f, 3.1130f },   /* 5:6 */
-    { 4, 5, 4, 0.0f, 0.000116f, 3.0178f },   /* 5:4, soft 0.0009395 */
-    { -4, 4, 5, 0.0f, 0.000116f, 3.0178f },   /* 4:5 */
-    { 5, 4, 3, 0.0f, 0.0001232f, 3.3054f },   /* 4:3, soft 0.001218 */
-    { -5, 3, 4, 0.0f, 0.0001232f, 3.3054f },   /* 3:4 */
-    { 7, 3, 2, 0.0f, 0.0001318f, 3.2775f },   /* 3:2, soft 0.001278 */
-    { -7, 2, 3, 0.0f, 0.0001318f, 3.2775f },   /* 2:3 */
-    { 9, 5, 3, 0.0f, 0.0001456f, 3.2118f },   /* 5:3, soft 0.001349 */
-    { -9, 3, 5, 0.0f, 0.0001456f, 3.2118f },   /* 3:5 */
-    { 10, 7, 4, 0.0f, 0.0001228f, 3.3078f },   /* 7:4, soft 0.001216 */
-    { -10, 4, 7, 0.0f, 0.0001228f, 3.3078f },   /* 4:7 */
-    { 12, 2, 1, 0.0f, 0.0001615f, 3.2710f },   /* 2:1, soft 0.001559 */
-    { -12, 1, 2, 0.0f, 0.0001615f, 3.2710f },   /* 1:2 */
-    { 16, 5, 2, 0.0f, 0.0001733f, 3.1904f },   /* 5:2, soft 0.001582 */
-    { -16, 2, 5, 0.0f, 0.0001733f, 3.1904f },   /* 2:5 */
-    { 17, 8, 3, 0.0f, 0.0001302f, 2.6320f },   /* 8:3, soft 0.0008071 */
-    { -17, 3, 8, 0.0f, 0.0001302f, 2.6320f },   /* 3:8 */
-    { 19, 3, 1, 0.0f, 0.0002108f, 3.2191f },   /* 3:1, soft 0.001963 */
-    { -19, 1, 3, 0.0f, 0.0002108f, 3.2191f },   /* 1:3 */
-    { 24, 4, 1, 0.0f, 0.0002689f, 3.1841f },   /* 4:1, soft 0.002444 */
-    { -24, 1, 4, 0.0f, 0.0002689f, 3.1841f },   /* 1:4 */
+typedef struct { int8_t p, q; float jump, good, soft_octaves; } vco_couple_row;
+/* By VCO2's interval in semitones plus 24; a row of zeros does not couple. */
+static constexpr vco_couple_row VCO_COUPLE[49] = {     /* soft = good * 2^soft_octaves */
+    [24 +  0] = { 1, 1, 0.0f, 0.000106f, 3.2944f },   /* 1:1, soft 0.00104 */
+    [24 +  3] = { 6, 5, 0.0f, 9.79e-05f, 3.1130f },   /* 6:5, soft 0.000847 */
+    [24 -  3] = { 5, 6, 0.0f, 9.79e-05f, 3.1130f },   /* 5:6 */
+    [24 +  4] = { 5, 4, 0.0f, 0.000116f, 3.0178f },   /* 5:4, soft 0.0009395 */
+    [24 -  4] = { 4, 5, 0.0f, 0.000116f, 3.0178f },   /* 4:5 */
+    [24 +  5] = { 4, 3, 0.0f, 0.0001232f, 3.3054f },   /* 4:3, soft 0.001218 */
+    [24 -  5] = { 3, 4, 0.0f, 0.0001232f, 3.3054f },   /* 3:4 */
+    [24 +  7] = { 3, 2, 0.0f, 0.0001318f, 3.2775f },   /* 3:2, soft 0.001278 */
+    [24 -  7] = { 2, 3, 0.0f, 0.0001318f, 3.2775f },   /* 2:3 */
+    [24 +  9] = { 5, 3, 0.0f, 0.0001456f, 3.2118f },   /* 5:3, soft 0.001349 */
+    [24 -  9] = { 3, 5, 0.0f, 0.0001456f, 3.2118f },   /* 3:5 */
+    [24 + 10] = { 7, 4, 0.0f, 0.0001228f, 3.3078f },   /* 7:4, soft 0.001216 */
+    [24 - 10] = { 4, 7, 0.0f, 0.0001228f, 3.3078f },   /* 4:7 */
+    [24 + 12] = { 2, 1, 0.0f, 0.0001615f, 3.2710f },   /* 2:1, soft 0.001559 */
+    [24 - 12] = { 1, 2, 0.0f, 0.0001615f, 3.2710f },   /* 1:2 */
+    [24 + 16] = { 5, 2, 0.0f, 0.0001733f, 3.1904f },   /* 5:2, soft 0.001582 */
+    [24 - 16] = { 2, 5, 0.0f, 0.0001733f, 3.1904f },   /* 2:5 */
+    [24 + 17] = { 8, 3, 0.0f, 0.0001302f, 2.6320f },   /* 8:3, soft 0.0008071 */
+    [24 - 17] = { 3, 8, 0.0f, 0.0001302f, 2.6320f },   /* 3:8 */
+    [24 + 19] = { 3, 1, 0.0f, 0.0002108f, 3.2191f },   /* 3:1, soft 0.001963 */
+    [24 - 19] = { 1, 3, 0.0f, 0.0002108f, 3.2191f },   /* 1:3 */
+    [24 + 24] = { 4, 1, 0.0f, 0.0002689f, 3.1841f },   /* 4:1, soft 0.002444 */
+    [24 - 24] = { 1, 4, 0.0f, 0.0002689f, 3.1841f },   /* 1:4 */
 };
+static inline vco_couple_row vco_couple_for(int interval) {
+    if (interval < -24 || interval > 24) return (vco_couple_row){};
+    return VCO_COUPLE[interval + 24];
+}
 
 /* ---- the triangle core's shapers (docs/ma-vco-plan.md, V3) ----
  * The sine pair's static curve (driver/spice/vco/shapers.py fit), trimmed at
@@ -445,17 +452,6 @@ static constexpr float SHAPER_SINE_EVEN[SHAPER_SINE_TERMS] = {
 };
 
 float ma_octave_ratio_small(float octaves);
-
-static inline float vco_law_hz(float hz, float octaves, float extra_hz,
-                               float dead_s, float temp_k) {
-    float e_c2 = extra_hz * (1.0f / 65.40639f) - 65.40639f * dead_s;
-    float e_c6 = extra_hz * (1.0f / 1046.5023f) - 1046.5023f * dead_s;
-    float e_a4 = extra_hz * (1.0f / 440.0f) - 440.0f * dead_s;
-    float scale = -0.25f * VCO_INV_LN2 * (e_c6 - e_c2) + temp_k * VCO_TEMP_SCALE_PER_K;
-    float offset = -VCO_INV_LN2 * e_a4 + temp_k * VCO_TEMP_OCTAVES_PER_K;
-    float exponential = hz * ma_octave_ratio_small(offset + scale * octaves);
-    return 1.0f / (1.0f / (exponential + extra_hz) + dead_s);
-}
 
 static inline float interval_ratio(int interval) {
     if (interval < -24) interval = -24;
@@ -705,6 +701,8 @@ uint32_t ma_voice_mozaik_slope_q32(float control);
 #if !defined(MA_SOURCE_EVIDENCE)
 void ma_voice_front_a(ma_synth *restrict s, float detune_cents,
                       ma_voice_front *restrict f);
+void ma_voice_front_a_pitch(ma_synth *restrict s, float detune_cents,
+                            ma_voice_front *restrict f);
 void ma_voice_front_b_shared(ma_synth *restrict s, float bcs, float guard1,
                              float guard2, ma_voice_front *restrict f);
 float ma_voice_filter_envelope_amount(const ma_synth *s,
@@ -719,6 +717,13 @@ float ma_voice_effective_filter_cutoff(const ma_synth *s,
  * cutoff (ma_filter.c): the kernels' forms at width one. */
 float ma_octave_ratio_small(float octaves);
 float ma_filter_prewarp(float cutoff_hz, float sample_rate_hz);
+
+/* The circuit's frame for one voice (ma_osc.c, ma_vco_kernel.h at width
+ * one): the pitch law on `base_hz`, and the frame's shapes and coupling left
+ * in the synth (vco2_bend, vco_skew and the fields after it). Returns VCO1's
+ * frequency. With the law off: `base_hz` as given and the old oscillator. */
+float ma_voice_vco_frame(ma_synth *s, float base_hz, float note_position,
+                         float pitch_delta, float detune_cents, float fine_cents);
 
 /* The oscillators (ma_osc.c): the 8x source frame, the oscillator kernel
  * (ma_osc_kernel.h) for one voice, and the 8x-to-2x halfband.

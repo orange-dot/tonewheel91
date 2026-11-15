@@ -249,6 +249,7 @@ static inline ml_f ml_ld(const float *a) { return _mm256_loadu_ps(a); }
  * Glas DSP, shared with the one-voice tick in ma_osc.c, ma_filter.c,
  * ma_sources.c and ma_glas.c. */
 #include "ma_osc_kernel.h"
+#include "ma_vco_kernel.h"
 #include "ma_filter_kernel.h"
 #include "ma_sources_kernel.h"
 #include "ma_glas_kernel.h"
@@ -521,22 +522,124 @@ static void ml_front_gather(ml_front_in *x, unsigned l, const ma_synth *s,
         x->vco[k][2][l] = v[k]->triangle_level; x->vco[k][3][l] = v[k]->sine_level;
         x->vco[k][4][l] = v[k]->pulse_width;
         x->vco[k][5][l] = v[k]->tri_sine_level; x->vco[k][6][l] = v[k]->tri_saw_level;
-        x->skew[k][l] = s->vco_skew[k]; x->swell[k][l] = s->vco_swell[k];
     }
-    x->bow[l] = s->vco_bow;
-    for (int k = 0; k < 2; k++) {
-        x->ramp_bow[k][l] = s->vco_ramp_bow[0][k];
-        x->ramp_bow[2 + k][l] = s->vco_ramp_bow[1][k];
-    }
-    x->tri_buffer[l] = s->vco_buffer;
-    x->couple[0][l] = s->vco_couple_hz; x->couple[1][l] = s->vco_couple_p;
-    x->couple[2][l] = s->vco_couple_q; x->couple[3][l] = s->vco_couple_jump;
     x->sync_amount[l] = c->sync_amount; x->sync_softness[l] = c->sync_softness;
     x->v2level[l] = c->vco2_level; x->noise_level[l] = c->noise_level;
     x->crossmod[l] = c->crossmod_amount; x->fine_cents[l] = c->vco2_fine_cents;
     x->base[l] = f->base_hz;
-    x->interval[l] = interval_ratio(s->vco2_interval) * (1.0f + s->vco2_bend);
     x->g1[l] = guard1; x->g2[l] = guard2;
+}
+
+/* The circuit's frame (ma_vco_kernel.h) for the lanes in `active`, after
+ * part A's pitch: the pitch law, written back to each voice's front, and the
+ * frame's shapes, coupling and VCO2 ratio, written straight into the front
+ * inputs. The synth's own copies of these (vco2_bend, vco_skew and the
+ * fields after it) belong to the one-voice tick and are not written here. A
+ * bank with the law off in every voice takes the plain ratio per lane and
+ * leaves the shapes at the zeros of ml_front_benign. */
+static void ml_front_vco(ma_synth *const voice[MA_LANES], ma_voice_front front[MA_LANES],
+                         unsigned active, ml_front_in *x) {
+    unsigned on = 0;
+    vco_couple_row row[MA_LANES] = {};
+    for (unsigned l = 0; l < MA_LANES; l++) {
+        if (!(active >> l & 1u) || !(voice[l]->vco_analog > 0.0f)) continue;
+        on |= 1u << l;
+        row[l] = vco_couple_for(voice[l]->vco2_interval);
+    }
+    if (!on) {
+        for (unsigned l = 0; l < MA_LANES; l++)
+            if (active >> l & 1u) x->interval[l] = interval_ratio(voice[l]->vco2_interval);
+        return;
+    }
+#define VCO_AMOUNT(l) voice[l]->vco_analog
+#define VCO_DEAD_TIME(l) voice[l]->vco_dead_time
+#define VCO_SUPPLY(l) voice[l]->vco_supply
+#define VCO_BASE(l) front[l].base_hz
+#define VCO_NOTE(l) front[l].note_position
+#define VCO_DELTA(l) front[l].pitch_delta
+#define VCO_DETUNE(l) front[l].detune_cents
+#define VCO_INTERVAL(l) (float)voice[l]->vco2_interval
+#define VCO_RATIO(l) interval_ratio(voice[l]->vco2_interval)
+#define VCO_FINE(l) front[l].controls.vco2_fine_cents
+#define VCO_CARD(l) (voice[l]->character.assigned ? 1.0f : 0.0f)
+#define VCO_TEMP(l) voice[l]->character.temp_k
+#define VCO_WALK(l) voice[l]->character.walk_cents
+#define VCO_TEMP2(l) voice[l]->character.vco2_temp_k
+#define VCO_EXTRA1(l) voice[l]->character.vco_extra_hz[0]
+#define VCO_EXTRA2(l) voice[l]->character.vco_extra_hz[1]
+#define VCO_DEAD1(l) voice[l]->character.vco_dead_us[0]
+#define VCO_DEAD2(l) voice[l]->character.vco_dead_us[1]
+#define VCO_P(l) (float)row[l].p
+#define VCO_Q(l) (float)row[l].q
+#define VCO_JUMP(l) row[l].jump
+#define VCO_GOOD(l) row[l].good
+#define VCO_SOFT(l) row[l].soft_octaves
+    /* Voices with the law off ride along on their own pitch and ratio and
+     * come out unchanged; empty lanes take a benign pitch. */
+    const ml_vco_in in = {
+        .amount = ML_PICK_PS(on, VCO_AMOUNT, 0.0f),
+        .dead_time = ML_PICK_PS(on, VCO_DEAD_TIME, 0.0f),
+        .supply = ML_PICK_PS(on, VCO_SUPPLY, 0.0f),
+        .base_hz = ML_PICK_PS(active, VCO_BASE, 440.0f),
+        .note_position = ML_PICK_PS(on, VCO_NOTE, 69.0f),
+        .pitch_delta = ML_PICK_PS(on, VCO_DELTA, 0.0f),
+        .detune_cents = ML_PICK_PS(on, VCO_DETUNE, 0.0f),
+        .interval = ML_PICK_PS(on, VCO_INTERVAL, 0.0f),
+        .interval_ratio = ML_PICK_PS(active, VCO_RATIO, 1.0f),
+        .fine_cents = ML_PICK_PS(on, VCO_FINE, 0.0f),
+        .card = (ml_m)(ML_PICK_PS(on, VCO_CARD, 0.0f) != 0.0f),
+        .temp_k = ML_PICK_PS(on, VCO_TEMP, 0.0f),
+        .walk_cents = ML_PICK_PS(on, VCO_WALK, 0.0f),
+        .vco2_temp_k = ML_PICK_PS(on, VCO_TEMP2, 0.0f),
+        .extra_hz = { ML_PICK_PS(on, VCO_EXTRA1, 0.0f), ML_PICK_PS(on, VCO_EXTRA2, 0.0f) },
+        .dead_us = { ML_PICK_PS(on, VCO_DEAD1, 0.0f), ML_PICK_PS(on, VCO_DEAD2, 0.0f) },
+        .couple_p = ML_PICK_PS(on, VCO_P, 0.0f),
+        .couple_q = ML_PICK_PS(on, VCO_Q, 0.0f),
+        .couple_jump = ML_PICK_PS(on, VCO_JUMP, 0.0f),
+        .couple_good = ML_PICK_PS(on, VCO_GOOD, 0.0f),
+        .couple_soft_octaves = ML_PICK_PS(on, VCO_SOFT, 0.0f),
+    };
+#undef VCO_AMOUNT
+#undef VCO_DEAD_TIME
+#undef VCO_SUPPLY
+#undef VCO_BASE
+#undef VCO_NOTE
+#undef VCO_DELTA
+#undef VCO_DETUNE
+#undef VCO_INTERVAL
+#undef VCO_RATIO
+#undef VCO_FINE
+#undef VCO_CARD
+#undef VCO_TEMP
+#undef VCO_WALK
+#undef VCO_TEMP2
+#undef VCO_EXTRA1
+#undef VCO_EXTRA2
+#undef VCO_DEAD1
+#undef VCO_DEAD2
+#undef VCO_P
+#undef VCO_Q
+#undef VCO_JUMP
+#undef VCO_GOOD
+#undef VCO_SOFT
+    const ml_vco_frame f = ml_vco_frame_of(&in);
+    float base[MA_LANES];
+    ml_store(base, f.base_hz);
+    for (unsigned l = 0; l < MA_LANES; l++)
+        if (on >> l & 1u) front[l].base_hz = base[l];
+    ml_store(x->interval, in.interval_ratio * (1.0f + f.vco2_bend));
+    for (int k = 0; k < 2; k++) {
+        ml_store(x->skew[k], f.skew[k]);
+        ml_store(x->swell[k], f.swell[k]);
+        ml_store(x->ramp_bow[2 * k], f.ramp_bow[k][0]);
+        ml_store(x->ramp_bow[2 * k + 1], f.ramp_bow[k][1]);
+    }
+    ml_store(x->bow, f.saw_bow);
+    ml_store(x->tri_buffer, f.buffer);
+    ml_store(x->couple[0], f.couple_hz);
+    ml_store(x->couple[1], f.couple_p);
+    ml_store(x->couple[2], f.couple_q);
+    ml_store(x->couple[3], f.couple_jump);
 }
 
 static void ml_vco_store(float c[7][MA_LANES], ml_vco v) {
@@ -800,16 +903,17 @@ void ma_lanes_tick(ma_voice_lanes *b, ma_synth *const voice[MA_LANES],
     ma_voice_front front[MA_LANES];
     ml_in in;
     ml_benign(&in);
+    ml_front_in fx;
+    ml_front_benign(&fx);
     unsigned bcs_on = 0;
     for (unsigned lane = 0; lane < MA_LANES; lane++) {
         if (!(b->active >> lane & 1u)) continue;
-        ma_voice_front_a(voice[lane], detune_cents[lane], &front[lane]);
+        ma_voice_front_a_pitch(voice[lane], detune_cents[lane], &front[lane]);
         if (front[lane].controls.bcs_amount > 0.0f) bcs_on |= 1u << lane;
     }
+    ml_front_vco(voice, front, b->active, &fx);
     float bcs[MA_LANES] = {};
     if (bcs_on) ml_bcs(voice, front, b->y4_guess, bcs_on, bcs);
-    ml_front_in fx;
-    ml_front_benign(&fx);
     for (unsigned lane = 0; lane < MA_LANES; lane++) {
         if (!(b->active >> lane & 1u)) continue;
         voice_front_b_lane(voice[lane], bcs[lane], b->guard_gain[0][lane],

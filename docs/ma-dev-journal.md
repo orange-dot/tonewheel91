@@ -1767,3 +1767,27 @@ Notes:
   1.9 kHz. The sine shaper's H2 is now 2.3 to 3.5 dB above the board from
   0.8 kHz (the static curve itself is 2.5 to 3 dB high there; the core's
   edge zone adds 4 dB at 1.9 kHz). Gate check-ma-vco-shape 68.
+
+### 2026-11-15 — the circuit's frame in the lanes
+
+- Operator: fix the cost of `vco.analog`, in the lanes. Measured first on
+  `1e94fa1`: the law added 0.58 M cycles to an 8-voice block, about 80 % of
+  it in scalar front end part A (135 to 590 cycles per voice and frame: two
+  laws, six exponentials and a table search, every frame).
+- The law, the shapes at a pitch and the coupling moved into
+  `src/ma_vco_kernel.h`, written once; `ma_voice_vco_frame` (width one,
+  `ma_osc.c`) and `ml_front_vco` (width eight, `ma_lanes.c`) run it. Part A
+  is split at the law (`ma_voice_front_a_pitch`). The lanes store the frame
+  straight into the front inputs and no longer write the synth's copies.
+  `VCO_COUPLE` is indexed by the interval. `bench_ma3_perf` takes
+  `MA3_PERF_ANALOG`.
+- Gates: `check-ma-front-lanes` compares the lane frame with the one-voice
+  frame bit for bit (the law on in 199,574 of 400,000 lane-frames, with and
+  without a card, mixed banks; four mutations caught). GCC, Clang and the
+  sanitizer build pass `make test`; every pin unchanged.
+- A/B against `1e94fa1` (`build/ma-vco-lanes-ab-20261115-01/`, quiet host,
+  40 cases, PCM identical): vector engine 1.263x with the law on and 1.083x
+  with it off; scalar engine 1.017x and 0.999x. The law now adds 0.20 to
+  0.29 M cycles a block. `docs/ma-vco-lanes-20261115.md`.
+- Found, not fixed: `driver/probe_ma3_stages.c` has not built since the
+  shared kernels (it is outside `make all`).

@@ -15,6 +15,7 @@
  *   ml_u64_*          the 48-bit phase accumulators
  *   ml_load, ml_store one row of ML_W floats
  *   ml_trunc, ml_int_to_f, ML_INT, ml_ifi   int32 lanes
+ *   ml_exp2_int       2^n from a lane's whole n
  *   ml_i16_pair       two neighbouring entries of an int16 table row
  *   ml_pick4          one of four constants per lane
  *
@@ -56,6 +57,11 @@ static inline void ml_tally(uint32_t *count, ml_m m) { *count += m; }
 #define ML_INT(x) ((int32_t)(x))
 static inline ml_int ml_trunc(ml_f x) { return (int32_t)x; }
 static inline ml_f ml_int_to_f(ml_int i) { return (float)i; }
+/* 2^n for -126 <= n <= 127: the exponent field alone */
+static inline ml_f ml_exp2_int(ml_int n) {
+    union { uint32_t bits; float value; } power = { .bits = (uint32_t)(n + 127) << 23 };
+    return power.value;
+}
 /* table[index], 0 <= index < 4 */
 static inline ml_f ml_pick4(const float table[4], ml_int index) { return table[index]; }
 /* table[at + index] and table[at + (index + 1) % length], length a power
@@ -133,6 +139,9 @@ static inline void ml_tally(uint32_t *count, ml_m m) {
 #define ML_INT(x) ((ml_int){} + (x))
 static inline ml_int ml_trunc(ml_f x) { return (ml_int)_mm256_cvttps_epi32(x); }
 static inline ml_f ml_int_to_f(ml_int i) { return _mm256_cvtepi32_ps((ml_i)i); }
+static inline ml_f ml_exp2_int(ml_int n) {
+    return _mm256_castsi256_ps(_mm256_slli_epi32((ml_i)(n + 127), 23));
+}
 static inline ml_f ml_pick4(const float table[4], ml_int index) {
     const ml_f row = _mm256_setr_ps(table[0], table[1], table[2], table[3],
                                     table[3], table[3], table[3], table[3]);

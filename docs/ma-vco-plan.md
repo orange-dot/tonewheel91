@@ -90,11 +90,13 @@ and accepted them.
 
 ## 4. V1 as built
 
-- **Law**: `vco_law_hz` in `src/ma_voice_impl.h`; applied in
-  `ma_voice_front_a` (and the source-evidence tick) after the pitch bend, the
-  LFO and the card's detune. VCO2's correction goes through
-  `ma_synth.vco2_bend` into the interval ratio in `src/ma_osc.c` and
-  `src/ma_lanes.c`.
+- **Law**: `ml_vco_law_hz` in `src/ma_vco_kernel.h`, applied at the end of
+  front end part A (and in the source-evidence tick), after the pitch bend,
+  the LFO and the card's detune: by `ma_voice_vco_frame` in `src/ma_osc.c`
+  for one voice, by `ml_front_vco` in `src/ma_lanes.c` for eight (section
+  5c). VCO2's correction goes into the interval ratio: through
+  `ma_synth.vco2_bend` for one voice, straight into the lane inputs for
+  eight.
 - **Card**: `src/ma_pool.c` and `src/ma_bank.c`.
 - **Controls**: `ma_patch.vco_analog`, `ma_patch.vco_dead_time`,
   `ma_synth_set_vco_analog`.
@@ -128,10 +130,11 @@ and +4.1 with the dead time trimmed out.
 
 Evidence: `docs/ma-vco-shapes-spice.md`.
 
-- **Front end**: `analog_shape` in `src/ma_voice.c` (rise and swell per VCO,
-  the bow) beside the pitch law; constants in `src/ma_voice_impl.h`. The
-  synth carries departures (`vco_skew`, `vco_swell`, `vco_bow`), zero without
-  the law, so a zeroed synth or frame is the old oscillator.
+- **Front end**: `ml_vco_frame_of` in `src/ma_vco_kernel.h` (rise and swell
+  per VCO, the bow) beside the pitch law; constants in
+  `src/ma_voice_impl.h`. The frame carries departures (`vco_skew`,
+  `vco_swell`, `vco_bow` in the synth for one voice), zero without the law,
+  so a zeroed synth or frame is the old oscillator.
 - **Kernel** (`src/ma_osc_kernel.h`): `ml_tri` (rise, h, c, swing, the
   shapers' view), the skewed integrator input and gain, the two-ramp seed,
   the move and pull in `ml_seed_triangle`, `ml_circuit_mix` (bow and
@@ -170,10 +173,11 @@ same for the old one would change the pinned signatures.
 
 Evidence: `docs/ma-vco4-spice.md`.
 
-- **Front end**: `analog_couple` in `src/ma_voice.c`: the row for VCO2's
-  interval (`VCO_COUPLE` in `src/ma_voice_impl.h`), the supply between the
-  two boards, the amount, the lower core's frequency. The synth carries
-  `vco_couple_hz` (0 = none), p, q and the jump.
+- **Front end**: in `ml_vco_frame_of` (`src/ma_vco_kernel.h`): the row for
+  VCO2's interval (`VCO_COUPLE` in `src/ma_voice_impl.h`, indexed by the
+  interval), the supply between the two boards, the amount, the lower
+  core's frequency. The frame carries `vco_couple_hz` (0 = none), p, q and
+  the jump.
 - **Kernel**: `ml_couple` in `src/ma_osc_kernel.h`, first in
   `ml_source_block`: psi from the two Q48 phases, the sawtooth, the two
   nudges.
@@ -191,6 +195,18 @@ Gate `make check-ma-vco-couple` (`test/ma_vco_couple.c`, 31 checks):
 | The supply without the law | no coupling |
 | Pool block render against the frame-by-frame tick, coupling on | 8192 frames, 0 differ |
 
+## 5c. The frame in the lanes
+
+Evidence: `docs/ma-vco-lanes-20261115.md` (2026-11-15).
+
+The once-a-frame part of V1 to V4 (both pitch laws, the shapes at each
+core's pitch, the coupling) is one kernel, `src/ma_vco_kernel.h`, run at
+width one by the one-voice tick and at width eight by the pool's lanes
+(`ml_front_vco`). Until then every pool voice ran it in scalar code, which
+added 0.53 to 0.62 M cycles to an 8-voice block; it now adds 0.20 to 0.29 M.
+The PCM is the same bit for bit, and `check-ma-front-lanes` compares the
+lane frame with the one-voice frame field by field.
+
 ## 6. Open
 
 - Operator: listening, in the Patchbench. Suggested: a patch with two
@@ -201,9 +217,9 @@ Gate `make check-ma-vco-couple` (`test/ma_vco_couple.c`, 31 checks):
   display.
 - No per-voice temperature dynamics beyond the card's existing walk; no
   jitter. Both would be assumptions, not circuit results.
-- The cost of the law on the live path is not measured; neither is the
-  shape's (the pull and the move run once a frame, the shapers per substep
-  only when their level is set).
+- Cost, hosted (section 5c): the law at full amount adds 0.20 to 0.29 M
+  cycles to a 128-frame block of 8 lane voices. The shapers' own levels and
+  live play with the law on are not measured.
 - V2/V3 listening: `build/vco/shapers/listen/` (docs/ma-vco-shapes-spice.md
   section 5), then the Patchbench. The core's sine has less third harmonic
   than the board's (straight ramps), B1's ramp bow is not modelled.

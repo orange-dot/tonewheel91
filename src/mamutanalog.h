@@ -385,6 +385,9 @@ typedef struct {
     float vco_analog;
     float vco_dead_time;
     float vco_supply;
+    /* The circuit's frame, from here to vco_couple_jump: written and read by
+     * the one-voice tick every frame. The pool's vector lanes keep theirs in
+     * the lane inputs and leave these as they were. */
     float vco2_bend;        /* this frame: VCO2's law over VCO1's, minus one */
     /* this frame's circuit shapes (V2): each triangle's rise less 0.5, the
      * swing its shapers see less 1, and the saw's bow; all 0 without the law */

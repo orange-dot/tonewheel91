@@ -43,6 +43,16 @@ static ma_pool_engine engine_mode(void) {
     fputs("Invalid MA3_PERF_ENGINE\n",stderr); exit(2);
 }
 static ma_pool_engine bench_engine=MA_POOL_ENGINE_AUTO;
+/* MA3_PERF_ANALOG=0|1 (default 0): 1 runs every case with the circuit-derived
+ * oscillators on (vco_analog 1, vco_supply 1; docs/ma-vco-plan.md), which no
+ * factory patch has. */
+static bool bench_analog;
+static bool analog_mode(void) {
+    const char *s=getenv("MA3_PERF_ANALOG");
+    if(!s||!strcmp(s,"0")) return false;
+    if(!strcmp(s,"1")) return true;
+    fputs("Invalid MA3_PERF_ANALOG\n",stderr); exit(2);
+}
 /* MA3_PERF_RACK=none|empty|eq8|eq64 (default none): the insert rack
  * attached to the pool. empty = attached with no blocks; eq8 = eight EQ
  * blocks of four active bands (low cut, low shelf, bell, high shelf: the RK1
@@ -195,6 +205,7 @@ static uint64_t run_case(const char *patch_name,const ma_patch *patch,unsigned b
     ma_patch p=*patch;
     p.bcs_amount=bcs?ma_patch_granica.bcs_amount:0;
     p.bcs_regime=ma_patch_granica.bcs_regime;
+    if(bench_analog) { p.vco_analog=1; p.vco_supply=1; }
     if(!ma_voice_pool_init(&pool,RATE,&c,&p)) exit(1);
     attach_rack();
     if(!populate(limit,unison,scenario)) exit(1);
@@ -279,13 +290,14 @@ static uint64_t run_case(const char *patch_name,const ma_patch *patch,unsigned b
 }
 int main(int argc,char **argv) {
     if(argc!=2||(strcmp(argv[1],"--run")&&strcmp(argv[1],"--list")&&strcmp(argv[1],"--overhead"))) {
-        puts("Usage: bench_ma3_perf --run|--list|--overhead\nRun alone under taskset -c N. Filters: MA3_PERF_PATCH, _BCS, _LIMIT, _FRAMES, _SCENARIO, _ARM.\nOptional measured block CSV: MA3_PERF_RAW. Run label: MA3_PERF_RUN_ID.\nHardware counters: MA3_PERF_PMU=auto|required|off (default auto).\nPool engine: MA3_PERF_ENGINE=auto|scalar (default auto).\nInsert rack: MA3_PERF_RACK=none|empty|eq8|eq64 (default none).");
+        puts("Usage: bench_ma3_perf --run|--list|--overhead\nRun alone under taskset -c N. Filters: MA3_PERF_PATCH, _BCS, _LIMIT, _FRAMES, _SCENARIO, _ARM.\nOptional measured block CSV: MA3_PERF_RAW. Run label: MA3_PERF_RUN_ID.\nHardware counters: MA3_PERF_PMU=auto|required|off (default auto).\nPool engine: MA3_PERF_ENGINE=auto|scalar (default auto).\nInsert rack: MA3_PERF_RACK=none|empty|eq8|eq64 (default none).\nCircuit-derived oscillators: MA3_PERF_ANALOG=0|1 (default 0).");
         return argc==1?0:1;
     }
     unsigned warmup=env_u("MA3_PERF_WARMUP",DEFAULT_WARMUP),blocks=env_u("MA3_PERF_BLOCKS",DEFAULT_BLOCKS);
     if(!blocks) { fputs("MA3_PERF_BLOCKS must be nonzero\n",stderr);return 2; }
     int pmu=pmu_mode();
     bench_engine=engine_mode();
+    bench_analog=analog_mode();
     const ma_patch *patches[]={&ma_patch_tepih,&ma_patch_lead,&ma_patch_raster,&ma_patch_prizma,&ma_patch_granica};
     const char *names[]={"Tepih","Lead","Raster","Prizma","Granica"};
     const char *pf=getenv("MA3_PERF_PATCH");
@@ -309,6 +321,7 @@ int main(int argc,char **argv) {
     puts("");
     pmu_open(pmu);
     printf("# pmu=%s; clock_order=wall_cpu_pmu_render_pmu_cpu_wall\n",pmu_note);
+    if(bench_analog) puts("# analog=1: vco_analog 1, vco_supply 1 on every case");
     {
         ma_voice_pool_config probe=ma_voice_pool_default_config;probe.engine=bench_engine;
         if(!ma_voice_pool_init(&pool,RATE,&probe,&ma_patch_tepih)) return 1;
