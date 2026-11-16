@@ -11,6 +11,7 @@ or test dependency.
 | B1 | triangle core, 24 transistors | `b1-bench-cv-2.cir`: the B1-THT bench of the lab's 2026-10-16 run (`mamut-synthesis-research`), copied unchanged |
 | VCO-2 | exponential converter and reset-type saw core, 16 transistors | `vco2.cir`: a study circuit written for the digital model, not a board design |
 | VCO-2 pair | two VCO-2 cores on one supply with a series resistance and bus capacitor | built by `vco4.py` from `vco2.cir` |
+| sync | a VCO-2 master and slave on ideal rails, the master's reset pulse into the slave's reset driver (a resistor) or its comparator threshold (a capacitor) | built by `vco5.py` from `vco2.cir`; study networks, not a board design |
 | shapers | triangle to sine (degenerated long-tailed pair) and triangle to saw (a linear pair swapped by a switching quad on B1's square), 10 transistors | `shapers.cir`: study circuits hung on B1's buffered triangle, not a board design |
 
 `models/` holds the lab's declared engineering transistor and support models,
@@ -58,6 +59,13 @@ build/vco/vco4/run_set3.sh                         # the other simple ratios (P:
 python3 driver/spice/vco/vco4_fit.py NAME ...      # sawtooth per pair -> fits4.json
 python3 driver/spice/vco/b1_low.py analyze         # (and the ramp bows: build/vco/b1low/bow.json)
 python3 driver/spice/vco/vco4_render.py            # listen/
+
+# V5: sync, a master and a slave core on ideal rails (build/vco/vco5/)
+python3 driver/spice/vco/vco5.py case NAME reset|thresh|free VALUE NOTE RATIO SECONDS [keep]
+build/vco/vco5/run_set2.sh                         # the slave's ratio swept, per network and value
+python3 driver/spice/vco/vco5_fit.py               # what a master reset does -> fits5.json
+python3 driver/spice/vco/vco5.py steps NAME KIND VALUE NOTE SECONDS I1,I2,...   # listening runs
+make build/vco_ma_ref && python3 driver/spice/vco/vco5_render.py                # listen/
 ```
 
 The VCO-2 runs are cached by their inputs (`runs/<name>/tag.json`), so a

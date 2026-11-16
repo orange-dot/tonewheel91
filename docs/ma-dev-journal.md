@@ -1812,3 +1812,24 @@ Notes:
   twin did not see it, having no patch with the law on. The lanes write it
   back now (about 1 % of a law-on block); the twin runs two Kolo variants
   and failed on `ca8f6b4`. PCM was never affected.
+
+### 2026-11-15 — V5 study: sync in SPICE
+
+- `vco5.py`: a VCO-2 master and slave on ideal rails, the master's reset
+  pulse into the slave's reset driver (a resistor) or its comparator
+  threshold (a capacitor). A synced slave repeats one phase, so the slave's
+  ratio is swept to see every phase. `docs/ma-vco5-spice.md`.
+- Through the threshold the sync is a window: the slave resets to the top
+  when the master finds it in the last part of its ramp and is untouched
+  otherwise, in all 1,749 events. The capacitor sets the window (0.12 of
+  the ramp at 1 pF, 0.58 at 6.8 pF, everything from 22 pF); the edge is
+  sharp and the same at A2, A4 and A6.
+- Through the reset driver it is a switch: everything up to 330 k, nothing
+  from 680 k, and between 390 k and 560 k a nearly fixed piece of the ramp.
+- The core resets every master cycle a share of the way, which neither
+  network does. Proposal VD28..VD33 (a window under `vco.analog`, no new
+  control), declined by the operator on 2026-11-16: the core's sync stays
+  as it is and the study is a finding. Listening set in
+  `build/vco/vco5/listen/`.
+- `vco_ma_ref` takes `sync@AMOUNT,SYNC,SOFTNESS,INTERVAL,CENTS` (VCO2's saw
+  alone under a silent VCO1).

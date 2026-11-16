@@ -4,7 +4,9 @@
  * carry the circuit amount (docs/ma-vco-plan.md), e.g. tri@1.
  *   build/vco_ma_ref tri|pulse|saw|sine|tri_sine|tri_saw[@AMOUNT] WIDTH OUT.f32 hz:sec ...
  * `pair@AMOUNT,SUPPLY,INTERVAL,CENTS` is two saws, VCO2 at the interval and
- * cents from VCO1, on the cores' supply (V4). */
+ * cents from VCO1, on the cores' supply (V4).
+ * `sync@AMOUNT,SYNC,SOFTNESS,INTERVAL,CENTS` is VCO2's saw alone, synced to a
+ * silent VCO1 (V5). */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,7 +34,16 @@ int main(int argc, char **argv) {
     ma_synth_set_vco_analog(&s, amount, 0.0f);
     float supply = 0.0f, cents = 0.0f;
     int interval = 0;
-    bool pair = !strcmp(shape, "pair");
+    bool pair = !strcmp(shape, "pair"), sync = !strcmp(shape, "sync");
+    float sync_amount = 0.0f, sync_softness = 0.0f;
+    if (sync) {
+        c.saw_level = 0;
+        const char *x = strchr(at + 1, ',');
+        if (x) { sync_amount = (float)atof(x + 1); x = strchr(x + 1, ','); }
+        if (x) { sync_softness = (float)atof(x + 1); x = strchr(x + 1, ','); }
+        if (x) { interval = atoi(x + 1); x = strchr(x + 1, ','); }
+        if (x) cents = (float)atof(x + 1);
+    }
     if (pair) {
         c.saw_level = 1;
         const char *x = strchr(at + 1, ',');
@@ -42,9 +53,9 @@ int main(int argc, char **argv) {
         ma_synth_set_vco_supply(&s, supply);
     }
     ma_synth_set_vco1(&s, c);
-    ma_synth_set_vco2(&s, (ma_vco_controls){ .saw_level = pair ? 1.0f : 0.0f, .pulse_width = .5f },
-                      pair ? 1.0f : 0.0f, interval, cents);
-    ma_synth_set_oscillator_modulation(&s, 0, 0, 0, 0);
+    ma_synth_set_vco2(&s, (ma_vco_controls){ .saw_level = pair || sync ? 1.0f : 0.0f, .pulse_width = .5f },
+                      pair || sync ? 1.0f : 0.0f, interval, cents);
+    ma_synth_set_oscillator_modulation(&s, sync_amount, sync_softness, 0, 0);
     ma_synth_set_glide(&s, false, 0);
     FILE *f = fopen(argv[3], "wb");
     if (!f) return 1;

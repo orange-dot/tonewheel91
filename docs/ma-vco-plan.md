@@ -87,6 +87,7 @@ and accepted them.
 | V3 | Shapers that B1 lacks (triangle to sine, triangle to saw), from new netlists | implemented, listening open |
 | V2b | The shape above B1's 1.94 kHz: B1 with a range switch, both shapers, to 18.7 kHz | measured and in the core 2026-11-14 |
 | V4 | Two cores sharing a supply: locking near unison, the octave and the fifth | implemented 2026-11-14, listening open |
+| V5 | Sync between two cores | SPICE study done 2026-11-15 (`docs/ma-vco5-spice.md`): the circuit's sync is all or nothing, by a window on the slave's ramp. Operator 2026-11-16: not taken into the core; the core's sync stays as it is, and the study is a finding |
 
 ## 4. V1 as built
 
