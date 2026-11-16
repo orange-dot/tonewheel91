@@ -299,10 +299,11 @@ out-of-domain input; render functions assume initialized, finite state.
 ## Fixed initialization patches
 
 `ma_synth_init` selects the factory Tepih; `ma_synth_init_patch` accepts a
-concrete `ma_patch` value. Tepih, Lead and Dubina are compiled constants and
-have exact hosted mirrors in `patches/mamutanalog/`. The core has no I/O,
-allocation or registry; `driver/ma_patch_file.c` owns the strict version-1
-text format and atomic save. These values are public behavior and are not
+concrete `ma_patch` value. Tepih, Lead, Dubina, Raster, Prizma, Granica and
+Kolo are compiled constants and have exact hosted mirrors in
+`patches/mamutanalog/`. The core has no I/O, allocation or registry;
+`driver/ma_patch_file.c` owns the strict text format (versions 1 to 8) and
+atomic save. These values are public behavior and are not
 retuned silently:
 
 | Group | Default |
@@ -921,12 +922,12 @@ Its readiness/headroom targets are proposed engineering criteria. The first
 [P0–P2 evidence batch](ma3-perf-20261002.md) is complete; noisy host conditions
 limit precision, and no live acceptance is claimed.
 
-Latest MA3-PERF slice: [vector BCS](ma3-bcs-lanes-20261106.md) is implemented
-and bit-exact. Its matched A/B makes BCS-on blocks 1.31–1.37x faster and
-lowers the worst 8-slot median to 2.254 M cycles. This later run has 1 CPU
-and 134 wall deadline misses, so the clean tail in the earlier vector-lane
-run below does not establish current live readiness. Next: front-end controls
-and envelopes in lanes with direct lane-input writes, then raster/mozaik.
+Latest MA3-PERF slice (2026-11-15): the circuit-derived oscillators' frame
+in the lanes ([record](ma-vco-lanes-20261115.md)), bit-exact. Its matched
+A/B makes 8-slot blocks 1.26x faster with `vco.analog` on and 1.08x with it
+off; the worst 8-slot median is 1.712 M cycles (Prizma, BCS on), 1.923 M
+with the law on, with no deadline miss in that run. Earlier slices are in the
+MA3-PERF row below and in the journal.
 
 | Slice | Status | Deliverable / gate |
 | --- | --- | --- |
@@ -937,7 +938,7 @@ and envelopes in lanes with direct lane-input writes, then raster/mozaik.
 | MA3-OPT2 | measurement complete; listening pending | Skip inactive waveform previews using smoothed controls while preserving oscillator state. GCC/Clang/sanitizer checks and matched hosted measurements pass with identical PCM hashes; full renders and operator listening remain. Evidence and caveats: `docs/ma3-opt2.md`. |
 | MA3-OPT3 | measured; listening pending | Share the initial BLEP correction between saw/pulse previews, preserving state and arithmetic order. Aggregate hosted result is 2.12% lower CPU with a Raster regression; PCM twins match. Full renders and operator listening remain. Evidence: `docs/ma3-opt3.md`. |
 | MA3-OPT4 | reverted 2026-11-06; candidate preserved in `bb0ec9a` | Split 31-tap FIR history traversal into two spans, preserving every tap and accumulation order. Exact-bit correctness evidence: [ma3-opt4.md](ma3-opt4.md). A/B screen: [ma3-opt4-measure-20261003.md](ma3-opt4-measure-20261003.md); mixed gains/regressions and variable host frequency prevent a general speedup claim. |
-| MA3-LIVE | queued | ALSA driver using the shared MIDI map and pool; event/twin checks, explicit limit configuration and no-xrun listening gate on the reference rig. |
+| MA3-LIVE | in progress: the Patchbench plays live with real-time priority, memory locking, CPU placement, an overload guard and voices on two cores (`docs/live-path-20261111.md`); the gate below is not recorded as met | ALSA driver using the shared MIDI map and pool; event/twin checks, explicit limit configuration and no-xrun listening gate on the reference rig. |
 
 ### MA4 — hidden GFM card field
 
@@ -1100,7 +1101,8 @@ zone; transport does not define the DSP model.
 | BCS | implemented feedback-only in MA2-BCS; operator listening pending | ad hoc slice before MA2-4 |
 | Orbita | candidate; offline spike done 2026-11-07 (`docs/ma-orbita-spike-20261107.md`); hosted use in MA3 Hurt (`docs/ma3-hurt-orbita.md`) | v0.2 insertion choice |
 | Glas (formant bank, Orbita formants, formant grains) | implemented in the core 2026-11-07 by operator decision, exact bypass (`ma-constants.md` §10C); on the vector lanes since 2026-11-08 (`docs/ma3-glas-lanes-20261108.md`) | patch-file v4 if it stays |
-| Insert rack (EQ, utility; then chorus/reverb, delay, saturator, compressor) and modulation bus (rack targets RK3, global voice targets RK3b) | committed 2026-11-11; RK0 plan done, RK2 re-pin and RK3/RK3b scope operator-confirmed (`docs/ma-rack-plan.md`) | RK1 |
+| Insert rack (EQ, utility; then chorus/reverb, delay, saturator, compressor) and modulation bus (rack targets RK3, global voice targets RK3b) | RK0 plan 2026-11-11; RK1 and RK1b (8-band EQ, editor, utility, `.mapatch` v5) committed `94cff34`; RK2 re-pin and RK3/RK3b scope operator-confirmed (`docs/ma-rack-plan.md`) | RK2 |
+| Circuit-derived oscillators (VCO-2 pitch law, B1 shapes, triangle shapers, supply coupling) | V1..V4 in the core 2026-11-12..14 by operator decision, exact bypass at `vco.analog` 0, file versions 6 to 8 (`docs/ma-vco-plan.md`); on the vector lanes since 2026-11-15; factory patch Kolo. V5 (sync) studied in SPICE and declined for the core (`docs/ma-vco5-spice.md`) | none queued |
 | Kosava | candidate; donor plan only | post-MA5 offline backlog if selected |
 | Mraz | research priority among wild concepts | unscheduled |
 | Lavina | research | unscheduled |

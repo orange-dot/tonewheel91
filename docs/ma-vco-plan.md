@@ -1,12 +1,15 @@
-# Mamut Analog circuit-derived oscillators — plan (V0) and V1..V3
+# Mamut Analog circuit-derived oscillators — plan (V0) and V1..V5
 
-Date: 2026-11-12, V2 and V3 2026-11-14. Status: **V0 done** (the two SPICE
-studies and this document), **V1 implemented** 2026-11-12 (the pitch law, its
-two patch controls, file version 6, the Patchbench controls), **V2 and V3
-implemented** 2026-11-14 (the skewed triangle and the saw's bow under the
-same amount; the two triangle shapers as new levels, file version 7);
-listening open for all three. **V4 implemented** 2026-11-14 (the two cores'
-coupling on a shared supply, `vco.supply`, file version 8).
+Date: 2026-11-12, V2..V4 2026-11-14, V5 and Kolo 2026-11-15. Status:
+**V0 done** (the two SPICE studies and this document), **V1** (the pitch
+law, its two patch controls, file version 6, the Patchbench controls),
+**V2, V3** (the skewed triangle and the saw's bow under the same amount; the
+two triangle shapers as new levels, file version 7) and **V4** (the two
+cores' coupling on a shared supply, `vco.supply`, file version 8) are in
+the core, with V2b, V2c, V2d, V3b and V4b after them. The once-a-frame part
+runs in the vector lanes (section 5c), and Kolo is the factory patch that
+uses them (section 5d). **V5** (sync) was studied in SPICE and not taken
+into the core.
 
 Operator direction: the instrument's character should come from analog
 oscillators. The method is the one proposed for VCF-1: simulate a circuit in
@@ -82,11 +85,12 @@ and accepted them.
 | Step | Content | Status |
 | --- | --- | --- |
 | V0 | The two SPICE studies, the tooling in `driver/spice/vco/`, this plan | done |
-| V1 | The pitch law for both oscillators, card parameters, patch controls, file version 6, Patchbench controls, the referee test | implemented, listening open |
-| V2 | Shape: the triangle's unequal ramps (B1) and the saw's bow (VCO-2). Changes the oscillator kernel and the lanes | implemented, listening open |
-| V3 | Shapers that B1 lacks (triangle to sine, triangle to saw), from new netlists | implemented, listening open |
+| V1 | The pitch law for both oscillators, card parameters, patch controls, file version 6, Patchbench controls, the referee test | in the core |
+| V2 | Shape: the triangle's unequal ramps (B1) and the saw's bow (VCO-2). Changes the oscillator kernel and the lanes | in the core |
+| V3 | Shapers that B1 lacks (triangle to sine, triangle to saw), from new netlists | in the core |
 | V2b | The shape above B1's 1.94 kHz: B1 with a range switch, both shapers, to 18.7 kHz | measured and in the core 2026-11-14 |
-| V4 | Two cores sharing a supply: locking near unison, the octave and the fifth | implemented 2026-11-14, listening open |
+| V2c, V3b, V2d | B1's ramp bow, the sine shaper's input coupling, B1's buffer bend (VD25..VD27) | in the core 2026-11-14 |
+| V4 | Two cores sharing a supply: locking near unison, the octave and the fifth | in the core 2026-11-14; V4b, every simple ratio, the same day |
 | V5 | Sync between two cores | SPICE study done 2026-11-15 (`docs/ma-vco5-spice.md`): the circuit's sync is all or nothing, by a window on the slave's ramp. Operator 2026-11-16: not taken into the core; the core's sync stays as it is, and the study is a finding |
 
 ## 4. V1 as built
@@ -280,9 +284,6 @@ by ear.
 
 ## 6. Open
 
-- Operator: listening, in the Patchbench. Suggested: a patch with two
-  oscillators in unison and `analog` at 1, held chords low and high, then
-  `dead time` from 0 to 1 on a high line.
 - The Patchbench module with five controls has been looked at only in the
   smoke's off-screen screenshots (1920 and 2560 wide, 1080 high), not on a
   display.
@@ -291,12 +292,15 @@ by ear.
 - Cost, hosted (section 5c): the law at full amount adds 0.20 to 0.29 M
   cycles to a 128-frame block of 8 lane voices. The shapers' own levels and
   live play with the law on are not measured.
-- V2/V3 listening: `build/vco/shapers/listen/` (docs/ma-vco-shapes-spice.md
-  section 5), then the Patchbench. The core's sine has less third harmonic
-  than the board's (straight ramps), B1's ramp bow is not modelled.
+- The shaper sine's second harmonic is 2.3 to 3.5 dB above the board's from
+  0.8 kHz (the static curve itself is 2.5 to 3 dB high there), and its third
+  is 8 dB high at 6.2 kHz, where the core's edge zone sets the shape.
 - Nominal parts only for both shapers; no spread across cards.
-- V4 listening: `build/vco/vco4/listen/` (SPICE pair against the core's,
-  and the core's pair with and without coupling), then `supply` in the
-  Patchbench. Only the rails couple in the study; a board that takes its
-  pitch trim from the same rail would couple more. How the pull is shared
-  between the cores is assumed even.
+- Only the rails couple in the V4 study; a board that takes its pitch trim
+  from the same rail would couple more. How the pull is shared between the
+  cores is assumed even.
+- The coupling locks only where the two cores come within its range: the
+  filter envelope bends VCO1 for as long as it is above zero, so a patch
+  locks only once that bend is gone: a filter envelope that ends at zero,
+  as Kolo's does (section 5d), or no envelope amount.
+- Kolo's values were chosen from measurement.

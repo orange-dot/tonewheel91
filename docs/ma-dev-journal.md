@@ -11,51 +11,55 @@ its internal sub-gates already has working code.
 
 ## Current position
 
-- Active milestone: **MA3 — first playable, stereo and effects**.
-- Active task: **MA3-PERF**, updated 2026-11-07. The interim 8-slot target
-  (operator decision 2026-11-06; core default stays 32) is met in hosted
-  measurement by bit-exact AVX2 vector lanes (`engine` AUTO). The vector
-  engine now covers the oscillator block, decimators, ladder, BCS, front-end
-  math and raster. Its worst 8-slot case is 1.737 M cycles per 128-frame
-  block (Prizma, BCS on), with 0 deadline misses
-  (`docs/ma3-raster-bcs-lanes-20261107.md`). 32 slots remain open; MA3-LIVE
-  owns isolation, priority and the no-xrun gate.
-- Latest slice: `src/ma_voice.c` split into voice modules, move-only, PCM
-  unchanged (2026-11-07 entry below; `b6c0426` … `30cd135`). Files:
-  `ma_voice.c` (scalar tick, oscillators, decimators, raster, BCS,
-  per-sample controls), `ma_voice_impl.h` (private constants, types,
-  `static inline` helpers), `ma_controls.c`, `ma_patches.c`, `ma_lanes.c`,
-  `ma_filter.c`, and `ma_raster_table.c` (one raster table, below).
-  `ma_sources.c` was measured and rejected.
-- DSP candidate in progress: **Orbita** (operator, 2026-11-07), pulled
-  forward from the MA5 promotion gate. The offline spike is done
-  (`docs/ma-orbita-spike-20261107.md`).
-  First musical use: MA3 Hurt with Orbita (`docs/ma3-hurt-orbita.md`), hosted
-  only. No engine code changed.
-- Open operator decisions: the
-  refactor plan's follow-ups (the stage probe calling the real stages, one
-  source for scalar and lane front end part B, and the `MA_SOURCE_EVIDENCE`
-  layout switch).
-- Other MA3 work: OPT1–3 are measured and await operator listening. OPT4
-  was reverted on 2026-11-06 (candidate kept in `bb0ec9a`). MA3-LIVE is
-  queued. MA3-1/2 are done; the MA3-2 listening set was accepted on
-  2026-09-08.
-- Latest green aggregate run: 2026-11-07 on `eb4a5a4` (later commits change
-  only comments and docs). GCC, Clang and ASan/UBSan/float-cast-overflow:
-  core `111378`, hosted `116`, MIDI map `22`, architecture `227`, character
-  `8700`, stereo `2611`, zero failures. The pool engine twin is
-  bit-identical over 73,354 frames, the three lane white-box gates hold
-  their counts, and both compiler core-symbol audits pass.
+Updated 2026-11-16, at `0e8cccb`.
+
+- Active milestone: **MA3 — first playable, stereo and effects**. MA3-1 and
+  MA3-2 are done; MA3 stays open for MA3-PERF at 32 slots and MA3-LIVE.
+- **MA3-PERF.** The interim 8-slot target (operator decision 2026-11-06;
+  the core default stays 32) is met in hosted measurement. All Mamut DSP is
+  written once for one voice and for eight per AVX2 vector (`bb56b53`,
+  `docs/ma-single-source-20261110.md`), including the circuit-derived
+  oscillators' frame (`ca8f6b4`). In the 2026-11-15 A/B run of `ca8f6b4`
+  the worst 8-slot median is 1.712 M cycles per 128-frame block (Prizma, BCS on), 1.923 M
+  with `vco.analog` on, with no deadline miss (`docs/ma-vco-lanes-20261115.md`).
+  32 slots remain open.
+- **Live path.** The Patchbench plays live with memory locking, CPU
+  placement, RealtimeKit priority, an overload guard and voices on two
+  cores; 32 Granica voices ran 60 s with 0 xruns
+  (`docs/live-path-20261111.md`). The MA3-LIVE gate as the backlog states
+  it (an ALSA driver on the shared MIDI map, live and offline twins, a
+  no-xrun listening session on the reference rig) is not recorded as met.
+- **Circuit-derived oscillators** (`docs/ma-vco-plan.md`): V1..V4 with
+  V2b, V2c, V2d, V3b and V4b are in the core; V5 (sync) was studied in
+  SPICE and declined for the core (`docs/ma-vco5-spice.md`). Kolo, the
+  seventh factory patch, is the one that uses them.
+- **Insert rack** (`docs/ma-rack-plan.md`): RK1 and RK1b (8-band EQ, its
+  editor, utility, `.mapatch` v5) are committed (`94cff34`). RK2 (chorus
+  and reverb into the rack, delay, saturator, compressor) is next and
+  operator-confirmed.
+- **Patchbench** (`docs/patchbench-progress.md`): PB0..PB9 and four
+  sequencer channels are committed (`94cff34`); its open items are listed
+  there.
+- **Glas** is in the core and on the lanes; **Orbita** is used in hosted
+  arrangements only (`docs/ma3-hurt-orbita.md`).
+- **Open technical items.** `driver/probe_ma3_stages.c` has not built since
+  the shared kernels (it is outside `make all`). `make analyze` reports ten
+  warnings that predate the 2026-11-09 refactor
+  (`docs/refactor-20261109.md`). OPT4 stays reverted (candidate in
+  `bb0ec9a`).
+- **Latest green aggregate run**: 2026-11-15, on the tree committed as
+  `7001680`. GCC `make all test`, `make test-clang` and the
+  ASan/UBSan/float-cast-overflow build: core `111378`, hosted `171`, MIDI
+  map `22`, architecture `227`, character `8700`, stereo `2611`, rack
+  `412`, the three oscillator gates `68`, `68` and `31`, zero failures. The
+  pool engine twin is bit-identical over 370,101 frames; the lane white-box
+  gates (`ma_front_lanes` 400,000 lane-frames, `ma_bcs_lanes`,
+  `ma_raster_lanes`), both core-symbol audits and both audio-thread symbol
+  audits pass.
 - Donor pin: `mamut-sint-sw` commit
   `d7672912706731b73839d1fc25801669450fd0f1`, clean working tree when read.
-- Insert rack: RK0 (plan and decisions) done 2026-11-11,
-  `docs/ma-rack-plan.md`. RK1 (`eq`, `utility`, `.mapatch` v5, `.wbpatch`
-  rack, `render_midi --rack`, Patchbench rack row) implemented the same day,
-  uncommitted; gates 1–7 pass, listening open (`docs/ma-rack-rk1.md`).
-  RK1b (8-band parametric EQ, EQ editor, AVX2 wavefront) the same day,
-  uncommitted (`docs/ma-rack-rk1b.md`).
 - Core implementation status: MA0, MA1, MA2-1 through MA2-7, MA2-DIG,
-  MA2-BCS and MA2-PERF are closed. MA3-1 and MA3-2 are complete; MA3 remains open.
+  MA2-BCS and MA2-PERF are closed.
 
 ## MA0 task ledger
 
