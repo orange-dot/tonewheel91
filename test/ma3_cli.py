@@ -63,7 +63,7 @@ class RenderCLI(unittest.TestCase):
                 self.assertIn("allocation failures 0", log)
 
     def test_factory_patches_and_unison(self):
-        for patch in ("Tepih", "Lead", "Dubina", "Raster", "Prizma", "Granica"):
+        for patch in ("Tepih", "Lead", "Dubina", "Raster", "Prizma", "Granica", "Kolo"):
             with self.subTest(patch=patch):
                 path, log = self.run_render(["-I", "mamutanalog", "--patch", patch,
                     "--voice-limit", "8", "--unison", "8", "-t", ".002"])

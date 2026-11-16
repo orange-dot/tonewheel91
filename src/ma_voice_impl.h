@@ -430,6 +430,19 @@ static constexpr vco_couple_row VCO_COUPLE[49] = {     /* soft = good * 2^soft_o
     [24 + 24] = { 4, 1, 0.0f, 0.0002689f, 3.1841f },   /* 4:1, soft 0.002444 */
     [24 - 24] = { 1, 4, 0.0f, 0.0002689f, 3.1841f },   /* 1:4 */
 };
+/* The synth's copy of the circuit's frame without the law: no bend, no
+ * shape, no coupling. The coupling's row (p, q, jump) keeps its last
+ * values; nothing reads it while the lock range is zero. */
+static inline void vco_frame_clear(ma_synth *s) {
+    s->vco_couple_hz = 0.0f;
+    s->vco2_bend = 0.0f;
+    s->vco_skew[0] = s->vco_skew[1] = 0.0f;
+    s->vco_swell[0] = s->vco_swell[1] = 0.0f;
+    s->vco_bow = 0.0f;
+    for (int k = 0; k < 2; k++) s->vco_ramp_bow[k][0] = s->vco_ramp_bow[k][1] = 0.0f;
+    s->vco_buffer = 0.0f;
+}
+
 static inline vco_couple_row vco_couple_for(int interval) {
     if (interval < -24 || interval > 24) return (vco_couple_row){};
     return VCO_COUPLE[interval + 24];

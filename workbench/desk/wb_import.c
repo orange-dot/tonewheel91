@@ -561,6 +561,7 @@ static bool factory(const char *template_name, ma_patch *patch) {
     static const struct { const char *name; const ma_patch *patch; } FACTORY[] = {
         { "tepih", &ma_patch_tepih }, { "lead", &ma_patch_lead }, { "dubina", &ma_patch_dubina },
         { "raster", &ma_patch_raster }, { "prizma", &ma_patch_prizma }, { "granica", &ma_patch_granica },
+        { "kolo", &ma_patch_kolo },
     };
     for (size_t i = 0; i < sizeof FACTORY / sizeof *FACTORY; i++)
         if (!strcmp(template_name, FACTORY[i].name)) {

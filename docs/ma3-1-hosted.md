@@ -15,7 +15,7 @@ build/render_midi -I mamutanalog --patch Tepih --voice-limit 32 --unison 1 \
 | Option | Contract |
 | --- | --- |
 | `-I mamutanalog` | Explicit Mamut selection; organ remains the default |
-| `--patch` | Tepih (default), Lead, Dubina, Raster, Prizma, Granica; case-sensitive |
+| `--patch` | Tepih (default), Lead, Dubina, Raster, Prizma, Granica, Kolo; case-sensitive |
 | `--voice-limit` | 1–64, default 32, includes release slots |
 | `--unison` | 1/2/4/8 slots per note, default 1; must divide limit |
 | `--detune` | Finite ±range in cents, 0–100, default 7 |

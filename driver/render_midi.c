@@ -47,7 +47,7 @@ static void usage(const char *argv0) {
             "usage: %s [options] in.mid\n"
             "  -I name  instrument: organ (default), ep73 or mamutanalog\n"
             "  --patch name       Mamut factory patch: Tepih (default), Lead,\n"
-            "                     Dubina, Raster, Prizma or Granica\n"
+            "                     Dubina, Raster, Prizma, Granica or Kolo\n"
             "  --voice-limit N    Mamut slots 1..64, including release (default 32)\n"
             "  --unison N         Mamut slots per note: 1/2/4/8 (default 1)\n"
             "  --detune cents     Mamut unison +/- range 0..100 (default 7)\n"
@@ -307,12 +307,12 @@ int main(int argc, char **argv) {
             else { usage(argv[0]); return 2; }
             break;
         case OPT_PATCH: {
-            const char *names[] = {"Tepih", "Lead", "Dubina", "Raster", "Prizma", "Granica"};
+            const char *names[] = {"Tepih", "Lead", "Dubina", "Raster", "Prizma", "Granica", "Kolo"};
             const ma_patch *patches[] = {&ma_patch_tepih, &ma_patch_lead, &ma_patch_dubina,
-                &ma_patch_raster, &ma_patch_prizma, &ma_patch_granica};
+                &ma_patch_raster, &ma_patch_prizma, &ma_patch_granica, &ma_patch_kolo};
             unsigned i = 0;
-            while (i < 6 && strcmp(optarg, names[i])) i++;
-            if (i == 6) { usage(argv[0]); return 2; }
+            while (i < 7 && strcmp(optarg, names[i])) i++;
+            if (i == 7) { usage(argv[0]); return 2; }
             st.patch = patches[i]; st.patch_name = names[i];
             break;
         }

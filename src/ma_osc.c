@@ -20,13 +20,7 @@ float ma_voice_vco_law_hz(float hz, float octaves, float extra_hz, float dead_s,
 float ma_voice_vco_frame(ma_synth *s, float base_hz, float note_position,
                          float pitch_delta, float detune_cents, float fine_cents) {
     if (!(s->vco_analog > 0.0f)) {
-        s->vco_couple_hz = 0.0f;
-        s->vco2_bend = 0.0f;
-        s->vco_skew[0] = s->vco_skew[1] = 0.0f;
-        s->vco_swell[0] = s->vco_swell[1] = 0.0f;
-        s->vco_bow = 0.0f;
-        for (int k = 0; k < 2; k++) s->vco_ramp_bow[k][0] = s->vco_ramp_bow[k][1] = 0.0f;
-        s->vco_buffer = 0.0f;
+        vco_frame_clear(s);
         return base_hz;
     }
     const ma_character *c = &s->character;

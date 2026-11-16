@@ -510,10 +510,10 @@ static void test_probe_pass(void) {
     /* Tap hashes for the factory bank: pinned on first record, compared to
      * the probe's own second run here (determinism). */
     const ma_patch *bank[] = { &ma_patch_tepih, &ma_patch_lead, &ma_patch_dubina, &ma_patch_raster, &ma_patch_prizma,
-                               &ma_patch_granica };
-    static const char *NAMES[] = { "tepih", "lead", "dubina", "raster", "prizma", "granica" };
+                               &ma_patch_granica, &ma_patch_kolo };
+    static const char *NAMES[] = { "tepih", "lead", "dubina", "raster", "prizma", "granica", "kolo" };
     pb_probe_result *again = calloc(1, sizeof *again);
-    for (size_t i = 0; i < 6; i++) {
+    for (size_t i = 0; i < sizeof bank / sizeof *bank; i++) {
         rq = (pb_probe_request){ .patch = *bank[i], .note = 48, .velocity = 100 };
         pb_probe_run(48000, &rq, r);
         pb_probe_run(48000, &rq, again);

@@ -331,6 +331,11 @@ Dubina uses a dominant VCO2 Mamut sine `.85` one octave below the played
 note, with VCO2 level `.90`; its complete literal state and the patch-file /
 Patchlab boundary are pinned in `docs/ma1-6r-patchlab.md`.
 
+Kolo is the bank's patch for the circuit-derived oscillators
+(`docs/ma-vco-plan.md` section 5d, which pins its complete literal state):
+`vco.analog` `1` on a soft supply, both cores at unison a cent apart, no
+Mamut identity. It is the only factory patch that needs file version 8.
+
 MA3 contains one named listening ballot for small calibration of this
 default. A changed value must be logged against the table, rendered in an
 A/B pair and approved as a group; implementation convenience is not a

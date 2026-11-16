@@ -417,6 +417,7 @@ static void test_ma_patch_files(void) {
         { "patches/mamutanalog/prizma.mapatch", "Prizma", &ma_patch_prizma },
         { "patches/mamutanalog/granica.mapatch", "Granica",
           &ma_patch_granica },
+        { "patches/mamutanalog/kolo.mapatch", "Kolo", &ma_patch_kolo },
     };
     for (size_t i = 0; i < sizeof builtins / sizeof *builtins; i++) {
         ma_patch_document document = { 0 };
@@ -665,7 +666,7 @@ static void test_ma_patch_rack(void) {
               "rack case %zu (%s) gave \"%s\"", i, bad[i].why, error.message);
     }
 
-    static const char *factory[] = { "dubina", "granica", "lead", "prizma", "raster", "tepih" };
+    static const char *factory[] = { "dubina", "granica", "kolo", "lead", "prizma", "raster", "tepih" };
     for (size_t i = 0; i < sizeof factory / sizeof *factory; i++) {
         char path[128];
         snprintf(path, sizeof path, "patches/mamutanalog/%s.mapatch", factory[i]);

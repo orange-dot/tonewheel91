@@ -164,6 +164,7 @@ static bool factory(const char *name, ma_patch *out) {
     static const struct { const char *name; const ma_patch *patch; } F[] = {
         { "tepih", &ma_patch_tepih }, { "lead", &ma_patch_lead }, { "dubina", &ma_patch_dubina },
         { "raster", &ma_patch_raster }, { "prizma", &ma_patch_prizma }, { "granica", &ma_patch_granica },
+        { "kolo", &ma_patch_kolo },
     };
     for (size_t i = 0; i < sizeof F / sizeof *F; i++)
         if (!strcmp(name, F[i].name)) { *out = *F[i].patch; return true; }

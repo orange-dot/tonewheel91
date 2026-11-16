@@ -1,5 +1,5 @@
 /* Raw float PCM for arithmetic A/B work (for example a change of rounding).
- * Renders a fixed matrix -- six factory patches x BCS off/on x Glas off/on --
+ * Renders a fixed matrix -- seven factory patches x BCS off/on x Glas off/on --
  * through the pool and writes one interleaved stereo float32 file per case,
  * plus an FNV-64 line per case on stdout. Build the same source against two
  * trees and compare the files with driver/pcm_diff.py. Hosted only. */
@@ -37,11 +37,12 @@ int main(int argc, char **argv) {
         fputs("usage: dump_ma_pcm OUTDIR  (writes <patch>-bcs<b>-glas<g>-<engine>.f32)\n", stderr);
         return 2;
     }
-    const char *names[] = { "Tepih", "Lead", "Dubina", "Raster", "Prizma", "Granica" };
+    const char *names[] = { "Tepih", "Lead", "Dubina", "Raster", "Prizma", "Granica", "Kolo" };
     const ma_patch *patches[] = { &ma_patch_tepih, &ma_patch_lead, &ma_patch_dubina,
-                                  &ma_patch_raster, &ma_patch_prizma, &ma_patch_granica };
+                                  &ma_patch_raster, &ma_patch_prizma, &ma_patch_granica,
+                                  &ma_patch_kolo };
     static ma_frame out[BLOCK];
-    for (unsigned p = 0; p < 6; p++)
+    for (unsigned p = 0; p < 7; p++)
     for (unsigned bcs = 0; bcs < 2; bcs++)
     for (unsigned glas = 0; glas < 2; glas++)
     for (unsigned engine = 0; engine < 2; engine++) {

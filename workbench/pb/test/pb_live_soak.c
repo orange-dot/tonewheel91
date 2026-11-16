@@ -97,6 +97,7 @@ int main(int argc, char **argv) {
     static const struct { const char *name; const ma_patch *patch; } P[] = {
         { "Tepih", &ma_patch_tepih }, { "Lead", &ma_patch_lead }, { "Dubina", &ma_patch_dubina },
         { "Raster", &ma_patch_raster }, { "Prizma", &ma_patch_prizma }, { "Granica", &ma_patch_granica },
+        { "Kolo", &ma_patch_kolo },
     };
     ma_patch patch = ma_patch_granica;
     for (unsigned i = 0; i < sizeof P / sizeof *P; i++)

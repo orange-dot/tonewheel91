@@ -1791,3 +1791,24 @@ Notes:
   0.29 M cycles a block. `docs/ma-vco-lanes-20261115.md`.
 - Found, not fixed: `driver/probe_ma3_stages.c` has not built since the
   shared kernels (it is outside `make all`).
+
+### 2026-11-15 — Kolo; the lanes write the frame back
+
+- Kolo, the bank's seventh patch, has the circuit-derived oscillators on
+  and nothing else (`docs/ma-vco-plan.md` section 5d). Found while setting
+  it: the filter envelope bends VCO1 for as long as it is above zero (34
+  cents at A3 with sustain .35 and amount .45), so with the other factory
+  patches' sustains and their fine tuning (up to 7 cents) the coupling of
+  V4 never locks there. Kolo's filter envelope ends at zero; on the pool's first 32 cards
+  16 lock at A3 (after 3.4 s on average) and the rest creep below 0.3 Hz.
+  Listening set in `build/vco/kolo/listen/`; the values are not yet chosen
+  by ear.
+- Kolo is in the patch lists (`render_midi --patch`, Patchlab's compiled
+  fallbacks, the workbench's factory names, the hosted mirror check, the
+  Patchbench probe's bank) and in the pool's engine twin.
+- Correction to the entry above: as committed in `ca8f6b4` the lanes did
+  not write the circuit's frame back into each voice's synth, which broke
+  the pool's rule that both engines leave the same slot state. The engine
+  twin did not see it, having no patch with the law on. The lanes write it
+  back now (about 1 % of a law-on block); the twin runs two Kolo variants
+  and failed on `ca8f6b4`. PCM was never affected.

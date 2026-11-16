@@ -533,10 +533,17 @@ static void ml_front_gather(ml_front_in *x, unsigned l, const ma_synth *s,
 /* The circuit's frame (ma_vco_kernel.h) for the lanes in `active`, after
  * part A's pitch: the pitch law, written back to each voice's front, and the
  * frame's shapes, coupling and VCO2 ratio, written straight into the front
- * inputs. The synth's own copies of these (vco2_bend, vco_skew and the
- * fields after it) belong to the one-voice tick and are not written here. A
- * bank with the law off in every voice takes the plain ratio per lane and
- * leaves the shapes at the zeros of ml_front_benign. */
+ * inputs. A bank with the law off in every voice takes the plain ratio per
+ * lane and leaves the shapes at the zeros of ml_front_benign.
+ *
+ * Each voice's synth also gets the frame the one-voice tick would have left
+ * in it (vco2_bend, vco_skew and the fields after it), so both engines leave
+ * the same state. Nothing in the lanes reads it back. A voice with the law
+ * off has that copy at zero already unless the law was on in its last frame,
+ * which the buffer's amount tells. */
+static void ml_vco_frame_rest(ma_synth *s) {
+    if (s->vco_buffer != 0.0f) vco_frame_clear(s);
+}
 static void ml_front_vco(ma_synth *const voice[MA_LANES], ma_voice_front front[MA_LANES],
                          unsigned active, ml_front_in *x) {
     unsigned on = 0;
@@ -547,8 +554,11 @@ static void ml_front_vco(ma_synth *const voice[MA_LANES], ma_voice_front front[M
         row[l] = vco_couple_for(voice[l]->vco2_interval);
     }
     if (!on) {
-        for (unsigned l = 0; l < MA_LANES; l++)
-            if (active >> l & 1u) x->interval[l] = interval_ratio(voice[l]->vco2_interval);
+        for (unsigned l = 0; l < MA_LANES; l++) {
+            if (!(active >> l & 1u)) continue;
+            x->interval[l] = interval_ratio(voice[l]->vco2_interval);
+            ml_vco_frame_rest(voice[l]);
+        }
         return;
     }
 #define VCO_AMOUNT(l) voice[l]->vco_analog
@@ -623,10 +633,9 @@ static void ml_front_vco(ma_synth *const voice[MA_LANES], ma_voice_front front[M
 #undef VCO_GOOD
 #undef VCO_SOFT
     const ml_vco_frame f = ml_vco_frame_of(&in);
-    float base[MA_LANES];
+    float base[MA_LANES], bend[MA_LANES];
     ml_store(base, f.base_hz);
-    for (unsigned l = 0; l < MA_LANES; l++)
-        if (on >> l & 1u) front[l].base_hz = base[l];
+    ml_store(bend, f.vco2_bend);
     ml_store(x->interval, in.interval_ratio * (1.0f + f.vco2_bend));
     for (int k = 0; k < 2; k++) {
         ml_store(x->skew[k], f.skew[k]);
@@ -640,6 +649,25 @@ static void ml_front_vco(ma_synth *const voice[MA_LANES], ma_voice_front front[M
     ml_store(x->couple[1], f.couple_p);
     ml_store(x->couple[2], f.couple_q);
     ml_store(x->couple[3], f.couple_jump);
+    for (unsigned l = 0; l < MA_LANES; l++) {
+        ma_synth *s = voice[l];
+        if (!(active >> l & 1u)) continue;
+        if (!(on >> l & 1u)) { ml_vco_frame_rest(s); continue; }
+        front[l].base_hz = base[l];
+        s->vco2_bend = bend[l];
+        for (int k = 0; k < 2; k++) {
+            s->vco_skew[k] = x->skew[k][l];
+            s->vco_swell[k] = x->swell[k][l];
+            s->vco_ramp_bow[k][0] = x->ramp_bow[2 * k][l];
+            s->vco_ramp_bow[k][1] = x->ramp_bow[2 * k + 1][l];
+        }
+        s->vco_bow = x->bow[l];
+        s->vco_buffer = x->tri_buffer[l];
+        s->vco_couple_hz = x->couple[0][l];
+        s->vco_couple_p = x->couple[1][l];
+        s->vco_couple_q = x->couple[2][l];
+        s->vco_couple_jump = x->couple[3][l];
+    }
 }
 
 static void ml_vco_store(float c[7][MA_LANES], ml_vco v) {

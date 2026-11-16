@@ -112,6 +112,7 @@ extern const ma_patch ma_patch_dubina;
 extern const ma_patch ma_patch_raster;
 extern const ma_patch ma_patch_prizma;
 extern const ma_patch ma_patch_granica;
+extern const ma_patch ma_patch_kolo;
 
 typedef struct {
     float current;
@@ -385,9 +386,9 @@ typedef struct {
     float vco_analog;
     float vco_dead_time;
     float vco_supply;
-    /* The circuit's frame, from here to vco_couple_jump: written and read by
-     * the one-voice tick every frame. The pool's vector lanes keep theirs in
-     * the lane inputs and leave these as they were. */
+    /* The circuit's frame, from here to vco_couple_jump: written every frame
+     * and read by the one-voice tick. The pool's vector lanes work from
+     * their lane inputs and leave the same values here. */
     float vco2_bend;        /* this frame: VCO2's law over VCO1's, minus one */
     /* this frame's circuit shapes (V2): each triangle's rise less 0.5, the
      * swing its shapers see less 1, and the saw's bow; all 0 without the law */

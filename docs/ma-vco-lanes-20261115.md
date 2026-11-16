@@ -48,8 +48,9 @@ a 23-row search for the coupling row, per voice. No factory patch sets
   voice's front, and the shapes, the coupling and VCO2's ratio are stored
   straight into the front inputs that `ml_front_math` loads.
   `ml_front_gather` no longer copies them from the synth. A bank with the
-  law off in every voice skips the kernel. The lanes do not write the
-  synth's own copies of the frame; only the one-voice tick reads those.
+  law off in every voice skips the kernel. Each voice's synth still gets
+  the frame the one-voice tick would have left in it (see the correction
+  below).
 - **`VCO_COUPLE`** is indexed by VCO2's interval (49 rows, zeros where
   nothing couples), read through `vco_couple_for`.
 - **`driver/bench_ma3_perf.c`.** `MA3_PERF_ANALOG=0|1` (default 0, output
@@ -137,11 +138,37 @@ measured blocks (law off and on); its largest block took 1.049 ms of the
   change put both at about 0.15 M cycles a block. Live play was not
   repeated.
 
+## Correction, the same day
+
+As first committed (`ca8f6b4`), the lanes did not write the frame back into
+each voice's `ma_synth` (`vco2_bend`, `vco_skew` and the fields after it),
+on the grounds that only the one-voice tick reads those. That broke a
+contract of the pool: both engines leave the same state in every slot, and
+`test/ma_pool.c` compares the slots byte for byte after each render. The
+test did not notice, because none of its patches had the law on. PCM was
+not affected.
+
+- **Fix.** `ml_front_vco` writes the frame back for every voice with the
+  law on. A voice with the law off has its copy at zero already, unless
+  the law was on in its last frame; the buffer's amount tells, and then it
+  is cleared (`vco_frame_clear`, shared with the one-voice tick).
+- **Gate.** The engine twin has two more variants on Kolo, the factory
+  patch with the law on: as it is, and at a fifth with partial sync and
+  with the law switched off and on again by patch edits. It failed on
+  `ca8f6b4` at the slot comparison and passes now: 370,101 frames (223,603
+  before), 298 sleeps.
+- **Cost.** Per block of 8 voices, against `ca8f6b4`, on the probe used
+  before the change: +1.2 % instructions and about +1 % cycles with the law
+  on (Tepih 1.518 to 1.535 M, Granica 1.845 to 1.860 M), +0.1 %
+  instructions with it off. The A/B table above was not rerun; it is
+  about 1 % optimistic for the law-on vector cases.
+
 ## Open
 
 - `driver/probe_ma3_stages.c` does not build, here or on `1e94fa1`: it
   still names lane helpers from before the shared kernels
   (`ml_osc_ld`, `ml_sel`, `ml_lt`). It is not part of `make all`.
-- No factory patch uses the circuit-derived oscillators, so the default
-  bench matrix and the musical exhibits do not run them;
-  `MA3_PERF_ANALOG=1` is the way to measure them for now.
+- The default bench matrix does not run the circuit-derived oscillators;
+  `MA3_PERF_ANALOG=1` does. Kolo, the one factory patch that has them on
+  (`docs/ma-vco-plan.md` section 5d), is in the engine twin and the patch
+  lists, not in the bench matrix.

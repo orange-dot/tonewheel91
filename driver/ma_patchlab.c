@@ -115,6 +115,7 @@ static bool bank_add_compiled_fallbacks(patch_bank *bank) {
         { "Raster", &ma_patch_raster },
         { "Prizma", &ma_patch_prizma },
         { "Granica", &ma_patch_granica },
+        { "Kolo", &ma_patch_kolo },
     };
     for (size_t i = 0; i < sizeof builtin / sizeof *builtin; i++) {
         if (bank_has_name(bank, builtin[i].name)) continue;

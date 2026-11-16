@@ -335,16 +335,24 @@ static void engine_twin(void) {
     uint64_t sleeps = 0, frames_total = 0;
     /* Variant 1 is hard sync with every shape sounding; variant 2 adds
      * cross-mod and a softened, partial sync. Both put resets inside the
-     * edge zones (ma-constants.md 3.2). */
-    for (unsigned variant = 0; variant < 3; variant++)
+     * edge zones (ma-constants.md 3.2). Variants 3 and 4 are Kolo, the
+     * circuit-derived oscillators (docs/ma-vco-plan.md): 3 as it is, 4 at a
+     * fifth with partial sync and with the law switched off and on again by
+     * patch edits, so a bank holds the law on, off and mixed over its run. */
+    for (unsigned variant = 0; variant < 5; variant++)
     for (unsigned li = 0; li < 3; li++)
         for (unsigned unison = 1; unison <= 4; unison *= 2) {
             ma_voice_pool_config c = ma_voice_pool_default_config;
             c.limit = (uint8_t)limits[li];
             c.unison_count = (uint8_t)unison;
-            ma_patch patch = *patches[(li * 3 + unison + variant) % 5];
+            ma_patch patch = variant >= 3 ? ma_patch_kolo
+                                          : *patches[(li * 3 + unison + variant) % 5];
             patch.amp_adsr = (ma_adsr){ 0.004f, 0.03f, 0.6f, 0.012f };
-            if (variant) {
+            if (variant == 4) {
+                patch.vco2_interval = 7;
+                patch.sync_amount = 0.5f;
+                patch.vco_dead_time = 1.0f;
+            } else if (variant && variant < 3) {
                 patch.vco2 = (ma_vco_controls){ .saw_level = 0.5f, .pulse_level = 0.4f,
                     .triangle_level = 0.5f, .sine_level = 0.2f, .pulse_width = 0.31f };
                 patch.vco2_level = 0.9f;
@@ -376,6 +384,12 @@ static void engine_twin(void) {
                 if (step % 17 == 5) {
                     ma_voice_pool_set_sustain(&a, channel, seed & 2);
                     ma_voice_pool_set_sustain(&scalar_pool, channel, seed & 2);
+                }
+                if (variant == 4 && (step == 20 || step == 40)) {
+                    ma_patch edit = patch;
+                    edit.vco_analog = step == 20 ? 0.0f : 0.6f;
+                    ma_voice_pool_set_patch(&a, &edit);
+                    ma_voice_pool_set_patch(&scalar_pool, &edit);
                 }
                 unsigned n = 1 + (seed >> 12) % 257;
                 ma_voice_pool_render(&a, lane_frames, n);

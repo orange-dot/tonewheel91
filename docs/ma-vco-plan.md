@@ -207,6 +207,76 @@ added 0.53 to 0.62 M cycles to an 8-voice block; it now adds 0.20 to 0.29 M.
 The PCM is the same bit for bit, and `check-ma-front-lanes` compares the
 lane frame with the one-voice frame field by field.
 
+## 5d. Kolo, the factory patch
+
+2026-11-15. Until now no factory patch set `vco.analog`, so the bank, the
+exhibits and the default bench never ran the circuit-derived oscillators.
+Kolo (`ma_patch_kolo`, `patches/mamutanalog/kolo.mapatch`, file version 8)
+is the bank's seventh patch and has nothing else: no Raster, no BCS, no
+Glas, every macro at zero.
+
+| Group | Value |
+| --- | --- |
+| VCO1 | saw `.55`, pulse `.15` at width `.46`, triangle-to-sine `.30` |
+| VCO2 | saw `.30`, triangle `.25`, triangle-to-saw `.45`, level `.70`, interval `0`, fine `+1 cent` |
+| Circuit | `vco.analog` `1`, `vco.dead_time` `.35`, `vco.supply` `.85` |
+| Oscillator modulation | sync `0`, cross-mod `0` |
+| Noise, Mozaik | `.01`; mix `.06`, golden slope, contrast `tau`, drift `.03` |
+| Mixer/filter/body | pressure `.18`, cutoff `1400 Hz`, resonance `.22`, filter drive `.18`, envelope amount `.45`, keytrack `.50`, body drive `.12` |
+| Amp ADSR | attack `40 ms`, decay `900 ms`, sustain `.75`, release `900 ms` |
+| Filter ADSR | attack `60 ms`, decay `700 ms`, sustain `0`, release `800 ms` |
+| Stereo/output | width `.60`, crossfeed `.05`, master `.58` |
+
+Why these values:
+
+- **The filter envelope ends at zero.** It bends VCO1 up by an eighth of an
+  octave per unit of envelope (`ml_prepare_source`). With a sustain of .35
+  and an amount of .45 that held the cores 34 cents apart at A3 for as long
+  as the note sounded, far outside any lock range; the other factory
+  patches, with sustains of .18 to .50 and up to 7 cents of fine tuning,
+  never lock either. Here the bend lasts as long as the envelope: a note
+  beats through its attack and decay and then comes to rest on the two
+  cores' own difference.
+- **One cent of fine tuning on a soft supply.** At `vco.supply` `.85` the
+  unison lock range is about 1.3 cents. With the card's spread on top of
+  the one cent, about half the cards are inside it.
+- **Both families of shape sound**: the saw core's saw on both VCOs, the
+  triangle core through its sine shaper on VCO1 and through its saw shaper
+  and directly on VCO2.
+- **The master** puts a six-note chord at the level of Prizma and Granica
+  (RMS -34.4 dBFS against -34.2 and -34.5 in the same test).
+
+Measured on the pool's first 32 cards, velocity 100, one voice at a time
+(the phase of VCO2 against VCO1; a one-off probe, not kept):
+
+| Note | Turns in the first second | Cards that lock | From (mean) | The others creep at |
+| --- | ---: | ---: | ---: | --- |
+| C2 | 0.53 | 0 | | 0.006 to 0.096 Hz |
+| A3 | 1.84 | 16 | 3.4 s | 0.001 to 0.291 Hz |
+| C5 | 4.13 | 22 | 1.6 s | 0.234 to 0.616 Hz |
+| C6 | 8.52 | 22 | 1.5 s | 0.301 to 1.206 Hz |
+
+A card counts as locked when the phase difference stops moving and stays
+within a hundredth of a turn from the eighth to the sixteenth second. A
+creeping pair does not beat evenly: the sawtooth of VD21 lets the
+difference crawl away from the lock point, faster and faster, and then
+slip.
+
+Listening set, dry, every file 12 dB above the patch's own level:
+`build/vco/kolo/listen/` (not in the repository).
+
+- `kolo-chords.wav`: four six-note chords, nine seconds each.
+- `kolo-chords-law-off.wav`: the same with `vco.analog` at zero.
+- `kolo-chords-good-supply.wav`: the same with `vco.supply` at zero.
+- `kolo-held-a2-a3-a4.wav`, `kolo-held-a2-a3-a4-law-off.wav`: three single
+  notes, twelve seconds each.
+- `kolo-line.wav`, `kolo-line-top-trimmed.wav`: a line up four octaves,
+  four held notes from C7, then C4 against C7; the second with
+  `vco.dead_time` at zero.
+
+The values are a first setting, chosen from these measurements and not yet
+by ear.
+
 ## 6. Open
 
 - Operator: listening, in the Patchbench. Suggested: a patch with two

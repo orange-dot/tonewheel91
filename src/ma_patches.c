@@ -125,3 +125,30 @@ const ma_patch ma_patch_granica = {
     .body_drive = 0.10f, .width = 0.42f, .crossfeed = 0.10f,
     .master_level = 0.54f,
 };
+
+/* The circuit-derived oscillators on their own (docs/ma-vco-plan.md): both
+ * cores at unison a cent apart on a soft supply, the triangle core's two
+ * shapers beside the saw core, no Mamut identity. The filter envelope bends
+ * VCO1 while it lasts and ends at zero, so a held note beats through its
+ * attack and then settles: a card whose cores are within the lock range
+ * locks, the others creep. */
+const ma_patch ma_patch_kolo = {
+    .vco1 = { .saw_level = 0.55f, .pulse_level = 0.15f,
+              .pulse_width = 0.46f, .tri_sine_level = 0.30f },
+    .vco2 = { .saw_level = 0.30f, .triangle_level = 0.25f,
+              .pulse_width = 0.50f, .tri_saw_level = 0.45f },
+    .vco2_level = 0.70f, .vco2_interval = 0, .vco2_fine_cents = 1.0f,
+    .noise_level = 0.01f,
+    .raster_mix = 0.0f,
+    .mozaik_mix = 0.06f, .mozaik_slope = 0x1.1ec72ep-1f,
+    .mozaik_contrast = 0x1.07b1cap-1f, .mozaik_drift = 0.03f,
+    .mixer_pressure = 0.18f,
+    .filter_cutoff_hz = 1400.0f, .filter_resonance = 0.22f,
+    .filter_drive = 0.18f, .filter_env_amount = 0.45f,
+    .filter_keytrack = 0.50f,
+    .amp_adsr = { 40.0f, 900.0f, 0.75f, 900.0f },
+    .filter_adsr = { 60.0f, 700.0f, 0.0f, 800.0f },
+    .body_drive = 0.12f, .width = 0.60f, .crossfeed = 0.05f,
+    .master_level = 0.58f,
+    .vco_analog = 1.0f, .vco_dead_time = 0.35f, .vco_supply = 0.85f,
+};
