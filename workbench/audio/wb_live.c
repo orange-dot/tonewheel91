@@ -27,6 +27,7 @@ void wb_live_clear_slot(wb_live *live, unsigned slot) {
     if (slot >= WB_LIVE_SLOTS) return;
     wb_live_slot *x = &live->slot[slot];
     free(x->pool);
+    free(x->rack);
     wb_engine_close(&x->engine);
     *x = (wb_live_slot){ 0 };
 }
@@ -69,15 +70,24 @@ bool wb_live_load_part(wb_live *live, unsigned slot, const wb_session *s, const 
         config.detune_cents = p->detune_cents;
         config.session_seed = p->seed_from_name ? config.session_seed ^ tw_fnv1a64(p->id, strlen(p->id), 0) : p->seed;
         x->pool = malloc(sizeof *x->pool);
-        if (!x->pool || !ma_voice_pool_init(x->pool, (float)live->rate, &config, &doc.value)) {
+        x->rack = malloc(sizeof *x->rack);   /* its lines stay unwritten until a block uses them */
+        ma_rack_spec chain;
+        bool ok = x->pool && x->rack && ma_voice_pool_init(x->pool, (float)live->rate, &config, &doc.value);
+        if (ok) {
+            ma_rack_init(x->rack, (float)live->rate);
+            ok = wb_part_rack(p, &doc.rack, &chain) && ma_rack_apply(x->rack, &chain);
+        }
+        if (!ok) {
             free(x->pool);
+            free(x->rack);
             x->pool = nullptr;
-            if (error) snprintf(error->message, sizeof error->message, "part '%s': pool init failed", p->id);
+            x->rack = nullptr;
+            if (error) snprintf(error->message, sizeof error->message, "part '%s': pool or rack init failed", p->id);
             return false;
         }
+        ma_rack_settle(x->rack);
+        ma_voice_pool_attach_rack(x->pool, x->rack);
         ma_voice_pool_set_character(x->pool, p->character);
-        ma_effects_set_chorus(&x->pool->effects, (ma_chorus_controls){ p->chorus > 0, p->chorus, p->chorus_depth, p->chorus_rate_hz });
-        ma_effects_set_reverb(&x->pool->effects, (ma_reverb_controls){ p->reverb > 0, p->reverb, p->reverb_size, p->reverb_damping });
     }
     x->active = true;
     return true;

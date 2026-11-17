@@ -173,8 +173,14 @@ static void run(void) {
                 if (!ma_voice_pool_init(&pool, RATE, &c, &patch)) exit(1);
                 for (unsigned n = 0; n < 8; n++)
                     if (!ma_voice_pool_note_on(&pool, 0, (uint8_t)(36 + n), 100)) exit(1);
-                ma_effects_set_chorus(&pool.effects, (ma_chorus_controls){ true, .30f, .35f, .25f });
-                ma_effects_set_reverb(&pool.effects, (ma_reverb_controls){ true, .25f, .65f, .55f });
+                static ma_rack rack;   /* chorus and reverb are rack blocks (RK2) */
+                ma_rack_spec chain = { 0 };
+                ma_rack_init(&rack, RATE);
+                if (!ma_rack_spec_set_chorus(&chain, .30f, .35f, .25f)
+                    || !ma_rack_spec_set_reverb(&chain, .25f, .65f, .55f)
+                    || !ma_rack_apply(&rack, &chain)) exit(1);
+                ma_rack_settle(&rack);
+                ma_voice_pool_attach_rack(&pool, &rack);
                 ma_frame out[FRAMES];
                 uint64_t hash = 0;
                 for (unsigned b = 0; b < WARMUP; b++) {

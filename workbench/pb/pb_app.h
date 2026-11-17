@@ -73,6 +73,7 @@ typedef struct pb_app {
     ma_rack_spec parent_rack;        /* the chain parent's, for overrides */
     bool rack_mute[MA_RACK_SLOTS];   /* M: monitor only, never authored */
     int rack_selected;               /* slot under edit, -1 none */
+    unsigned rack_insert;            /* the empty slot (1-based) asking for a kind, 0 none */
     uint32_t rack_next_id;
     ma_rack_spec sent_rack[PB_CHANNELS];
     ma_rack_spec audition_rack;

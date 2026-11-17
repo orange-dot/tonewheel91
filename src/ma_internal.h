@@ -19,6 +19,21 @@
 [[nodiscard]] bool ma_rack_eq_wavefront(ma_rack_block *b, uint8_t active, const ma_frame *in,
     ma_frame *out, size_t n);
 
+/* The chorus and reverb kernels (ma_effects.c), shared by ma_effects and the
+ * rack's blocks. A restart is O(1): nothing is cleared (RKD7). The caller
+ * passes values already in range. `gate` scales the input written into the
+ * line (not the dry path): 1 is the kernel as it always was, and a block
+ * that starts from an empty line ramps it from 0, so its first delayed copy
+ * does not begin with a step. */
+void ma_chorus_restart(ma_chorus *c);
+void ma_reverb_restart(ma_reverb *r);
+[[nodiscard]] unsigned ma_chorus_length(float sample_rate_hz);
+[[nodiscard]] unsigned ma_reverb_length(float sample_rate_hz);
+[[nodiscard]] ma_frame ma_chorus_tick(ma_chorus *c, float mix, float depth, float rate_hz,
+    float sample_rate_hz, float gate, ma_fx_meter *meter, ma_frame in);
+[[nodiscard]] ma_frame ma_reverb_tick(ma_reverb *r, float mix, float size, float damping,
+    float gate, ma_fx_meter *meter, ma_frame in);
+
 void ma_voice_tick_controls(ma_synth *s);
 void ma_voice_snap_controls(ma_synth *s);
 void ma_voice_patch_controls(ma_synth *s, const ma_patch *patch);

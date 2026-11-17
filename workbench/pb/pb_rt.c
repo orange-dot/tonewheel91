@@ -23,6 +23,29 @@ static void note_on(pb_engine *e, unsigned c, uint8_t note, uint8_t velocity, ui
     }
 }
 
+/* What a channel's rack plays (RK2): the audible rack, with the bench
+ * voice's chorus and reverb as its chorus and reverb blocks. A send at zero
+ * leaves the rack's own block alone. False when a send found no free slot;
+ * the chain then holds what fitted. */
+bool pb_rt_chain(const ma_rack_spec *rack, const pb_voice *v, ma_rack_spec *chain) {
+    *chain = *rack;
+    return ma_rack_spec_set_effects(chain,
+        (ma_chorus_controls){ v->chorus_mix > 0, v->chorus_mix, v->chorus_depth, v->chorus_rate_hz },
+        (ma_reverb_controls){ v->reverb_mix > 0, v->reverb_mix, v->reverb_size, v->reverb_damping });
+}
+
+static void apply_chain(pb_engine_channel *ch) {
+    ma_rack_spec chain;
+    (void)pb_rt_chain(&ch->rack_spec, &ch->voice, &chain);
+    (void)ma_rack_apply(&ch->rack, &chain);
+}
+
+static bool sends_differ(const pb_voice *a, const pb_voice *v) {
+    return v->chorus_mix != a->chorus_mix || v->chorus_depth != a->chorus_depth
+        || v->chorus_rate_hz != a->chorus_rate_hz || v->reverb_mix != a->reverb_mix
+        || v->reverb_size != a->reverb_size || v->reverb_damping != a->reverb_damping;
+}
+
 static void apply_voice(pb_engine_channel *ch, const pb_voice *v) {
     pb_voice *a = &ch->voice;
     ma_voice_pool *p = &ch->pool->pool;
@@ -30,12 +53,6 @@ static void apply_voice(pb_engine_channel *ch, const pb_voice *v) {
     if (v->glide_s != a->glide_s) ma_voice_pool_set_glide(p, v->glide_s > 0, v->glide_s);
     if (v->lfo_depth != a->lfo_depth || v->lfo_rate_hz != a->lfo_rate_hz)
         ma_voice_pool_set_lfo(p, v->lfo_depth, v->lfo_rate_hz);
-    if (v->chorus_mix != a->chorus_mix || v->chorus_depth != a->chorus_depth || v->chorus_rate_hz != a->chorus_rate_hz)
-        ma_effects_set_chorus(&p->effects, (ma_chorus_controls){ v->chorus_mix > 0, v->chorus_mix, v->chorus_depth,
-                                                                 v->chorus_rate_hz });
-    if (v->reverb_mix != a->reverb_mix || v->reverb_size != a->reverb_size || v->reverb_damping != a->reverb_damping)
-        ma_effects_set_reverb(&p->effects, (ma_reverb_controls){ v->reverb_mix > 0, v->reverb_mix, v->reverb_size,
-                                                                 v->reverb_damping });
     /* Pool fields belong to the pool that is playing. */
     pb_voice keep = *a;
     *a = *v;
@@ -65,14 +82,22 @@ static void stop_sequence(pb_engine *e) {
     }
 }
 
+/* The sequencer's tempo, for the racks' synced delays (one tempo for all). */
+static void tempo(pb_engine *e) {
+    float bpm = (float)e->sequence.channel[0].bpm * .01f;
+    for (unsigned c = 0; c < PB_CHANNELS; c++) ma_rack_set_tempo(&e->channel[c].rack, bpm);
+}
+
 static void adopt(pb_engine *e) {
     for (unsigned c = 0; c < PB_CHANNELS; c++) {
         pb_engine_channel *ch = &e->channel[c];
         pb_pool *next = atomic_exchange_explicit(&ch->next_pool, nullptr, memory_order_acq_rel);
+        bool chain = false;                       /* the rack's chain changed */
         if (next) {
             atomic_store_explicit(&ch->retired_pool, ch->pool, memory_order_release);
             ch->pool = next;
             ma_voice_pool_attach_rack(&ch->pool->pool, &ch->rack);
+            chain |= sends_differ(&ch->voice, &next->voice);
             ch->voice = next->voice;
             ch->gain = next->voice.gain;
             e->pool_swaps++;
@@ -80,9 +105,16 @@ static void adopt(pb_engine *e) {
             /* Sounding notes end at the swap; the sequencer forgets them. */
             ch->seq.held_count = 0;
         }
-        if (take(&ch->voice_box)) apply_voice(ch, &ch->voice_slot[ch->voice_box.front]);
+        if (take(&ch->voice_box)) {
+            chain |= sends_differ(&ch->voice, &ch->voice_slot[ch->voice_box.front]);
+            apply_voice(ch, &ch->voice_slot[ch->voice_box.front]);
+        }
         if (take(&ch->patch_box)) ma_voice_pool_set_patch(&ch->pool->pool, &ch->patch_slot[ch->patch_box.front]);
-        if (take(&ch->rack_box)) (void)ma_rack_apply(&ch->rack, &ch->rack_slot[ch->rack_box.front]);
+        if (take(&ch->rack_box)) {
+            ch->rack_spec = ch->rack_slot[ch->rack_box.front];
+            chain = true;
+        }
+        if (chain) apply_chain(ch);
     }
     if (take(&e->sequence_box)) {
         e->pending = e->sequence_slot[e->sequence_box.front];
@@ -92,6 +124,7 @@ static void adopt(pb_engine *e) {
         e->sequence = e->pending;
         e->has_pending = false;
     }
+    tempo(e);
 }
 
 static void panic(pb_engine *e) {
@@ -182,6 +215,7 @@ void pb_rt_process(pb_engine *e, float *out, size_t frames) {
                 for (unsigned c = 0; c < PB_CHANNELS; c++) pb_seq_adopt(&e->channel[c].seq, &e->pending.channel[c]);
                 e->sequence = e->pending;
                 e->has_pending = false;
+                tempo(e);
             }
             for (unsigned c = 0; c < PB_CHANNELS; c++) {
                 pb_seq_event ev[PB_SEQ_EVENTS];
@@ -244,6 +278,7 @@ void pb_rt_overload(pb_engine *e) {
     if (playing(e)) stop_sequence(e);
     for (unsigned c = 0; c < PB_CHANNELS; c++) {
         ma_voice_pool_reset(&e->channel[c].pool->pool);
+        ma_rack_reset(&e->channel[c].rack);       /* its echoes and tails too */
         e->channel[c].newest_valid = false;
     }
     e->overload_panics++;

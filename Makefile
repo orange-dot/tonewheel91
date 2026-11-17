@@ -688,6 +688,13 @@ $(BUILD)/test_ma_rack: test/ma_rack.c $(MA_RUNTIME_OBJS) | $(BUILD)
 check-rk1: $(BUILD)/test_ma_rack
 	$(BUILD)/test_ma_rack
 
+# RK2 (docs/ma-rack-rk2.md): the same referee carries the RK2 kinds; the
+# effects test holds the kernel pins and the MIDI/direct wet twin.
+.PHONY: check-rk2
+check-rk2: $(BUILD)/test_ma_rack $(BUILD)/test_ma_effects
+	$(BUILD)/test_ma_rack
+	$(BUILD)/test_ma_effects
+
 # Live-path step 7: the voice banks over an executor's parts give the serial
 # render's bits (real threads and a reversed order).
 test: $(BUILD)/test_ma_pool_parallel

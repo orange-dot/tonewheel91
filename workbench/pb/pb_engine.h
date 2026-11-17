@@ -128,8 +128,12 @@ typedef struct {
     bool newest_valid;
     float last_peak;
     ma_frame block[PB_BLOCK_MAX];
+    /* The audible rack as published; the chain the rack plays is this with
+     * the voice's chorus and reverb (pb_rt_chain). */
+    ma_rack_spec rack_spec;
     /* The insert rack's state lives with the engine, not the pool, so a
-     * pool swap keeps its tails (RKD4). Audio thread only after start. */
+     * pool swap keeps its tails (RKD4). Audio thread only after start. Last
+     * in the channel: its lines are large and mostly unwritten. */
     ma_rack rack;
     /* Mailboxes. */
     ma_patch patch_slot[3];
@@ -199,6 +203,10 @@ typedef struct pb_engine {
  * interleaved stereo frames. */
 void pb_rt_process(pb_engine *e, float *out, size_t frames);
 void pb_rt_publish(pb_engine *e, float budget_ms, float period_ms, uint64_t xruns);
+/* What a channel's rack plays (RK2): `rack` with the voice's chorus and
+ * reverb as its chorus and reverb blocks; a send at zero leaves the rack's
+ * own block alone. False when a send found no free slot. */
+bool pb_rt_chain(const ma_rack_spec *rack, const pb_voice *voice, ma_rack_spec *chain);
 /* CPU overload: DSP took longer than the period PB_OVERLOAD_PERIODS times in
  * a row. Stops every voice and tail at once (a pool reset, not a panic,
  * whose releases would keep the load), so the next periods fit again. */
@@ -210,7 +218,8 @@ void pb_rt_overload(pb_engine *e);
 
 /* ---- UI side (pb_engine.c) ------------------------------------------------ */
 
-/* A pool with the patch and voice setup applied; null on failure. */
+/* A pool with the patch and voice setup applied (the voice's chorus and
+ * reverb belong to the channel's rack); null on failure. */
 pb_pool *pb_pool_build(unsigned rate, const ma_patch *patch, const pb_voice *voice);
 /* `patch` and `voice` hold one entry per channel. */
 pb_engine *pb_engine_create(unsigned rate, const ma_patch patch[PB_CHANNELS], const pb_voice voice[PB_CHANNELS],

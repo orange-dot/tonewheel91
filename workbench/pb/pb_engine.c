@@ -47,10 +47,6 @@ pb_pool *pb_pool_build(unsigned rate, const ma_patch *patch, const pb_voice *v) 
     ma_voice_pool_set_character(&p->pool, v->character);
     ma_voice_pool_set_glide(&p->pool, v->glide_s > 0, v->glide_s);
     ma_voice_pool_set_lfo(&p->pool, v->lfo_depth, v->lfo_rate_hz);
-    ma_effects_set_chorus(&p->pool.effects,
-                          (ma_chorus_controls){ v->chorus_mix > 0, v->chorus_mix, v->chorus_depth, v->chorus_rate_hz });
-    ma_effects_set_reverb(&p->pool.effects,
-                          (ma_reverb_controls){ v->reverb_mix > 0, v->reverb_mix, v->reverb_size, v->reverb_damping });
     p->voice = *v;
     return p;
 }
@@ -77,7 +73,12 @@ pb_engine *pb_engine_create(unsigned rate, const ma_patch patch[PB_CHANNELS], co
         triple_init(&ch->voice_box);
         triple_init(&ch->rack_box);
         ma_rack_init(&ch->rack, (float)rate);
+        ma_rack_set_tempo(&ch->rack, (float)sequence->channel[0].bpm * .01f);
         ma_voice_pool_attach_rack(&ch->pool->pool, &ch->rack);
+        /* The voice's chorus and reverb are in place from the first frame. */
+        ma_rack_spec chain;
+        (void)pb_rt_chain(&ch->rack_spec, &ch->voice, &chain);
+        if (!ma_rack_spec_empty(&chain) && ma_rack_apply(&ch->rack, &chain)) ma_rack_settle(&ch->rack);
     }
     return e;
 }
@@ -131,8 +132,13 @@ void pb_engine_set_rack(pb_engine *e, unsigned c, const ma_rack_spec *rack) {
 }
 
 bool pb_engine_set_rack_now(pb_engine *e, unsigned c, const ma_rack_spec *rack) {
-    if (!ma_rack_apply(&e->channel[c].rack, rack)) return false;
-    ma_rack_settle(&e->channel[c].rack);
+    pb_engine_channel *ch = &e->channel[c];
+    if (!ma_rack_spec_valid(rack)) return false;
+    ch->rack_spec = *rack;
+    ma_rack_spec chain;
+    (void)pb_rt_chain(&ch->rack_spec, &ch->voice, &chain);
+    if (!ma_rack_apply(&ch->rack, &chain)) return false;
+    ma_rack_settle(&ch->rack);
     return true;
 }
 

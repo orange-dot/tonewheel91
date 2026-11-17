@@ -4,6 +4,11 @@
 acceptance are complete (operator: “odlicno je ovo”). MA3 live acceptance and host
 throughput remain separate MA3-LIVE/MA3-PERF tasks.
 
+Since RK2 (2026-11-16) the pool holds no effects: chorus and reverb are two
+blocks of the insert rack, before master and safety, with the same kernels
+(`docs/ma-rack-rk2.md`). The contract below describes MA3-2 as it was
+accepted; the standalone `ma_effects` pair still follows it.
+
 ## Signal and storage contract
 
 `ma_voice_pool_tick/render` now runs one shared `ma_effects` after the existing

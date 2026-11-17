@@ -41,6 +41,10 @@ static ma_midi_stats ma_stats;
 static ma_pool_diagnostics ma_pool_stats;
 static uint64_t ma_fx_clips, ma_fx_sanitizations;
 static float ma_fx_pre_peak, ma_fx_post_peak;
+/* The file's tempo track in frames, for the rack's synced delays. */
+static size_t *ma_tempo_frame;
+static float *ma_tempo_bpm;
+static size_t ma_tempo_count;
 
 static void usage(const char *argv0) {
     fprintf(stderr,
@@ -59,7 +63,9 @@ static void usage(const char *argv0) {
             "  --reverb-mix x     enable reverb, mix 0..1 (default disabled)\n"
             "  --reverb-size x    0..1 (default .65)\n"
             "  --reverb-damping x 0...99 (default .55)\n"
-            "  --rack path        Mamut insert rack from a .mapatch v5 file\n"
+            "  --rack path        Mamut insert rack from a .mapatch file (version 5 on)\n"
+            "                     chorus and reverb are rack blocks: the switches above set\n"
+            "                     the rack's chorus or reverb block, or add one after it\n"
             "  -c list  MIDI channels to render, e.g. 0,4 (default: all)\n"
             "  -R digits  registration, nine digits (default 888000000)\n"
             "  -v mode  vibrato 0..6 = off,V1..V3,C1..C3 (default 0)\n"
@@ -91,7 +97,7 @@ typedef struct {
     ma_chorus_controls chorus;
     ma_reverb_controls reverb;
     unsigned rate;
-    ma_rack_spec rack;     /* --rack; empty = no rack attached */
+    ma_rack_spec rack;     /* --rack; empty = no blocks from a file */
     const char *rack_path;
 } settings_t;
 
@@ -100,15 +106,13 @@ static double render_ma(const smf_event *events, size_t count, const settings_t 
     static ma_midi_renderer renderer;
     if (!ma_midi_renderer_init(&renderer, s->rate, &s->pool, s->patch,
         UINT16_MAX, events, event_frames, count)) return NAN;
-    ma_effects_set_chorus(&renderer.midi.pool.effects, s->chorus);
-    ma_effects_set_reverb(&renderer.midi.pool.effects, s->reverb);
-    static ma_rack rack;
-    if (!ma_rack_spec_empty(&s->rack)) {
-        ma_rack_init(&rack, (float)s->rate);
-        if (!ma_rack_apply(&rack, &s->rack)) return NAN;
-        ma_rack_settle(&rack);   /* a render starts with the rack in place */
-        ma_voice_pool_attach_rack(&renderer.midi.pool, &rack);
-    }
+    /* A render starts with the rack in place: the file's blocks, then the
+     * chorus and the reverb the switches asked for. */
+    ma_rack_spec chain = s->rack;
+    if (!ma_rack_spec_set_effects(&chain, s->chorus, s->reverb)
+        || !ma_midi_map_set_rack(&renderer.midi, &chain, true)
+        || !ma_midi_renderer_set_tempo(&renderer, ma_tempo_frame, ma_tempo_bpm, ma_tempo_count))
+        return NAN;
     for (size_t offset = 0; offset < frames;) {
         size_t n = frames - offset;
         if (n > s->block_frames) n = s->block_frames;
@@ -123,10 +127,10 @@ static double render_ma(const smf_event *events, size_t count, const settings_t 
     }
     ma_stats = renderer.midi.stats;
     ma_pool_stats = renderer.midi.pool.diagnostics;
-    ma_fx_clips = renderer.midi.pool.effects.clips;
-    ma_fx_sanitizations = renderer.midi.pool.effects.sanitizations;
-    ma_fx_pre_peak = renderer.midi.pool.effects.pre_peak;
-    ma_fx_post_peak = renderer.midi.pool.effects.post_peak;
+    ma_fx_clips = renderer.midi.rack.fx.clips;
+    ma_fx_sanitizations = renderer.midi.rack.fx.sanitizations + renderer.midi.rack.sanitizations;
+    ma_fx_pre_peak = renderer.midi.rack.fx.pre_peak;
+    ma_fx_post_peak = renderer.midi.rack.fx.post_peak;
     *out_of_compass = 0;
     return peak;
 }
@@ -522,6 +526,13 @@ int main(int argc, char **argv) {
     /* two-run FNV: the repo's determinism contract, applied to songs;
      * hashed over the interleaved stereo buffer since M6 */
     uint32_t ooc = 0;
+    if (st.instrument == INSTRUMENT_MAMUT) {
+        if (!smf_make_tempo_frames(&midi, st.rate, &ma_tempo_frame, &ma_tempo_bpm)) {
+            free(buf); free(event_frame); smf_dispose(&midi);
+            fprintf(stderr, "render_midi: tempo track exceeds the checked duration\n"); return 1;
+        }
+        ma_tempo_count = midi.tempo_count;
+    }
     double (*paint)(const smf_event *, size_t, const settings_t *, float *, size_t,
                     const size_t *, uint32_t *) = st.instrument == INSTRUMENT_MAMUT
                         ? render_ma : st.instrument == INSTRUMENT_EP ? render_ep : render;
@@ -549,8 +560,8 @@ int main(int argc, char **argv) {
                ma_pool_stats.active_slots, ma_pool_stats.peak_slots, ma_pool_stats.steals_released,
                ma_pool_stats.steals_sustained, ma_pool_stats.steals_held,
                ma_pool_stats.sleeps, ma_pool_stats.wakes);
-        printf("  effects (including feedback writes): pre/post peak %.6f/%.6f, "
-               "clips %" PRIu64 ", sanitizations %" PRIu64 "; pool %zu bytes\n",
+        printf("  rack chorus/reverb (including feedback writes): pre/post peak %.6f/%.6f, "
+               "clips %" PRIu64 ", rack sanitizations %" PRIu64 "; pool %zu bytes\n",
                (double)ma_fx_pre_peak, (double)ma_fx_post_peak,
                ma_fx_clips, ma_fx_sanitizations, sizeof(ma_voice_pool));
     } else printf("  applied: %lu notes, %lu %s, %lu ccs, %lu folded,"
@@ -564,6 +575,8 @@ int main(int argc, char **argv) {
     int rc = !isfinite(peak) || h1 != h2 ? -1 : wav_write_f32(out_path, buf, frames, st.rate, 2);
     printf("  wav: %s%s\n", out_path, rc ? " (WRITE FAILED)" : "");
     free(buf);
+    free(ma_tempo_frame);
+    free(ma_tempo_bpm);
     free(event_frame);
     smf_dispose(&midi);
     return rc == 0 && h1 == h2 ? 0 : 1;

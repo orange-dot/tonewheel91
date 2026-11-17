@@ -8,6 +8,8 @@
 
 enum { BLOCK=128, OUTPUTS=MA3_STEMS+1 };
 static ma_voice_pool pools[MA3_PARTS];
+/* Each part's chorus and reverb are blocks of its pool's insert rack (RK2). */
+static ma_rack racks[MA3_PARTS];
 typedef struct { uint64_t hash; double square; float peak; } level;
 
 void ma3_part_init(ma3_part *p, const char *name, ma_patch patch,
@@ -62,8 +64,12 @@ static bool pass(const ma3_show *s, unsigned seconds, wav_f32_writer *writers, l
         const ma3_part *part=&s->part[p];
         if(!ma_voice_pool_init(&pools[p],MA3_RATE,&part->config,&part->patch)) return false;
         ma_voice_pool_set_character(&pools[p],part->character);
-        ma_effects_set_chorus(&pools[p].effects,part->chorus);
-        ma_effects_set_reverb(&pools[p].effects,part->reverb);
+        ma_rack_spec chain={0};
+        ma_rack_init(&racks[p],MA3_RATE);
+        if(!ma_rack_spec_set_effects(&chain,part->chorus,part->reverb)
+            || !ma_rack_apply(&racks[p],&chain)) return false;
+        ma_rack_settle(&racks[p]);
+        ma_voice_pool_attach_rack(&pools[p],&racks[p]);
     }
     size_t next=0, frames=(size_t)seconds*MA3_RATE;
     unsigned aggregate_peak=0;
@@ -139,8 +145,8 @@ static bool pass(const ma3_show *s, unsigned seconds, wav_f32_writer *writers, l
         printf("  %-12s active %u peak %u steals R/S/H=%" PRIu64 "/%" PRIu64 "/%" PRIu64
             " sleeps=%" PRIu64 " FX clips=%" PRIu64 "\n",s->part[p].name,
             d.active_slots,d.peak_slots,d.steals_released,d.steals_sustained,d.steals_held,
-            d.sleeps,pools[p].effects.clips);
-        if(d.steals_held || d.steals_sustained || pools[p].effects.sanitizations) return false;
+            d.sleeps,racks[p].fx.clips);
+        if(d.steals_held || d.steals_sustained || racks[p].fx.sanitizations || racks[p].sanitizations) return false;
         if(seconds==s->seconds && d.active_slots) return false;
     }
     return true;

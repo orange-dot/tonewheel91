@@ -4,7 +4,10 @@ Date: 2026-11-11. Status: **RK0 done** (this document and the backlog
 amendments it names); RK2 re-pin and the RK3/RK3b scope confirmed by the
 operator the same day. **RK1 implemented** the same day, gates 1–7 pass,
 listening (gate 8) open: `docs/ma-rack-rk1.md`. **RK1b** (8-band parametric
-EQ, EQ editor, AVX2 wavefront) the same day: `docs/ma-rack-rk1b.md`. Operator request: build reusable blocks,
+EQ, EQ editor, AVX2 wavefront) the same day: `docs/ma-rack-rk1b.md`. **RK2
+implemented** 2026-11-16 (chorus and reverb as blocks, delay, saturator,
+compressor, `.mapatch` version 9; decisions RKD27..RKD35 in section 3):
+`docs/ma-rack-rk2.md`; listening open. Operator request: build reusable blocks,
 starting with an EQ, that can be inserted anywhere in the chain from the
 Patchbench, so that a sound is built from structure and not only from
 parameter edits.
@@ -28,7 +31,7 @@ this line.
 | RKD6 | **State follows the slot id.** On apply, a slot with the same id and kind keeps its state. A new or changed slot starts from zero. A removed block fades its mix to zero and an inserted block fades in from bypass, over 10 ms [decision], so add, remove and reorder do not click. |
 | RKD7 | **Buffered blocks never clear on the render thread.** A delay line counts frames written since activation and reads zero beyond that count. Activation is O(1) whatever the buffer size. |
 | RKD8 | **Large buffers come from per-kind instance caps**, not from every slot: at most 1 chorus, 1 reverb and 2 delays (RK2). Small blocks (EQ, utility, saturator, compressor) keep their state inside the slot. |
-| RKD9 | **Position.** RK1: `body -> DC -> rack -> master -> safety -> chorus -> reverb`. The rack sees the instrument's level before the master fader, so moving master does not move how hard a saturator or compressor works. RK2 moves chorus and reverb into the rack as two blocks: `body -> DC -> rack -> master -> safety`. That is the one point where wet signatures are re-pinned (confirmed by the operator 2026-11-11). Dry renders stay bit-identical through both steps. |
+| RKD9 | **Position.** RK1: `body -> DC -> rack -> master -> safety -> chorus -> reverb`. The rack sees the instrument's level before the master fader, so moving master does not move how hard a saturator or compressor works. RK2 moves chorus and reverb into the rack as two blocks: `body -> DC -> rack -> master -> safety`. That is the one point where wet signatures are re-pinned (confirmed by the operator 2026-11-11). Dry renders stay bit-identical through both steps. In place since 2026-11-16. |
 | RKD10 | **Per-frame tick inside the pool tick**, as `ma_effects` runs today. Block processing waits until `bench_ma3_perf` shows it is needed. |
 | RKD11 | **Parameter changes are smoothed per frame** with the core's 6 ms smoother convention. Filter coefficients are recomputed only while a smoother is moving. Coefficient math is freestanding: `tan` from the repo sine kernel (as in the rotary's TPT crossover) and a deterministic `exp2` approximation for dB to linear. No `libm`. |
 | RKD12 | **Storage: `.mapatch` version 5** carries the rack as optional `rack.<n>.*` keys. The kind is written as a name (`rack.1.kind=eq`), never as a number. A separate hosted parser owns these keys, so the 64-bit field mask and `wb_patch` are not involved. Versions 1..4, or a v5 file without rack keys, give the empty rack. Every writer must round-trip the rack: a tool that does not edit it keeps it opaque and does not drop it. An empty rack keeps writing version 4, byte for byte. A `.wbpatch` child inherits its parent's rack; `wbpatch=2` with `rack=1` replaces it with the child's own `rack.<n>.*` keys (RK1 decision, so a saved edit of a factory patch keeps its rack). |
@@ -41,10 +44,10 @@ Waves, in landing order:
 | --- | --- | --- |
 | RK1b | `eq` | up to 8 parametric bands (bell, low/high shelf, low/high cut, notch) and output gain, TPT SVF, linked L/R; frequencies clamp to .45 of the sample rate (RKD21..RKD24). RK1 shipped a fixed four-section form first; it was replaced before any commit. |
 | RK1 | `utility` | gain (±24 dB), width (0..2, mid/side), pan (-1..1). |
-| RK2 | `chorus`, `reverb` | the existing `ma_effects` code moved into blocks, bit-identical at equal position. |
-| RK2 | `delay` | stereo or ping-pong, a filter inside the feedback loop, time in seconds or synced to the sequencer tempo. Capacity 2^19 frames per channel (2.7 s at 192 kHz) [decision]. |
-| RK2 | `saturator` | the `tw_drive` kernel (triode and odd curves, read-only reuse as the output body already does), tilt before and after, mix. |
-| RK2 | `compressor` | RMS or peak detector, threshold, ratio, attack, release, makeup gain, mix (parallel compression). |
+| RK2 | `chorus`, `reverb` | the existing `ma_effects` code moved into blocks, bit-identical at equal position. Parameters: depth and rate; size and damping. |
+| RK2 | `delay` | stereo or ping-pong, a low cut and a high cut inside the feedback loop, time in seconds or synced to the host tempo (13 note values). Capacity 2^19 frames per channel (2.7 s at 192 kHz) [decision]. |
+| RK2 | `saturator` | the `tw_drive` kernel (its triode curve, its odd kernel, or a blend of the two; read-only reuse as the output body already does), input gain, tilt before and after, output gain, mix. |
+| RK2 | `compressor` | RMS or peak detector, threshold, ratio, soft knee, attack, release, makeup gain, mix (parallel compression). |
 | later | `filter` | multimode SVF (LP/BP/HP/notch) on the bus. |
 | later | `phaser`, `flanger`, `tremolo` (with auto-pan), `crusher` | crusher: rate and bit reduction. |
 | decision | `ringmod` | out of scope through MA5 as written; needs an operator decision. |
@@ -101,6 +104,27 @@ reverb leave the pool. CC107/108, the `render_midi --chorus-mix/--reverb-mix`
 switches and the `[voice]` keys of `.pbench` map onto those two blocks. Wet
 signatures are re-pinned once (RKD9, operator-confirmed 2026-11-11).
 
+Implemented 2026-11-16; evidence and measurements in `docs/ma-rack-rk2.md`.
+The decisions below were taken while implementing. Each number marked
+[decision] is a working value that has not been judged by ear.
+
+| ID | Decision |
+| --- | --- |
+| RKD27 | **Chorus and reverb mix by their own law.** The slot's mix, with its 6 ms ramp and the structural fade, is passed to the kernel as its mix; there is no crossfade around the kernel. At a settled mix the two blocks give the bits of `ma_effects` on the same input (`test/ma_rack.c`, four rates). A new chorus or reverb block starts at mix .30 and .25, a delay at .30, every other kind at 1. |
+| RKD28 | **A buffered block takes its input through a gate.** A chorus, reverb or delay that starts from an empty line (RKD3, RKD7) would begin its first delayed copy with a step, one delay time after it came on. The input written into the line ramps from 0 to 1 over the 10 ms fade time; the dry path is not scaled. A gate of 1 is the kernel as it was, bit for bit. A settled rack starts with the gate at 1. |
+| RKD29 | **A session's chorus and reverb are blocks under two reserved ids.** `ma_rack_spec_set_chorus` and `ma_rack_spec_set_reverb` set the chain's chorus or reverb block when it has one (the patch's own block takes the session's values). Without one, and with a mix above zero, they add one after the last block, the chorus before a reverb added the same way. A send at zero leaves the chain alone. A full chain refuses the block: `render_midi` fails, a CC107/108 is counted as ignored, the Workbench refuses the part, the Patchbench says so. `render_midi` settles the rack before the first frame, so a CC at frame zero equals the switch. |
+| RKD30 | **Delay.** The wet signal is the echoes alone; the slot's mix crossfades it against the input. Stereo: each channel feeds itself. Ping-pong: the mono sum goes into the left line and each line feeds the other, so every echo is `feedback` below the one before. The feedback passes a one-pole high cut and low cut; the first echo does not. `feedback` is at most .95. A time change is followed like a tape machine changing speed: the distance still to go decays with a 50 ms time constant [decision]. Sync takes 13 note values from 1/32 to 1/1, triplets and dotted included, against the host tempo (`ma_rack_set_tempo`, 20..400, 120 without a host). A time longer than the line clamps to the line. |
+| RKD31 | **Saturator.** Per channel: tilt, input gain, the `tw_drive` stage, the input gain taken back out, tilt, output gain. The stage has unit small-signal gain, so the block has too. `shape` blends the stage's triode curve (0) with its odd kernel (1); both run only while the blend needs both. The input gain starts at +20 dB [decision], which puts the rack's measured chord peaks (about −20 dBFS) at the triode curve's knee. A tilt of t dB is first-order about 650 Hz [decision]: −t/2 far below, +t/2 far above, 0 dB at the pivot, and the opposite tilt after the stage is its exact inverse. Drive 0 with flat tilts and 0 dB out returns the input bits. |
+| RKD32 | **Compressor.** Feed-forward with one gain for both channels. The detector reads the larger channel's magnitude (peak) or the mean square of both over 10 ms [decision] (RMS). The static curve has a soft knee (Giannoulis, Massberg and Reiss, JAES 2012); attack and release act on the gain change in dB. The threshold starts at −36 dB [decision], under the rack's measured chord level of about −31 dBFS RMS. Ratio 1 with 0 dB makeup returns the input bits, and so does any frame whose gain change and makeup are both 0 dB. No look-ahead and no latency. |
+| RKD33 | **Storage: `.mapatch` version 9** and **`wbpatch=3`** for a rack that holds a kind beyond `eq` and `utility`. Version 9 carries every patch field. A rack of EQs and utilities keeps writing the version it wrote before. Values that are words are written as words: `sync=1/8d`, `detector=rms`, as an EQ band's type already was. This takes the version number RKD20 set aside for the modulation bus, which becomes version 10. |
+| RKD34 | **The lines live in `ma_rack`, and `ma_rack_init` does not write them** (RKD7, RKD8). One rack is 9.06 MB with its chorus, reverb and two delay lines. A chain that has no delay never writes the delay lines, so that memory is never touched in a process that does not lock it. The pool no longer holds the 645 kB of chorus and reverb lines. The Patchbench locks its engine, four racks included, before audio starts. |
+| RKD35 | **The pool does not own the tails.** `ma_voice_pool_reset` leaves the rack alone, as it did for the EQ; a host that wants silence at once calls `ma_rack_reset` too (the Patchbench's overload stop does). `ma_voice_pool_panic` never cut effect tails and still does not. |
+
+The Workbench desk and its live path now give each Mamut pool a rack: the
+patch's own rack with the part's chorus and reverb sends (`wb_part_rack`).
+Before RK2 they carried a patch's rack through flattening and did not play
+it.
+
 **RK3 — modulation bus for rack parameters.** Operator decisions
 2026-11-11: macros may drive effects through explicit routes (the MA3-2
 rule is amended in `analog-backlog.md`), RK3b follows RK3 directly, and
@@ -115,7 +139,7 @@ the source set below is final for RK3.
 | RKD17 | **Sources modulate sources, in one direction.** LFO rate and depth, and the `noteenv` times, are targets for the control-like sources only (`knob*`, macros, `wheel`, `pressure`, `follow`, `noteenv`). An LFO cannot modulate an LFO, so there is no evaluation order to define and no cycle. |
 | RKD18 | **Exact bypass.** No routes, or every depth at literal zero, reproduces RK2 bit for bit. The modulated sum is skipped, not added as zero (`-0.0f + 0.0f` is `+0.0f`). LFOs run from rack initialization whether routed or not, so adding a route mid-render is deterministic. |
 | RKD19 | **Tempo.** The host supplies tempo: the Patchbench from its sequencer, `render_midi` from the SMF tempo map. RK3 syncs rate to beat divisions and resets synced phases at transport start; bar-locked phase is later work. |
-| RKD20 | **Storage: `.mapatch` version 6**, keys `mod.lfo1.*`, `mod.noteenv.*`, `mod.follow.*`, `mod.route.<n>.*`. The strict parser makes a version bump cheaper than reserving keys in v5. |
+| RKD20 | **Storage: `.mapatch` version 10** (written as version 6 here on 2026-11-11; versions 6 to 8 went to the circuit-derived oscillators and 9 to the RK2 kinds, RKD33), keys `mod.lfo1.*`, `mod.noteenv.*`, `mod.follow.*`, `mod.route.<n>.*`. The strict parser makes a version bump cheaper than reserving keys in v5. |
 
 Patchbench, RK3: a sources panel with pictures computed by the sources' own
 code (the LFO waveform over two cycles, the follower and `noteenv` traces

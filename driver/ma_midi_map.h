@@ -14,13 +14,22 @@ typedef struct {
     ma_patch patch;
     ma_midi_stats stats;
     uint16_t channel_mask;
+    /* The pool's insert rack and the chain it plays: the host's blocks, with
+     * chorus (CC107) and reverb (CC108) as two of them (RK2). */
+    ma_rack_spec rack_spec;
+    ma_rack rack;
 } ma_midi_map;
 
 /* Single timbre, global direct CCs, per-channel expression and sustain.
  * Pool owns repeated notes; no boolean hosted owner table collapses attacks.
- * All calls occur on the render thread. No allocation, I/O or locks. */
+ * All calls occur on the render thread. No allocation, I/O or locks.
+ * The map's rack starts empty and attached. */
 bool ma_midi_map_init(ma_midi_map *map, float rate,
     const ma_voice_pool_config *config, const ma_patch *patch, uint16_t channels);
+/* Replace the chain. With settle the blocks are in place at once (a render's
+ * start); without, they come in through the rack's fades. False, and nothing
+ * changed, for an invalid spec. */
+bool ma_midi_map_set_rack(ma_midi_map *map, const ma_rack_spec *spec, bool settle);
 void ma_midi_apply(ma_midi_map *map, uint8_t status, uint8_t d1, uint8_t d2);
 
 #endif

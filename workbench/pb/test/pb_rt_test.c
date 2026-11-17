@@ -29,11 +29,37 @@ typedef struct {
 
 typedef struct {
     pb_pool *pool[PB_CHANNELS];
+    ma_rack *rack[PB_CHANNELS];    /* each channel's own: the voice's chorus and reverb (RK2) */
     pb_voice voice[PB_CHANNELS];
     pb_sequence sequence, pending;
     bool has_pending;
     pb_seq_run seq[PB_CHANNELS];
 } reference;
+
+/* A channel's pool and its rack, the voice's chorus and reverb in place:
+ * written here from the core's calls, not through pb_rt_chain. */
+static bool ref_build(reference *r, unsigned c, const ma_patch *patch, const pb_voice *v) {
+    r->pool[c] = pb_pool_build(RATE, patch, v);
+    r->rack[c] = calloc(1, sizeof *r->rack[c]);
+    if (!r->pool[c] || !r->rack[c]) return false;
+    ma_rack_spec chain = { 0 };
+    ma_rack_init(r->rack[c], RATE);
+    if ((v->chorus_mix > 0 && !ma_rack_spec_set_chorus(&chain, v->chorus_mix, v->chorus_depth, v->chorus_rate_hz))
+        || (v->reverb_mix > 0 && !ma_rack_spec_set_reverb(&chain, v->reverb_mix, v->reverb_size, v->reverb_damping))
+        || !ma_rack_apply(r->rack[c], &chain))
+        return false;
+    ma_rack_settle(r->rack[c]);
+    ma_voice_pool_attach_rack(&r->pool[c]->pool, r->rack[c]);
+    r->voice[c] = *v;
+    return true;
+}
+
+static void ref_free(reference *r) {
+    for (unsigned c = 0; c < PB_CHANNELS; c++) {
+        free(r->pool[c]);
+        free(r->rack[c]);
+    }
+}
 
 static void ref_seq(reference *r, unsigned c, const pb_seq_event *ev, size_t n) {
     for (size_t i = 0; i < n; i++)
@@ -75,18 +101,14 @@ static void ref_frame(reference *r, float *out) {
     }
 }
 
-/* The live fields of a voice setup, as the audio thread applies them. */
+/* The live fields of a voice setup, as the audio thread applies them. The
+ * scripts do not move the chorus and reverb sends, so the reference's racks
+ * keep the chain they were built with. */
 static void ref_voice(ma_voice_pool *p, const pb_voice *a, const pb_voice *v) {
     if (v->character != a->character) ma_voice_pool_set_character(p, v->character);
     if (v->glide_s != a->glide_s) ma_voice_pool_set_glide(p, v->glide_s > 0, v->glide_s);
     if (v->lfo_depth != a->lfo_depth || v->lfo_rate_hz != a->lfo_rate_hz)
         ma_voice_pool_set_lfo(p, v->lfo_depth, v->lfo_rate_hz);
-    if (v->chorus_mix != a->chorus_mix || v->chorus_depth != a->chorus_depth || v->chorus_rate_hz != a->chorus_rate_hz)
-        ma_effects_set_chorus(&p->effects, (ma_chorus_controls){ v->chorus_mix > 0, v->chorus_mix, v->chorus_depth,
-                                                                 v->chorus_rate_hz });
-    if (v->reverb_mix != a->reverb_mix || v->reverb_size != a->reverb_size || v->reverb_damping != a->reverb_damping)
-        ma_effects_set_reverb(&p->effects, (ma_reverb_controls){ v->reverb_mix > 0, v->reverb_mix, v->reverb_size,
-                                                                 v->reverb_damping });
 }
 
 static uint64_t fnv(const float *x, size_t n, uint64_t h) {
@@ -133,11 +155,7 @@ static uint64_t run_script(const char *name, const ma_patch start_patch[PB_CHANN
     pb_engine *e = pb_engine_create(RATE, patch, voice, &sequence);
     reference r = { .sequence = sequence };
     bool built = e != nullptr;
-    for (unsigned c = 0; c < PB_CHANNELS; c++) {
-        r.pool[c] = pb_pool_build(RATE, &patch[c], &voice[c]);
-        r.voice[c] = voice[c];
-        built = built && r.pool[c];
-    }
+    for (unsigned c = 0; c < PB_CHANNELS; c++) built = ref_build(&r, c, &patch[c], &voice[c]) && built;
     CHECK(built, "%s: engine or reference pools", name);
     if (!built) return 0;
     unsigned spread_runs = 0;
@@ -192,6 +210,7 @@ static uint64_t run_script(const char *name, const ma_patch start_patch[PB_CHANN
             if (swapped[c]) {
                 free(r.pool[c]);
                 r.pool[c] = swapped[c];
+                ma_voice_pool_attach_rack(&r.pool[c]->pool, r.rack[c]);   /* the rack outlives the pool (RKD4) */
                 r.seq[c].held_count = 0;
             } else ref_voice(&r.pool[c]->pool, &voice[c], &next[c]);
             voice[c] = r.voice[c] = next[c];
@@ -243,7 +262,7 @@ static uint64_t run_script(const char *name, const ma_patch start_patch[PB_CHANN
     if (spread) printf(", %u runs on two threads", spread_runs);
     printf("\n");
     free(out);
-    for (unsigned c = 0; c < PB_CHANNELS; c++) free(r.pool[c]);
+    ref_free(&r);
     pb_engine_destroy(e);
     return he;
 }
@@ -350,10 +369,9 @@ static void bounce_against_reference(const char *name, const ma_patch patch[PB_C
     CHECK(pb_bounce_render(RATE, patch, nullptr, voice, sequence, loops, .5f, &pcm, &frames), "%s", name);
     if (!pcm) return;
     reference r = { .sequence = *sequence };
-    for (unsigned c = 0; c < PB_CHANNELS; c++) {
-        r.pool[c] = pb_pool_build(RATE, &patch[c], &voice[c]);
-        r.voice[c] = voice[c];
-    }
+    bool built = true;
+    for (unsigned c = 0; c < PB_CHANNELS; c++) built = ref_build(&r, c, &patch[c], &voice[c]) && built;
+    CHECK(built, "%s: reference pools", name);
     uint64_t play = pb_sequence_frames(sequence, RATE, loops);
     CHECK(play == want_play, "%s: %llu frames of play, not %llu", name, (unsigned long long)play,
           (unsigned long long)want_play);
@@ -376,7 +394,7 @@ static void bounce_against_reference(const char *name, const ma_patch patch[PB_C
     printf("%s: %zu frames, PCM FNV %016llx\n", name, frames,
            (unsigned long long)tw_fnv1a64(pcm, frames * 2 * sizeof *pcm, 0));
     free(pcm);
-    for (unsigned c = 0; c < PB_CHANNELS; c++) free(r.pool[c]);
+    ref_free(&r);
 }
 
 static void test_bounce(void) {

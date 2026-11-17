@@ -1,12 +1,26 @@
-/* Insert rack: the chain host (RK1), the parametric EQ (RK1b) and the
- * utility block. Freestanding C23: no OS, no libm, no allocation. Plan and
- * decisions: docs/ma-rack-plan.md (RKD1..RKD12, RK1b). */
+/* Insert rack: the chain host (RK1), the parametric EQ (RK1b), the utility
+ * block, and the RK2 kinds: chorus and reverb (the MA3-2 kernels of
+ * ma_effects.c), delay, saturator and compressor. Freestanding C23: no OS,
+ * no libm, no allocation. Plan and decisions: docs/ma-rack-plan.md
+ * (RKD1..RKD12, RK1b, RK2). */
+#include <stddef.h>
+
 #include "ma_internal.h"
 
 static constexpr float FADE_SECONDS = .010f;     /* RKD6 [decision] */
 static constexpr float LOG2_10 = 3.32192809f;
 static constexpr float MAX_RATIO = .45f;         /* frequency clamp, x fs */
 static constexpr float MIN_HZ = 10.0f;
+/* RK2 [decision]: a delay's read distance follows a time change like a tape
+ * machine changing speed; the saturator's tilts turn about one pivot; the
+ * compressor's RMS detector averages the squared signal over one window. */
+static constexpr float DELAY_SLEW_S = .050f;
+static constexpr float TILT_PIVOT_HZ = 650.0f;
+static constexpr float RMS_SECONDS = .010f;
+static constexpr float DB_PER_OCTAVE = 6.02059991f;   /* 20 log10 2 */
+static constexpr float TEMPO_DEFAULT = 120.0f;
+static constexpr float TEMPO_MIN = 20.0f;
+static constexpr float TEMPO_MAX = 400.0f;
 
 static_assert(MA_EQ_BANDS <= 64, "the moved-band mask is a uint64_t");
 
@@ -29,21 +43,89 @@ static const ma_rack_param_info UTILITY_INFO[MA_UTILITY_PARAM_COUNT] = {
     [MA_UTILITY_PAN]     = { -1, 1, 0, MA_RACK_LINEAR },
 };
 
+static const ma_rack_param_info CHORUS_INFO[MA_CHORUS_PARAM_COUNT] = {
+    [MA_CHORUS_DEPTH]   = { 0, 1, .35f, MA_RACK_LINEAR },
+    [MA_CHORUS_RATE_HZ] = { .03f, 20, .25f, MA_RACK_LOG },
+};
+static const ma_rack_param_info REVERB_INFO[MA_REVERB_PARAM_COUNT] = {
+    [MA_REVERB_SIZE]    = { 0, 1, .65f, MA_RACK_LINEAR },
+    [MA_REVERB_DAMPING] = { 0, .99f, .55f, MA_RACK_LINEAR },
+};
+static const ma_rack_param_info DELAY_INFO[MA_DELAY_PARAM_COUNT] = {
+    [MA_DELAY_TIME_S]     = { .001f, 2.7f, .35f, MA_RACK_LOG },
+    [MA_DELAY_SYNC]       = { 0, MA_DELAY_SYNC_COUNT - 1, MA_DELAY_SYNC_FREE, MA_RACK_STEPPED },
+    [MA_DELAY_FEEDBACK]   = { 0, .95f, .35f, MA_RACK_LINEAR },
+    [MA_DELAY_PINGPONG]   = { 0, 1, 0, MA_RACK_TOGGLE },
+    [MA_DELAY_LOWCUT_HZ]  = { 20, 2000, 120, MA_RACK_LOG },
+    [MA_DELAY_HIGHCUT_HZ] = { 500, 20000, 6000, MA_RACK_LOG },
+};
+/* The input gain's initial value puts the rack's measured chord level
+ * (about -20 dBFS, docs/ma-rack-rk1.md) at the knee of the triode curve. */
+static const ma_rack_param_info SATURATOR_INFO[MA_SATURATOR_PARAM_COUNT] = {
+    [MA_SATURATOR_DRIVE]        = { 0, 1, .5f, MA_RACK_LINEAR },
+    [MA_SATURATOR_SHAPE]        = { 0, 1, 0, MA_RACK_LINEAR },
+    [MA_SATURATOR_INPUT_DB]     = { -12, 48, 20, MA_RACK_LINEAR },
+    [MA_SATURATOR_TILT_PRE_DB]  = { -12, 12, 0, MA_RACK_LINEAR },
+    [MA_SATURATOR_TILT_POST_DB] = { -12, 12, 0, MA_RACK_LINEAR },
+    [MA_SATURATOR_OUTPUT_DB]    = { -24, 24, 0, MA_RACK_LINEAR },
+};
+/* The threshold's initial value sits under the rack's measured chord level,
+ * about -31 dBFS RMS (docs/ma-rack-rk1.md), so a new compressor works on a
+ * chord and leaves a single quiet note alone. */
+static const ma_rack_param_info COMPRESSOR_INFO[MA_COMPRESSOR_PARAM_COUNT] = {
+    [MA_COMPRESSOR_DETECTOR]     = { 0, MA_COMPRESSOR_DETECTOR_COUNT - 1, MA_COMPRESSOR_RMS, MA_RACK_STEPPED },
+    [MA_COMPRESSOR_THRESHOLD_DB] = { -60, 0, -36, MA_RACK_LINEAR },
+    [MA_COMPRESSOR_RATIO]        = { 1, 20, 4, MA_RACK_LOG },
+    [MA_COMPRESSOR_KNEE_DB]      = { 0, 24, 6, MA_RACK_LINEAR },
+    [MA_COMPRESSOR_ATTACK_MS]    = { .1f, 200, 10, MA_RACK_LOG },
+    [MA_COMPRESSOR_RELEASE_MS]   = { 5, 2000, 150, MA_RACK_LOG },
+    [MA_COMPRESSOR_MAKEUP_DB]    = { -24, 24, 0, MA_RACK_LINEAR },
+};
+
+/* Per kind: its parameter table (the EQ's is built from two), the mix a new
+ * block starts with, and how many a chain may hold (0 = no cap). */
+static const struct {
+    const ma_rack_param_info *info;
+    unsigned count;
+    float mix;
+    unsigned cap;
+} KIND[MA_RACK_KIND_COUNT] = {
+    [MA_RACK_EQ]         = { nullptr, MA_EQ_PARAM_COUNT, 1, 0 },
+    [MA_RACK_UTILITY]    = { UTILITY_INFO, MA_UTILITY_PARAM_COUNT, 1, 0 },
+    [MA_RACK_CHORUS]     = { CHORUS_INFO, MA_CHORUS_PARAM_COUNT, .30f, MA_RACK_CHORUSES },
+    [MA_RACK_REVERB]     = { REVERB_INFO, MA_REVERB_PARAM_COUNT, .25f, MA_RACK_REVERBS },
+    [MA_RACK_DELAY]      = { DELAY_INFO, MA_DELAY_PARAM_COUNT, .30f, MA_RACK_DELAYS },
+    [MA_RACK_SATURATOR]  = { SATURATOR_INFO, MA_SATURATOR_PARAM_COUNT, 1, 0 },
+    [MA_RACK_COMPRESSOR] = { COMPRESSOR_INFO, MA_COMPRESSOR_PARAM_COUNT, 1, 0 },
+};
+
 unsigned ma_rack_param_count(ma_rack_kind kind) {
-    return kind == MA_RACK_EQ ? MA_EQ_PARAM_COUNT : kind == MA_RACK_UTILITY ? MA_UTILITY_PARAM_COUNT : 0;
+    return kind < MA_RACK_KIND_COUNT ? KIND[kind].count : 0;
+}
+
+float ma_rack_mix_initial(ma_rack_kind kind) {
+    return kind < MA_RACK_KIND_COUNT ? KIND[kind].mix : 0;
 }
 
 static bool info_at(ma_rack_kind kind, unsigned index, ma_rack_param_info *info) {
-    if (kind == MA_RACK_EQ && index < MA_EQ_PARAM_COUNT) {
+    if (kind >= MA_RACK_KIND_COUNT || index >= KIND[kind].count) return false;
+    if (kind == MA_RACK_EQ)
         *info = index < MA_EQ_FIRST_BAND ? EQ_HEAD[index]
               : EQ_FIELD[(index - MA_EQ_FIRST_BAND) % MA_EQ_BAND_FIELDS];
-        return true;
-    }
-    if (kind == MA_RACK_UTILITY && index < MA_UTILITY_PARAM_COUNT) {
-        *info = UTILITY_INFO[index];
-        return true;
-    }
-    return false;
+    else
+        *info = KIND[kind].info[index];
+    return true;
+}
+
+float ma_delay_sync_beats(unsigned sync) {
+    static const float BEATS[MA_DELAY_SYNC_COUNT] = {
+        [MA_DELAY_SYNC_32] = .125f, [MA_DELAY_SYNC_16T] = 1.0f / 6, [MA_DELAY_SYNC_16] = .25f,
+        [MA_DELAY_SYNC_8T] = 1.0f / 3, [MA_DELAY_SYNC_16D] = .375f, [MA_DELAY_SYNC_8] = .5f,
+        [MA_DELAY_SYNC_4T] = 2.0f / 3, [MA_DELAY_SYNC_8D] = .75f, [MA_DELAY_SYNC_4] = 1,
+        [MA_DELAY_SYNC_2T] = 4.0f / 3, [MA_DELAY_SYNC_4D] = 1.5f, [MA_DELAY_SYNC_2] = 2,
+        [MA_DELAY_SYNC_1] = 4,
+    };
+    return sync < MA_DELAY_SYNC_COUNT ? BEATS[sync] : 0;
 }
 
 bool ma_rack_param_info_at(ma_rack_kind kind, unsigned index, ma_rack_param_info *info) {
@@ -68,7 +150,7 @@ void ma_rack_slot_init(ma_rack_slot_spec *slot, ma_rack_kind kind, uint32_t id) 
     slot->id = id;
     slot->kind = kind;
     slot->enabled = true;
-    slot->mix = 1;
+    slot->mix = KIND[kind].mix;
     for (unsigned i = 0; i < count; i++) {
         ma_rack_param_info info = { 0 };
         (void)info_at(kind, i, &info);
@@ -109,9 +191,12 @@ static bool slot_valid(const ma_rack_slot_spec *s) {
 
 bool ma_rack_spec_valid(const ma_rack_spec *spec) {
     if (!spec) return false;
+    unsigned held[MA_RACK_KIND_COUNT] = { 0 };
     for (unsigned i = 0; i < MA_RACK_SLOTS; i++) {
         if (!slot_valid(&spec->slot[i])) return false;
-        if (spec->slot[i].kind == MA_RACK_EMPTY) continue;
+        ma_rack_kind kind = spec->slot[i].kind;
+        if (kind == MA_RACK_EMPTY) continue;
+        if (KIND[kind].cap && ++held[kind] > KIND[kind].cap) return false;   /* RKD8 */
         for (unsigned j = 0; j < i; j++)
             if (spec->slot[j].kind != MA_RACK_EMPTY && spec->slot[j].id == spec->slot[i].id)
                 return false;
@@ -124,6 +209,73 @@ bool ma_rack_spec_empty(const ma_rack_spec *spec) {
     for (unsigned i = 0; i < MA_RACK_SLOTS; i++)
         if (spec->slot[i].kind != MA_RACK_EMPTY) return false;
     return true;
+}
+
+/* --- the session's chorus and reverb as blocks ----------------------------- */
+
+static float bound(float x, float lo, float hi) {
+    if (!finite(x)) return lo;
+    return x < lo ? lo : x > hi ? hi : x;
+}
+
+/* Both kinds have two parameters, in the order of the old controls. */
+static bool session_block(ma_rack_spec *spec, ma_rack_kind kind, uint32_t id, float mix, float a, float b) {
+    if (!spec) return false;
+    mix = bound(mix, 0, 1);
+    a = bound(a, KIND[kind].info[0].minimum, KIND[kind].info[0].maximum);
+    b = bound(b, KIND[kind].info[1].minimum, KIND[kind].info[1].maximum);
+    ma_rack_slot_spec *slot = nullptr;
+    int last = -1;
+    unsigned occupied = 0;
+    for (unsigned i = 0; i < MA_RACK_SLOTS; i++) {
+        if (spec->slot[i].kind == MA_RACK_EMPTY) continue;
+        if (spec->slot[i].kind == kind && !slot) slot = &spec->slot[i];
+        else if (spec->slot[i].id == id) return false;   /* the reserved id is taken */
+        last = (int)i;
+        occupied++;
+    }
+    if (!slot) {
+        if (mix == 0) return true;
+        if (occupied == MA_RACK_SLOTS) return false;
+        if (last == MA_RACK_SLOTS - 1) {            /* close the gaps to free the end */
+            unsigned n = 0;
+            for (unsigned i = 0; i < MA_RACK_SLOTS; i++) {
+                if (spec->slot[i].kind == MA_RACK_EMPTY) continue;
+                if (n != i) {
+                    copy_bytes(&spec->slot[n], &spec->slot[i], sizeof spec->slot[n]);
+                    spec->slot[i] = (ma_rack_slot_spec){ 0 };
+                }
+                n++;
+            }
+            last = (int)n - 1;
+        }
+        unsigned at = (unsigned)(last + 1);
+        if (kind == MA_RACK_CHORUS && last >= 0 && spec->slot[last].kind == MA_RACK_REVERB
+            && spec->slot[last].id == MA_RACK_ID_REVERB) {
+            copy_bytes(&spec->slot[at], &spec->slot[last], sizeof spec->slot[at]);
+            at = (unsigned)last;
+        }
+        slot = &spec->slot[at];
+        ma_rack_slot_init(slot, kind, id);
+    }
+    slot->enabled = true;
+    slot->mix = mix;
+    slot->param[0] = a;
+    slot->param[1] = b;
+    return true;
+}
+
+bool ma_rack_spec_set_chorus(ma_rack_spec *spec, float mix, float depth, float rate_hz) {
+    return session_block(spec, MA_RACK_CHORUS, MA_RACK_ID_CHORUS, mix, depth, rate_hz);
+}
+
+bool ma_rack_spec_set_reverb(ma_rack_spec *spec, float mix, float size, float damping) {
+    return session_block(spec, MA_RACK_REVERB, MA_RACK_ID_REVERB, mix, size, damping);
+}
+
+bool ma_rack_spec_set_effects(ma_rack_spec *spec, ma_chorus_controls c, ma_reverb_controls r) {
+    return (!c.enabled || ma_rack_spec_set_chorus(spec, c.mix, c.depth, c.rate_hz))
+        && (!r.enabled || ma_rack_spec_set_reverb(spec, r.mix, r.size, r.damping));
 }
 
 /* --- smoothers: the voice's 6 ms linear ramp ------------------------------ */
@@ -159,6 +311,23 @@ static float exp2_approx(float x) {
             + t * (1.0f / 120 + t * (1.0f / 720 + t * (1.0f / 5040)))))));
     union { uint32_t u; float f; } scale = { .u = (uint32_t)(i + 127) << 23 };
     return p * 1.41421356f * scale.f;
+}
+
+/* log2(x) for a positive normal x: the exponent, plus 2 atanh(z) / ln 2 with
+ * z = (m - 1) / (m + 1) for the mantissa m in [sqrt(1/2), sqrt 2), by its
+ * odd series to z^9; error below 3e-7. */
+static float log2_approx(float x) {
+    union { float f; uint32_t u; } v = { .f = x };
+    int32_t e = (int32_t)(v.u >> 23 & 255u) - 127;
+    v.u = (v.u & UINT32_C(0x007fffff)) | UINT32_C(0x3f800000);
+    float m = v.f;
+    if (m > 1.41421356f) {
+        m *= .5f;
+        e++;
+    }
+    float z = (m - 1) / (m + 1), z2 = z * z;
+    float p = z * (1 + z2 * (1.0f / 3 + z2 * (1.0f / 5 + z2 * (1.0f / 7 + z2 * (1.0f / 9)))));
+    return (float)e + p * 2.88539008f;
 }
 
 /* tan(pi f / fs) from the repo sine kernel, f clamped to [10 Hz, .45 fs]. */
@@ -314,6 +483,242 @@ static bool utility_tick(ma_rack_block *b, ma_frame x, ma_frame *out) {
     return true;
 }
 
+/* --- RK2 kinds --------------------------------------------------------------- */
+
+/* The value a block's DSP uses for parameter i. */
+static inline float pv(const ma_rack_block *b, unsigned i) { return b->param[i].current; }
+
+/* One TPT one-pole lowpass step, G = g / (1 + g). */
+static float lowpass(float *state, float gain, float x) {
+    float v = (x - *state) * gain;
+    float y = v + *state;
+    *state = snap(y + v);
+    return y;
+}
+
+static float pole_gain(float hz, float fs) {
+    float g = tan_pi(hz, fs);
+    return g / (1.0f + g);
+}
+
+/* The read distance in frames the settings ask for: free time, or a note
+ * value of the host tempo; within the line. */
+static float delay_target(const ma_rack *r, const ma_rack_block *b) {
+    unsigned sync = (unsigned)pv(b, MA_DELAY_SYNC);
+    float seconds = sync ? ma_delay_sync_beats(sync) * 60.0f / r->tempo_bpm : pv(b, MA_DELAY_TIME_S);
+    float frames = seconds * r->sample_rate_hz;
+    return frames < 1 ? 1 : frames > MA_DELAY_CAPACITY - 2 ? MA_DELAY_CAPACITY - 2 : frames;
+}
+
+/* Linear read `whole + frac` frames behind the write index. A frame older
+ * than the restart reads as zero (RKD7). */
+static float delay_tap(const float *line, const ma_rack_delay *d, uint32_t whole, float frac) {
+    constexpr uint32_t MASK = MA_DELAY_CAPACITY - 1;
+    float a = whole <= d->written ? line[(d->write_index - whole) & MASK] : 0.0f;
+    float b = whole + 1 <= d->written ? line[(d->write_index - whole - 1) & MASK] : 0.0f;
+    return a + frac * (b - a);
+}
+
+/* Stereo: each channel feeds itself back. Ping-pong: the mono input goes
+ * into the left line, each line feeds the other, so the echoes alternate
+ * and every one is `feedback` below the one before. The feedback passes the
+ * high cut and the low cut; the first echo does not. */
+static bool delay_tick(ma_rack *r, ma_rack_block *b, ma_frame x, ma_frame *out) {
+    constexpr uint32_t MASK = MA_DELAY_CAPACITY - 1;
+    ma_rack_delay *d = &b->delay;
+    ma_rack_delay_line *line = &r->delay[d->unit];
+    float fs = r->sample_rate_hz, target = delay_target(r, b);
+    if (!d->primed) {
+        d->write_index = d->written = 0;
+        d->low[0] = d->low[1] = d->high[0] = d->high[1] = 0;
+        d->low_hz = d->high_hz = 0;                  /* no setting is 0: both are computed below */
+        d->target = target;
+        d->lag = 0;
+        d->slew = tw_one_pole_coeff(1.0f / (DELAY_SLEW_S * fs));
+        d->primed = true;
+    } else {
+        /* The distance still to go decays by itself, so it reaches zero: a
+         * one-pole on the distance would stall a few frames short in f32. */
+        if (target != d->target) {
+            d->lag += d->target - target;
+            d->target = target;
+        }
+        if (d->lag != 0) {
+            d->lag -= d->slew * d->lag;
+            if (tw_fabsf(d->lag) < 1e-3f) d->lag = 0;
+        }
+    }
+    d->frames = d->target + d->lag;
+    if (d->frames < 1) d->frames = 1;
+    float low_hz = pv(b, MA_DELAY_LOWCUT_HZ), high_hz = pv(b, MA_DELAY_HIGHCUT_HZ);
+    if (low_hz != d->low_hz) {
+        d->low_hz = low_hz;
+        d->low_g = pole_gain(low_hz, fs);
+    }
+    if (high_hz != d->high_hz) {
+        d->high_hz = high_hz;
+        d->high_g = pole_gain(high_hz, fs);
+    }
+    uint32_t whole = (uint32_t)d->frames;
+    float frac = d->frames - (float)whole;
+    float echo[2] = { delay_tap(line->left, d, whole, frac), delay_tap(line->right, d, whole, frac) };
+    float back[2];
+    for (int ch = 0; ch < 2; ch++) {
+        float y = lowpass(&d->high[ch], d->high_g, echo[ch]);
+        back[ch] = y - lowpass(&d->low[ch], d->low_g, y);
+    }
+    float feedback = pv(b, MA_DELAY_FEEDBACK), wl, wr;
+    if (pv(b, MA_DELAY_PINGPONG) != 0) {
+        wl = .5f * (x.left + x.right) * b->gate + feedback * back[1];
+        wr = feedback * back[0];
+    } else {
+        wl = x.left * b->gate + feedback * back[0];
+        wr = x.right * b->gate + feedback * back[1];
+    }
+    if (!finite(wl) || !finite(wr)) {
+        r->sanitizations++;
+        wl = wr = 0;
+    }
+    line->left[d->write_index] = snap(wl);
+    line->right[d->write_index] = snap(wr);
+    d->write_index = (d->write_index + 1) & MASK;
+    if (d->written < MA_DELAY_CAPACITY) d->written++;
+    *out = (ma_frame){ echo[0], echo[1] };
+    return true;
+}
+
+/* A first-order tilt of t dB about the pivot: H = (1 + A s) / (A + s) with
+ * A = 10^(t/40) and s in units of the pivot, so 1/A at DC, A far above, and
+ * unit magnitude at the pivot; the tilt of -t is its exact inverse, in the
+ * sampled filter too, because both share the pivot's warped frequency. As a
+ * one-pole lowpass at A times the pivot: H = lowpass / A + A (x - lowpass). */
+static void tilt_set(ma_rack_tilt *t, float db, float pivot) {
+    t->db = db;
+    t->high = exp2_approx(db * (LOG2_10 / 40));
+    t->low = 1.0f / t->high;
+    float g = t->high * pivot;
+    t->g = g / (1.0f + g);
+}
+
+static float tilt_tick(const ma_rack_tilt *t, float *state, float x) {
+    float low = lowpass(state, t->g, x);
+    return t->db == 0 ? x : t->low * low + t->high * (x - low);
+}
+
+/* Per channel: tilt, into the drive stage at the input gain and back out
+ * at its inverse (the stage has unit small-signal gain, so the block does
+ * too), tilt, output gain. */
+static bool saturator_tick(ma_rack *r, ma_rack_block *b, ma_frame x, ma_frame *out) {
+    ma_rack_saturator *s = &b->saturator;
+    float drive = pv(b, MA_SATURATOR_DRIVE), shape = pv(b, MA_SATURATOR_SHAPE);
+    float input_db = pv(b, MA_SATURATOR_INPUT_DB), output_db = pv(b, MA_SATURATOR_OUTPUT_DB);
+    float pre_db = pv(b, MA_SATURATOR_TILT_PRE_DB), post_db = pv(b, MA_SATURATOR_TILT_POST_DB);
+    if (drive == 0 && pre_db == 0 && post_db == 0 && output_db == 0) {
+        s->primed = false;
+        return false;
+    }
+    if (!s->primed) {
+        for (int ch = 0; ch < 2; ch++) {
+            tw_drive_init(&s->triode[ch], r->sample_rate_hz);
+            tw_drive_init(&s->odd[ch], r->sample_rate_hz);
+            tw_drive_set_kernel(&s->odd[ch], true);
+            s->pre[ch] = s->post[ch] = 0;
+        }
+        s->pivot = tan_pi(TILT_PIVOT_HZ, r->sample_rate_hz);
+        s->drive = 0;                                /* what tw_drive_init set */
+        s->input_db = s->output_db = 0;
+        s->input_gain = s->input_inverse = s->output_gain = 1;
+        tilt_set(&s->tilt_pre, 0, s->pivot);
+        tilt_set(&s->tilt_post, 0, s->pivot);
+        s->primed = true;
+    }
+    if (drive != s->drive) {
+        s->drive = drive;
+        for (int ch = 0; ch < 2; ch++) {
+            tw_drive_set(&s->triode[ch], drive);
+            tw_drive_set(&s->odd[ch], drive);
+        }
+    }
+    if (input_db != s->input_db) {
+        s->input_db = input_db;
+        s->input_gain = exp2_approx(input_db * (LOG2_10 / 20));
+        s->input_inverse = 1.0f / s->input_gain;
+    }
+    if (pre_db != s->tilt_pre.db) tilt_set(&s->tilt_pre, pre_db, s->pivot);
+    if (post_db != s->tilt_post.db) tilt_set(&s->tilt_post, post_db, s->pivot);
+    if (output_db != s->output_db) {
+        s->output_db = output_db;
+        s->output_gain = exp2_approx(output_db * (LOG2_10 / 20));
+    }
+    float v[2] = { x.left, x.right };
+    for (int ch = 0; ch < 2; ch++) {
+        float y = tilt_tick(&s->tilt_pre, &s->pre[ch], v[ch]);
+        if (drive != 0) {
+            float u = y * s->input_gain;
+            float triode = shape < 1 ? tw_drive_tick(&s->triode[ch], u) : 0.0f;
+            float odd = shape > 0 ? tw_drive_tick(&s->odd[ch], u) : 0.0f;
+            y = (shape <= 0 ? triode : shape >= 1 ? odd : triode + shape * (odd - triode)) * s->input_inverse;
+        }
+        y = tilt_tick(&s->tilt_post, &s->post[ch], y);
+        if (output_db != 0) y *= s->output_gain;
+        v[ch] = y;
+    }
+    *out = (ma_frame){ v[0], v[1] };
+    return true;
+}
+
+/* Feed-forward, both channels under one gain: the level in dB (the larger
+ * channel's magnitude, or the mean square of both over RMS_SECONDS), the
+ * static curve with a soft knee (Giannoulis, Massberg and Reiss, JAES 2012),
+ * then attack and release on the gain change in dB. While the change and
+ * the makeup are both 0 dB the frame passes untouched. */
+static bool compressor_tick(ma_rack *r, ma_rack_block *b, ma_frame x, ma_frame *out) {
+    ma_rack_compressor *c = &b->compressor;
+    float ratio = pv(b, MA_COMPRESSOR_RATIO), makeup = pv(b, MA_COMPRESSOR_MAKEUP_DB);
+    if (ratio == 1 && makeup == 0) {
+        c->primed = false;
+        return false;
+    }
+    float fs = r->sample_rate_hz;
+    if (!c->primed) {
+        *c = (ma_rack_compressor){ .rms_c = tw_one_pole_coeff(1.0f / (RMS_SECONDS * fs)), .primed = true };
+    }
+    float attack = pv(b, MA_COMPRESSOR_ATTACK_MS), release = pv(b, MA_COMPRESSOR_RELEASE_MS);
+    if (attack != c->attack_ms) {
+        c->attack_ms = attack;
+        c->attack_c = tw_one_pole_coeff(1000.0f / (attack * fs));
+    }
+    if (release != c->release_ms) {
+        c->release_ms = release;
+        c->release_c = tw_one_pole_coeff(1000.0f / (release * fs));
+    }
+    constexpr float FLOOR_DB = -120.0f;
+    float left = tw_fabsf(x.left), right = tw_fabsf(x.right);
+    float peak = left > right ? left : right;
+    float square = .5f * (x.left * x.left + x.right * x.right);
+    if (!(square < 1e30f)) square = 1e30f;
+    c->mean_square = snap(c->mean_square + c->rms_c * (square - c->mean_square));
+    float level_db;
+    if ((unsigned)pv(b, MA_COMPRESSOR_DETECTOR) == MA_COMPRESSOR_RMS)
+        level_db = c->mean_square > 1e-12f ? log2_approx(c->mean_square) * (.5f * DB_PER_OCTAVE) : FLOOR_DB;
+    else
+        level_db = peak > 1e-6f ? log2_approx(peak) * DB_PER_OCTAVE : FLOOR_DB;
+    float over = level_db - pv(b, MA_COMPRESSOR_THRESHOLD_DB), knee = pv(b, MA_COMPRESSOR_KNEE_DB);
+    float slope = 1.0f / ratio - 1.0f, target;
+    if (2 * over <= -knee) target = 0;
+    else if (2 * over < knee) {
+        float t = over + .5f * knee;
+        target = slope * t * t / (2 * knee);
+    } else target = slope * over;
+    float next = c->reduction_db + (target < c->reduction_db ? c->attack_c : c->release_c) * (target - c->reduction_db);
+    c->reduction_db = target == 0 && next > -1e-4f ? 0.0f : next;
+    float total = c->reduction_db + makeup;
+    if (total == 0) return false;
+    float gain = exp2_approx(total * (LOG2_10 / 20));
+    *out = (ma_frame){ x.left * gain, x.right * gain };
+    return true;
+}
+
 /* --- blocks and the chain ------------------------------------------------- */
 
 static float mix_target(const ma_rack_slot_spec *slot) {
@@ -354,27 +759,62 @@ static unsigned live_count(const ma_rack *r) {
 
 void ma_rack_init(ma_rack *r, float sample_rate_hz) {
     if (!r) return;
-    *r = (ma_rack){ 0 };
+    /* The small state only: the lines are not written here (RKD7, RKD8). */
+    unsigned char *bytes = (unsigned char *)r;
+    for (size_t i = 0; i < offsetof(ma_rack, chorus); i++) bytes[i] = 0;
     r->sample_rate_hz = tw_sample_rate_hz(sample_rate_hz);
     float frames = r->sample_rate_hz * .006f + .5f;
     r->smooth_frames = (uint16_t)(frames < 8 ? 8 : frames > 512 ? 512 : frames);
     float fade = r->sample_rate_hz * FADE_SECONDS + .5f;
     r->fade_step = 1.0f / (float)(uint32_t)fade;
+    r->tempo_bpm = TEMPO_DEFAULT;
+    r->fx.ceiling = MA_RACK_FX_CEILING;
+    /* The lines keep whatever they hold: a restart makes it unreadable. */
+    r->chorus.length = ma_chorus_length(r->sample_rate_hz);
+    r->chorus.controls = (ma_chorus_controls){ 0 };
+    ma_chorus_restart(&r->chorus);
+    r->reverb.length = ma_reverb_length(r->sample_rate_hz);
+    r->reverb.controls = (ma_reverb_controls){ 0 };
+    ma_reverb_restart(&r->reverb);
 }
 
-static void clear_all(ma_rack_block *b) {
-    for (unsigned k = 0; k < MA_EQ_BANDS; k++)
-        if (b->svf[k].active || b->svf[k].weight != 0) {
-            svf_clear(&b->svf[k]);
-            b->svf[k].weight = 0;
-        }
-    b->span = 0;
+void ma_rack_set_tempo(ma_rack *r, float bpm) {
+    if (!r) return;
+    r->tempo_bpm = !finite(bpm) ? TEMPO_DEFAULT : bpm < TEMPO_MIN ? TEMPO_MIN : bpm > TEMPO_MAX ? TEMPO_MAX : bpm;
+}
+
+/* A bypassed block keeps no history: its next sound starts from silence
+ * (RKD3). O(1) for the buffered kinds (RKD7), whose input then comes back
+ * into the line through the gate. */
+static void clear_all(ma_rack *r, ma_rack_block *b) {
+    b->gate = 0;
+    switch (b->kind) {
+    case MA_RACK_EQ:
+        for (unsigned k = 0; k < MA_EQ_BANDS; k++)
+            if (b->svf[k].active || b->svf[k].weight != 0) {
+                svf_clear(&b->svf[k]);
+                b->svf[k].weight = 0;
+            }
+        b->span = 0;
+        break;
+    case MA_RACK_CHORUS: ma_chorus_restart(&r->chorus); break;
+    case MA_RACK_REVERB: ma_reverb_restart(&r->reverb); break;
+    case MA_RACK_DELAY: b->delay.primed = false; break;
+    case MA_RACK_SATURATOR: b->saturator.primed = false; break;
+    case MA_RACK_COMPRESSOR: b->compressor.primed = false; break;
+    default: break;
+    }
 }
 
 void ma_rack_reset(ma_rack *r) {
     if (!r) return;
-    for (unsigned k = 0; k < MA_RACK_SLOTS; k++)
-        for (unsigned s = 0; s < MA_EQ_BANDS; s++) svf_clear(&r->block[k].svf[s]);
+    for (unsigned k = 0; k < MA_RACK_SLOTS; k++) {
+        ma_rack_block *b = &r->block[k];
+        for (unsigned s = 0; s < MA_EQ_BANDS; s++) svf_clear(&b->svf[s]);
+        b->delay.primed = b->saturator.primed = b->compressor.primed = false;
+    }
+    ma_chorus_restart(&r->chorus);
+    ma_reverb_restart(&r->reverb);
 }
 
 /* Adopt the pending chain: same id and kind carry their block over (state
@@ -382,19 +822,38 @@ void ma_rack_reset(ma_rack *r) {
 static void adopt(ma_rack *r) {
     for (unsigned j = 0; j < MA_RACK_SLOTS; j++) r->staging[j] = (ma_rack_block){ 0 };
     unsigned old = live_count(r), n = 0;
+    bool fresh[MA_RACK_SLOTS] = { false };
+    unsigned lines_held = 0;                     /* delay lines of the blocks carried over */
     for (unsigned j = 0; j < MA_RACK_SLOTS; j++) {
         const ma_rack_slot_spec *slot = &r->pending.slot[j];
         if (slot->kind == MA_RACK_EMPTY) continue;
-        ma_rack_block *b = &r->staging[n++];
+        ma_rack_block *b = &r->staging[n];
         unsigned i = 0;
         while (i < old && !(r->block[i].id == slot->id && r->block[i].kind == slot->kind)) i++;
         if (i == old) {
             block_init(b, slot);
+            fresh[n++] = true;
             continue;
         }
         copy_bytes(b, &r->block[i], sizeof *b);
         b->fade_target = 1;
         block_retarget(b, slot, r->smooth_frames);
+        if (b->kind == MA_RACK_DELAY) lines_held |= 1u << b->delay.unit;
+        n++;
+    }
+    /* A new buffered block starts its line over; a new delay takes a line
+     * no carried block holds (the spec's caps leave one free). */
+    for (unsigned k = 0; k < n; k++) {
+        if (!fresh[k]) continue;
+        ma_rack_block *b = &r->staging[k];
+        if (b->kind == MA_RACK_CHORUS) ma_chorus_restart(&r->chorus);
+        else if (b->kind == MA_RACK_REVERB) ma_reverb_restart(&r->reverb);
+        else if (b->kind == MA_RACK_DELAY) {
+            unsigned unit = 0;
+            while (unit + 1 < MA_RACK_DELAYS && (lines_held >> unit & 1u)) unit++;
+            b->delay.unit = (uint8_t)unit;
+            lines_held |= 1u << unit;
+        }
     }
     copy_bytes(r->block, r->staging, sizeof r->block);
     r->has_pending = false;
@@ -500,16 +959,33 @@ static ma_frame block_tick(ma_rack *r, ma_rack_block *b, ma_frame x) {
     }
     float m = mix * b->fade;
     if (m == 0.0f) {
-        clear_all(b);
+        clear_all(r, b);
         return x;
     }
+    if (b->gate < 1 && KIND[b->kind].cap)       /* the buffered kinds are the capped ones */
+        b->gate = b->gate + r->fade_step >= 1 ? 1 : b->gate + r->fade_step;
     ma_frame wet;
-    bool touched = b->kind == MA_RACK_EQ ? eq_tick(r, b, x, &wet, moved)
-                 : b->kind == MA_RACK_UTILITY ? utility_tick(b, x, &wet) : false;
+    bool touched = false;
+    switch (b->kind) {
+    case MA_RACK_EQ: touched = eq_tick(r, b, x, &wet, moved); break;
+    case MA_RACK_UTILITY: touched = utility_tick(b, x, &wet); break;
+    /* The two kernels mix by their own law and bound their own output, so
+     * the slot's mix (with its fades) is the kernel's mix. */
+    case MA_RACK_CHORUS:
+        return ma_chorus_tick(&r->chorus, m, pv(b, MA_CHORUS_DEPTH), pv(b, MA_CHORUS_RATE_HZ),
+                              r->sample_rate_hz, b->gate, &r->fx, x);
+    case MA_RACK_REVERB:
+        return ma_reverb_tick(&r->reverb, m, pv(b, MA_REVERB_SIZE), pv(b, MA_REVERB_DAMPING), b->gate,
+                              &r->fx, x);
+    case MA_RACK_DELAY: touched = delay_tick(r, b, x, &wet); break;
+    case MA_RACK_SATURATOR: touched = saturator_tick(r, b, x, &wet); break;
+    case MA_RACK_COMPRESSOR: touched = compressor_tick(r, b, x, &wet); break;
+    default: break;
+    }
     if (!touched) return x;
     if (!finite(wet.left) || !finite(wet.right)) {
         r->sanitizations++;
-        clear_all(b);
+        clear_all(r, b);
         return x;
     }
     if (m == 1.0f) return wet;
@@ -586,7 +1062,12 @@ void ma_rack_settle(ma_rack *r) {
             smoother_finish(&b->mix);
             for (unsigned i = 0; i < MA_RACK_PARAMS; i++) smoother_finish(&b->param[i]);
             b->moving = false;
+            b->gate = 1;                 /* in place: the lines take the input whole */
             settle_weights(b);
+            if (b->kind == MA_RACK_DELAY && b->delay.primed) {
+                b->delay.target = delay_target(r, b);
+                b->delay.lag = 0;
+            }
         }
         if (r->has_pending) adopt(r);   /* new blocks then settle on pass 2 */
     }

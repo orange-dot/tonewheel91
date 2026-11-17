@@ -7,7 +7,9 @@
  *   rack=1                         optional (wbpatch=2): the child replaces
  *   rack.1.kind=eq ...             the parent's insert rack with these
  *                                  rack.<n>.* keys (none = an empty rack);
- *                                  without rack=1 the rack is inherited
+ *                                  without rack=1 the rack is inherited.
+ *                                  wbpatch=3: the rack holds a kind beyond
+ *                                  eq and utility (RK2)
  *
  * A .wbpatch stores what differs from its parent; flattening resolves the
  * chain (at most eight levels, no cycles) into a full ma_patch.  Parent paths
@@ -49,6 +51,11 @@ bool wb_patch_parent(const char *session_dir, const wb_patch_overrides *patch, m
  * factory parent). */
 bool wb_patch_parent_rack(const char *session_dir, const wb_patch_overrides *patch, ma_patch *parent,
                           ma_rack_spec *rack, wb_error *error);
+/* The chain a part's pool plays (RK2): the patch's insert rack, with the
+ * part's chorus and reverb sends as its chorus and reverb blocks. A send at
+ * zero leaves the patch's own block alone. False when the patch's rack has
+ * no slot left for a send. */
+bool wb_part_rack(const wb_part *part, const ma_rack_spec *patch_rack, ma_rack_spec *chain);
 /* Set or clear (`clear`) one override, keeping catalog order. */
 void wb_patch_override(wb_patch_overrides *patch, unsigned field, double value, bool clear);
 bool wb_patch_overridden(const wb_patch_overrides *patch, unsigned field);

@@ -57,11 +57,12 @@ bool wb_patch_read_overrides(const char *path, wb_patch_overrides *p, wb_error *
         *eq = 0;
         const char *v = eq + 1;
         if (!header) {
-            if (strcmp(line, "wbpatch") || (strcmp(v, "1") && strcmp(v, "2"))) {
-                ok = fail(error, number, "expected wbpatch=1 or wbpatch=2 first");
+            if (strcmp(line, "wbpatch") || (strcmp(v, "1") && strcmp(v, "2") && strcmp(v, "3"))) {
+                ok = fail(error, number, "expected wbpatch=1, 2 or 3 first");
                 break;
             }
             version = (unsigned)(v[0] - '0');
+            rack.basic_only = version < 3;   /* 3: the RK2 rack kinds */
             header = true;
         } else if (!strcmp(line, "rack")) {
             if (version < 2 || p->has_rack || strcmp(v, "1")) {
@@ -108,7 +109,8 @@ bool wb_patch_read_overrides(const char *path, wb_patch_overrides *p, wb_error *
 
 bool wb_patch_write_overrides(const char *path, const wb_patch_overrides *p, wb_error *error) {
     wb_buf b = { 0 };
-    wb_buf_printf(&b, "wbpatch=%d\nname=%s\nparent=%s\n", p->has_rack ? 2 : 1, p->name, p->parent);
+    wb_buf_printf(&b, "wbpatch=%d\nname=%s\nparent=%s\n",
+                  !p->has_rack ? 1 : ma_rack_spec_basic(&p->rack) ? 2 : 3, p->name, p->parent);
     for (unsigned i = 0; i < p->override_count; i++) {
         ma_patch_field_info info;
         if (!ma_patch_field_info_at(p->field[i], &info)) continue;
@@ -120,7 +122,7 @@ bool wb_patch_write_overrides(const char *path, const wb_patch_overrides *p, wb_
         }
     }
     if (p->has_rack) {
-        char text[8192];
+        char text[MA_RACK_TEXT_MAX];
         if (ma_rack_format(&p->rack, text, sizeof text) < 0) {
             wb_buf_free(&b);
             return fail(error, 0, "%s: invalid rack", path);
@@ -217,4 +219,11 @@ bool wb_patch_parent_rack(const char *dir, const wb_patch_overrides *p, ma_patch
                           wb_error *error) {
     *rack = (ma_rack_spec){ 0 };
     return flatten(dir, p->parent, parent, rack, nullptr, 1, error);
+}
+
+bool wb_part_rack(const wb_part *p, const ma_rack_spec *patch_rack, ma_rack_spec *chain) {
+    *chain = *patch_rack;
+    return ma_rack_spec_set_effects(chain,
+        (ma_chorus_controls){ p->chorus > 0, p->chorus, p->chorus_depth, p->chorus_rate_hz },
+        (ma_reverb_controls){ p->reverb > 0, p->reverb, p->reverb_size, p->reverb_damping });
 }

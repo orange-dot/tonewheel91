@@ -53,11 +53,12 @@ static bool analog_mode(void) {
     if(!strcmp(s,"1")) return true;
     fputs("Invalid MA3_PERF_ANALOG\n",stderr); exit(2);
 }
-/* MA3_PERF_RACK=none|empty|eq8|eq64 (default none): the insert rack
+/* MA3_PERF_RACK=none|empty|eq8|eq64|rk2 (default none): the insert rack
  * attached to the pool. empty = attached with no blocks; eq8 = eight EQ
  * blocks of four active bands (low cut, low shelf, bell, high shelf: the RK1
  * shape); eq64 = eight EQ blocks of eight active bands (docs/ma-rack-plan.md,
- * RK1 gate 7). */
+ * RK1 gate 7); rk2 = a saturator, a compressor working on the chord and a
+ * delay, each at its initial settings (docs/ma-rack-rk2.md). */
 static ma_rack bench_rack;
 static int rack_mode(void) {
     const char *s=getenv("MA3_PERF_RACK");
@@ -65,17 +66,26 @@ static int rack_mode(void) {
     if(!strcmp(s,"empty")) return 1;
     if(!strcmp(s,"eq8")) return 2;
     if(!strcmp(s,"eq64")) return 3;
+    if(!strcmp(s,"rk2")) return 4;
     fputs("Invalid MA3_PERF_RACK\n",stderr); exit(2);
 }
-static void attach_rack(void) {
+/* The effect arm's chorus and reverb are two more blocks of that rack
+ * (RK2), after the mode's blocks; an arm needs a free slot, so eq8 and eq64
+ * take the dry arm only. */
+static void attach_rack(unsigned arm) {
     int mode=rack_mode();
-    if(!mode) return;
+    ma_rack_init(&bench_rack,RATE);   /* its counters are reported either way */
+    if(!mode&&!arm) return;
     ma_rack_spec spec={0};
     static const struct { ma_eq_type type; float hz, db, q; } BANDS[8]={
         {MA_EQ_LOW_CUT,30,0,.7071f},{MA_EQ_LOW_SHELF,120,.5f,.7071f},{MA_EQ_BELL,1000,-.5f,.7071f},
         {MA_EQ_HIGH_SHELF,6000,.5f,.7071f},{MA_EQ_BELL,300,.5f,1},{MA_EQ_NOTCH,9000,0,4},
         {MA_EQ_BELL,2500,-.5f,2},{MA_EQ_HIGH_CUT,18000,0,.7071f}};
-    if(mode>=2)
+    if(mode==4) {
+        ma_rack_slot_init(&spec.slot[0],MA_RACK_SATURATOR,1);
+        ma_rack_slot_init(&spec.slot[1],MA_RACK_COMPRESSOR,2);
+        ma_rack_slot_init(&spec.slot[2],MA_RACK_DELAY,3);
+    } else if(mode>=2)
         for(unsigned i=0;i<MA_RACK_SLOTS;i++) {
             ma_rack_slot_init(&spec.slot[i],MA_RACK_EQ,i+1);
             unsigned n=mode==2?4:8;
@@ -87,9 +97,12 @@ static void attach_rack(void) {
                 spec.slot[i].param[MA_EQ_BAND(b,MA_EQ_Q)]=BANDS[b].q;
             }
         }
-    ma_rack_init(&bench_rack,RATE);
-    if(!ma_rack_apply(&bench_rack,&spec)) exit(1);
-    for(unsigned i=0;i<2048;i++) (void)ma_rack_tick(&bench_rack,(ma_frame){0,0}); /* past the fades */
+    if(!ma_rack_spec_set_effects(&spec,(ma_chorus_controls){arm==1||arm==3,.30f,.35f,.25f},
+            (ma_reverb_controls){arm==2||arm==3,.25f,.65f,.55f})
+        || !ma_rack_apply(&bench_rack,&spec)) {
+        fputs("MA3_PERF_RACK leaves no slot for the effect arm\n",stderr); exit(1);
+    }
+    ma_rack_settle(&bench_rack); /* in place, past the fades */
     ma_voice_pool_attach_rack(&pool,&bench_rack);
 }
 static int pmu_event(uint64_t config,int group) {
@@ -177,12 +190,6 @@ static int cmp(const void *a,const void *b) {
 static bool selected(const char *filter,const char *name) {
     return !filter||!strcmp(filter,"all")||!strcmp(filter,name);
 }
-static void arm_effects(unsigned arm) {
-    ma_effects_set_chorus(&pool.effects,(ma_chorus_controls){
-        arm==1||arm==3,.30f,.35f,.25f});
-    ma_effects_set_reverb(&pool.effects,(ma_reverb_controls){
-        arm==2||arm==3,.25f,.65f,.55f});
-}
 static bool populate(unsigned limit,unsigned unison,unsigned scenario) {
     unsigned count=scenario==0?0:scenario==1?1:scenario==2?8:limit;
     if(count%unison) count-=count%unison;
@@ -207,9 +214,8 @@ static uint64_t run_case(const char *patch_name,const ma_patch *patch,unsigned b
     p.bcs_regime=ma_patch_granica.bcs_regime;
     if(bench_analog) { p.vco_analog=1; p.vco_supply=1; }
     if(!ma_voice_pool_init(&pool,RATE,&c,&p)) exit(1);
-    attach_rack();
+    attach_rack(arm);
     if(!populate(limit,unison,scenario)) exit(1);
-    arm_effects(arm);
     unsigned count=scenario==0?0:scenario==1?1:scenario==2?8:limit;
     release_setup(scenario,count);
     ma_frame out[MAX_FRAMES]; double *cpu=calloc(blocks,sizeof *cpu),*wall=calloc(blocks,sizeof *wall);
@@ -274,12 +280,12 @@ static uint64_t run_case(const char *patch_name,const ma_patch *patch,unsigned b
         sum/blocks,cpu[rank_index(blocks,50)],cpu[rank_index(blocks,99)],cpu[blocks-1],
         wall_sum/blocks,wall[rank_index(blocks,50)],wall[rank_index(blocks,99)],wall[blocks-1],
         before.ru_maxrss,after.ru_maxrss,after.ru_minflt-before.ru_minflt,
-        hash,pool.effects.pre_peak?tw_fnv1a64(&pool.effects.pre_peak,sizeof pool.effects.pre_peak,0):0,
-        pool.effects.post_peak?tw_fnv1a64(&pool.effects.post_peak,sizeof pool.effects.post_peak,0):0,
-        pool.diagnostics.steals_released,pool.effects.sanitizations,
+        hash,bench_rack.fx.pre_peak?tw_fnv1a64(&bench_rack.fx.pre_peak,sizeof bench_rack.fx.pre_peak,0):0,
+        bench_rack.fx.post_peak?tw_fnv1a64(&bench_rack.fx.post_peak,sizeof bench_rack.fx.post_peak,0):0,
+        pool.diagnostics.steals_released,bench_rack.fx.sanitizations+bench_rack.sanitizations,
         case_id,warmup,blocks,active_min,active_max,held_max,sustained_max,released_max,
         pool.diagnostics.active_slots,deadline,cpu_misses,wall_misses,
-        pool.effects.clips,pool.output.diagnostics.sanitization_count,
+        bench_rack.fx.clips,pool.output.diagnostics.sanitization_count,
         pool.output.diagnostics.knee_hit_count,pool.output.diagnostics.tiny_flush_count,
         pool.diagnostics.sleeps,ladder_resets);
     if(pmu_fd>=0) printf(",%.1f,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%.1f,%" PRIu64 ",%" PRIu64 ",%u\n",
@@ -315,7 +321,7 @@ int main(int argc,char **argv) {
     cpu_set_t set;CPU_ZERO(&set);if(sched_getaffinity(0,sizeof set,&set)){perror("sched_getaffinity");return 1;}
     struct utsname host;if(uname(&host))return 1;
     printf("# host=%s kernel=%s arch=%s compiler=%s rate=%u warmup=%u blocks=%u pool_bytes=%zu effects_bytes=%zu pid=%ld run_id=%s affinity=",
-        host.nodename,host.release,host.machine,__VERSION__,RATE,!strcmp(argv[1],"--overhead")?0:warmup,blocks,sizeof pool,sizeof pool.effects,
+        host.nodename,host.release,host.machine,__VERSION__,RATE,!strcmp(argv[1],"--overhead")?0:warmup,blocks,sizeof pool,sizeof(ma_chorus)+sizeof(ma_reverb),
         (long)getpid(),getenv("MA3_PERF_RUN_ID")?getenv("MA3_PERF_RUN_ID"):"unspecified");
     for(unsigned i=0;i<CPU_SETSIZE;i++) if(CPU_ISSET(i,&set)) printf("%u;",i);
     puts("");

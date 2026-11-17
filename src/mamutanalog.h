@@ -632,22 +632,31 @@ typedef struct {
 } ma_voice_pool_config;
 extern const ma_voice_pool_config ma_voice_pool_default_config;
 
-/* MA3-2 shared post-output effects. Session controls, outside ma_patch.
- * Disabled freezes state; false->true clears that stage in the setter.
- * Enabled mix zero advances history and returns incoming bits exactly.
- * Call setters on the render thread between frames, never concurrently. */
+/* Chorus and reverb kernels (MA3-2, ma-constants.md section 13). Since RK2
+ * the pool carries neither: both are insert-rack blocks (below). ma_effects
+ * is the same pair as a standalone value for a hosted layer that is not a
+ * pool. Disabled freezes state; false->true restarts that stage in the
+ * setter. Enabled mix zero advances history and returns incoming bits
+ * exactly. Call setters on the render thread between frames. */
 enum { MA_CHORUS_CAPACITY = 15360, MA_REVERB_CAPACITY = 65280 };
 typedef struct { bool enabled; float mix, depth, rate_hz; } ma_chorus_controls;
 typedef struct { bool enabled; float mix, size, damping; } ma_reverb_controls;
+/* Internal writes and wet outputs: non-finite values replaced, values past
+ * the ceiling clipped, and the peaks before and after. The ceiling is 1 for
+ * ma_effects (after the safety) and MA_RACK_FX_CEILING for the rack's
+ * blocks, which sit before master. */
+typedef struct { uint64_t sanitizations, clips; float pre_peak, post_peak, ceiling; } ma_fx_meter;
+/* The lines are never cleared (RKD7): `written` counts the frames written
+ * since the last restart, and anything older reads as zero. */
 typedef struct {
     float left[MA_CHORUS_CAPACITY], right[MA_CHORUS_CAPACITY];
-    unsigned length, write_index;
+    unsigned length, write_index, written;
     float phase;
     ma_chorus_controls controls;
 } ma_chorus;
 typedef struct {
     float left[MA_REVERB_CAPACITY], right[MA_REVERB_CAPACITY];
-    unsigned length, write_index;
+    unsigned length, write_index, written;
     float damped_left, damped_right;
     ma_reverb_controls controls;
 } ma_reverb;
@@ -655,32 +664,61 @@ typedef struct {
     ma_chorus chorus;
     ma_reverb reverb;
     float sample_rate_hz;
-    uint64_t sanitizations, clips;
-    float pre_peak, post_peak;
+    ma_fx_meter meter;
 } ma_effects;
 void ma_effects_init(ma_effects *fx, float sample_rate_hz);
-/* Clears histories/diagnostics while retaining controls and sample rate. */
+/* Restarts histories/diagnostics while retaining controls and sample rate. */
 void ma_effects_reset(ma_effects *fx);
 void ma_effects_set_chorus(ma_effects *fx, ma_chorus_controls controls);
 void ma_effects_set_reverb(ma_effects *fx, ma_reverb_controls controls);
 [[nodiscard]] ma_frame ma_effects_tick(ma_effects *fx, ma_frame input);
 
-/* RK1 insert rack (docs/ma-rack-plan.md): one fixed serial chain of blocks
- * from a closed set of kinds, between the output DC block and the master
- * fader. ma_rack_spec is the small value a host publishes; ma_rack is the
+/* Insert rack (docs/ma-rack-plan.md): one fixed serial chain of blocks from
+ * a closed set of kinds, between the output DC block and the master fader.
+ * ma_rack_spec is the small value a host publishes; ma_rack is the
  * caller-owned DSP state. An empty rack, a disabled block, a block at mix
  * zero and a block at neutral settings all return their input bits. */
 /* EQ (RK1b): up to MA_EQ_BANDS parametric bands in series, then an output
  * gain. The first param[MA_EQ_BAND_COUNT] bands are in use; band b's fields
  * sit at param[MA_EQ_BAND(b, field)], and bands past the count hold their
  * initial values. Utility: gain dB, mid/side width (1 = unchanged), balance.
+ * RK2 kinds:
+ * - chorus (depth, rate) and reverb (size, damping): the MA3-2 kernels; the
+ *   slot's mix is the kernel's own mix law, not a crossfade.
+ * - delay: time in seconds, or a beat division of the host tempo when sync
+ *   is above zero (MA_DELAY_SYNC_* below); feedback through a low cut and a
+ *   high cut; ping-pong. The wet signal is the echoes alone.
+ * - saturator: tilt, input gain, the tw_drive stage (shape 0 = its triode
+ *   curve, 1 = its odd kernel with the harder bound and more third harmonic,
+ *   between = a blend of the two), the input gain taken back out, tilt, output gain. A tilt of t dB lowers the far lows by t/2, raises
+ *   the far highs by t/2 and leaves the pivot's level alone; the opposite
+ *   tilt after the stage undoes it exactly. Drive zero with flat tilts and
+ *   0 dB out is neutral.
+ * - compressor: peak or RMS detector on both channels, threshold, ratio,
+ *   soft knee, attack, release, makeup. Ratio 1 with 0 dB makeup is neutral.
  * One enum, so the counts compare without enum-type warnings. */
 enum {
     MA_EQ_BANDS = 8, MA_EQ_BAND_FIELDS = 5,
     MA_EQ_BAND_COUNT = 0, MA_EQ_OUTPUT_DB = 1, MA_EQ_FIRST_BAND = 2,
     MA_EQ_PARAM_COUNT = MA_EQ_FIRST_BAND + MA_EQ_BANDS * MA_EQ_BAND_FIELDS,
     MA_UTILITY_GAIN_DB = 0, MA_UTILITY_WIDTH = 1, MA_UTILITY_PAN = 2, MA_UTILITY_PARAM_COUNT = 3,
+    MA_CHORUS_DEPTH = 0, MA_CHORUS_RATE_HZ = 1, MA_CHORUS_PARAM_COUNT = 2,
+    MA_REVERB_SIZE = 0, MA_REVERB_DAMPING = 1, MA_REVERB_PARAM_COUNT = 2,
+    MA_DELAY_TIME_S = 0, MA_DELAY_SYNC = 1, MA_DELAY_FEEDBACK = 2, MA_DELAY_PINGPONG = 3,
+    MA_DELAY_LOWCUT_HZ = 4, MA_DELAY_HIGHCUT_HZ = 5, MA_DELAY_PARAM_COUNT = 6,
+    MA_SATURATOR_DRIVE = 0, MA_SATURATOR_SHAPE = 1, MA_SATURATOR_INPUT_DB = 2,
+    MA_SATURATOR_TILT_PRE_DB = 3, MA_SATURATOR_TILT_POST_DB = 4, MA_SATURATOR_OUTPUT_DB = 5,
+    MA_SATURATOR_PARAM_COUNT = 6,
+    MA_COMPRESSOR_DETECTOR = 0, MA_COMPRESSOR_THRESHOLD_DB = 1, MA_COMPRESSOR_RATIO = 2,
+    MA_COMPRESSOR_KNEE_DB = 3, MA_COMPRESSOR_ATTACK_MS = 4, MA_COMPRESSOR_RELEASE_MS = 5,
+    MA_COMPRESSOR_MAKEUP_DB = 6, MA_COMPRESSOR_PARAM_COUNT = 7,
     MA_RACK_SLOTS = 8, MA_RACK_PARAMS = MA_EQ_PARAM_COUNT,
+    /* The rack's chorus and reverb bound their lines at this level: a guard
+     * against runaway, far above any level the pool hands the rack. */
+    MA_RACK_FX_CEILING = 64,
+    /* RKD8: the kinds with large buffers have instance caps. */
+    MA_RACK_CHORUSES = 1, MA_RACK_REVERBS = 1, MA_RACK_DELAYS = 2,
+    MA_DELAY_CAPACITY = 1 << 19,   /* frames per channel: 2.7 s at 192 kHz */
 };
 enum { MA_EQ_TYPE, MA_EQ_FREQ_HZ, MA_EQ_GAIN_DB, MA_EQ_Q, MA_EQ_ON };
 #define MA_EQ_BAND(b, field) (MA_EQ_FIRST_BAND + (b) * MA_EQ_BAND_FIELDS + (field))
@@ -691,10 +729,26 @@ typedef enum : uint8_t {
     MA_EQ_BELL, MA_EQ_LOW_SHELF, MA_EQ_HIGH_SHELF, MA_EQ_LOW_CUT, MA_EQ_HIGH_CUT, MA_EQ_NOTCH,
     MA_EQ_TYPE_COUNT,
 } ma_eq_type;
+/* Delay sync: 0 is free time in seconds; the others are note values of the
+ * host tempo (T = triplet, D = dotted). */
+typedef enum : uint8_t {
+    MA_DELAY_SYNC_FREE, MA_DELAY_SYNC_32, MA_DELAY_SYNC_16T, MA_DELAY_SYNC_16, MA_DELAY_SYNC_8T,
+    MA_DELAY_SYNC_16D, MA_DELAY_SYNC_8, MA_DELAY_SYNC_4T, MA_DELAY_SYNC_8D, MA_DELAY_SYNC_4,
+    MA_DELAY_SYNC_2T, MA_DELAY_SYNC_4D, MA_DELAY_SYNC_2, MA_DELAY_SYNC_1,
+    MA_DELAY_SYNC_COUNT,
+} ma_delay_sync;
+/* Quarter notes in a sync value; 0 for free or out of range. */
+[[nodiscard]] float ma_delay_sync_beats(unsigned sync);
+typedef enum : uint8_t { MA_COMPRESSOR_PEAK, MA_COMPRESSOR_RMS, MA_COMPRESSOR_DETECTOR_COUNT } ma_compressor_detector;
 typedef enum : uint8_t {
     MA_RACK_EMPTY = 0,
     MA_RACK_EQ = 1,
     MA_RACK_UTILITY = 2,
+    MA_RACK_CHORUS = 3,
+    MA_RACK_REVERB = 4,
+    MA_RACK_DELAY = 5,
+    MA_RACK_SATURATOR = 6,
+    MA_RACK_COMPRESSOR = 7,
     MA_RACK_KIND_COUNT,
 } ma_rack_kind;
 /* STEPPED: integer values (the band count, a band's type); no ramp. */
@@ -706,6 +760,9 @@ typedef struct {
 [[nodiscard]] unsigned ma_rack_param_count(ma_rack_kind kind);
 [[nodiscard]] bool ma_rack_param_info_at(ma_rack_kind kind, unsigned index,
                                          ma_rack_param_info *info);
+/* The mix a new block of `kind` starts with: 1, except chorus .30, reverb
+ * .25 and delay .30. */
+[[nodiscard]] float ma_rack_mix_initial(ma_rack_kind kind);
 
 typedef struct {
     uint32_t id;                   /* nonzero and unique while occupied */
@@ -715,13 +772,25 @@ typedef struct {
     float param[MA_RACK_PARAMS];   /* per-kind layout above; rest unused, 0 */
 } ma_rack_slot_spec;
 typedef struct { ma_rack_slot_spec slot[MA_RACK_SLOTS]; } ma_rack_spec;
-/* An occupied, enabled slot of `kind` at its initial parameters, mix 1. */
+/* An occupied, enabled slot of `kind` at its initial parameters and mix. */
 void ma_rack_slot_init(ma_rack_slot_spec *slot, ma_rack_kind kind, uint32_t id);
-/* Ids unique and nonzero, kinds known, every value finite and in range,
- * stepped and toggle values whole, unused parameters zero, EQ bands past
- * the count at their initial values. Empty slots must be all zero. */
+/* Ids unique and nonzero, kinds known and within their instance caps, every
+ * value finite and in range, stepped and toggle values whole, unused
+ * parameters zero, EQ bands past the count at their initial values. Empty
+ * slots must be all zero. */
 [[nodiscard]] bool ma_rack_spec_valid(const ma_rack_spec *spec);
 [[nodiscard]] bool ma_rack_spec_empty(const ma_rack_spec *spec);
+/* A session's chorus or reverb as a rack block (RK2: CC107/108, the hosts'
+ * chorus and reverb switches). If the spec has a block of that kind, it is
+ * enabled and takes the values. If it has none and mix is above zero, one is
+ * added after the last block, the chorus before a reverb added this way,
+ * under the reserved id below. Values clamp to the parameter ranges. False,
+ * and nothing changed, when all eight slots are taken. */
+enum : uint32_t { MA_RACK_ID_CHORUS = 0xfffffff1u, MA_RACK_ID_REVERB = 0xfffffff2u };
+bool ma_rack_spec_set_chorus(ma_rack_spec *spec, float mix, float depth, float rate_hz);
+bool ma_rack_spec_set_reverb(ma_rack_spec *spec, float mix, float size, float damping);
+/* Both from control values; a stage that is not enabled is left alone. */
+bool ma_rack_spec_set_effects(ma_rack_spec *spec, ma_chorus_controls chorus, ma_reverb_controls reverb);
 
 typedef struct {
     float s1[2], s2[2];            /* TPT integrator states, L/R */
@@ -730,6 +799,34 @@ typedef struct {
     uint8_t type;                  /* the shape the coefficients hold */
     bool active;
 } ma_rack_svf;
+/* The small state of the RK2 kinds lives in the block; `primed` is false
+ * until the block's first tick after a bypass or a restart, which sets the
+ * coefficients and starts from silence. A value beside a coefficient is the
+ * setting that coefficient was computed for. */
+typedef struct {
+    uint32_t write_index, written; /* RKD7: frames written since the restart */
+    float target, lag;             /* the time asked for in frames; what is still to go */
+    float frames;                  /* the read distance: target + lag */
+    float low[2], high[2];         /* feedback low-cut and high-cut states */
+    float low_hz, low_g, high_hz, high_g, slew;
+    uint8_t unit;                  /* which of the rack's lines */
+    bool primed;
+} ma_rack_delay;
+typedef struct { float db, low, high, g; } ma_rack_tilt;   /* gains below and above, pole gain */
+typedef struct {
+    tw_drive triode[2], odd[2];
+    float pre[2], post[2];         /* tilt pole states */
+    float pivot;                   /* tan(pi pivot / fs) */
+    float drive, input_db, input_gain, input_inverse;
+    ma_rack_tilt tilt_pre, tilt_post;
+    float output_db, output_gain;
+    bool primed;
+} ma_rack_saturator;
+typedef struct {
+    float mean_square, reduction_db;
+    float attack_ms, attack_c, release_ms, release_c, rms_c;
+    bool primed;
+} ma_rack_compressor;
 typedef struct {
     uint32_t id;
     ma_rack_kind kind;
@@ -737,10 +834,15 @@ typedef struct {
     bool moving;                   /* some parameter ramp may still run */
     uint8_t span;                  /* EQ bands to visit: in use or fading */
     float fade, fade_target;       /* structural crossfade, RKD6 */
+    float gate;                    /* buffered kinds: input into the line, 0..1 after a bypass */
     ma_smoother mix;               /* target is mix, or 0 while disabled */
     ma_smoother param[MA_RACK_PARAMS];
     ma_rack_svf svf[MA_EQ_BANDS];
+    ma_rack_delay delay;
+    ma_rack_saturator saturator;
+    ma_rack_compressor compressor;
 } ma_rack_block;
+typedef struct { float left[MA_DELAY_CAPACITY], right[MA_DELAY_CAPACITY]; } ma_rack_delay_line;
 typedef struct {
     ma_rack_block block[MA_RACK_SLOTS];  /* chain order; live ones first */
     ma_rack_block staging[MA_RACK_SLOTS]; /* adoption scratch (one rack per thread) */
@@ -748,9 +850,17 @@ typedef struct {
     bool has_pending;
     float sample_rate_hz;
     float fade_step;
+    float tempo_bpm;               /* for synced delays; ma_rack_set_tempo */
     uint16_t smooth_frames;
     uint64_t applies, structural_changes, adoptions, sanitizations;
     uint64_t lane_runs;            /* EQ runs taken by the AVX2 wavefront */
+    ma_fx_meter fx;                /* the chorus and reverb kernels' meter */
+    /* RKD8: the large lines, one set per rack whatever the chain holds.
+     * ma_rack_init does not touch them (RKD7), so memory a chain never uses
+     * is never written. Everything above this line is the small state. */
+    ma_chorus chorus;
+    ma_reverb reverb;
+    ma_rack_delay_line delay[MA_RACK_DELAYS];
 } ma_rack;
 void ma_rack_init(ma_rack *rack, float sample_rate_hz);
 /* Clears every block's history; keeps the chain and its targets. */
@@ -758,6 +868,9 @@ void ma_rack_reset(ma_rack *rack);
 /* Between frames on the render thread. An invalid spec changes nothing and
  * returns false. Same id and kind keep their state (RKD6). */
 bool ma_rack_apply(ma_rack *rack, const ma_rack_spec *spec);
+/* The host's tempo in quarter notes per minute, for synced delays: clamped
+ * to [20, 400], 120 after init and for a non-finite value. Between frames. */
+void ma_rack_set_tempo(ma_rack *rack, float bpm);
 [[nodiscard]] ma_frame ma_rack_tick(ma_rack *rack, ma_frame input);
 /* True while a fade or a parameter ramp is still moving. */
 [[nodiscard]] bool ma_rack_moving(const ma_rack *rack);
@@ -855,7 +968,6 @@ typedef struct {
     ma_output_state output;
     ma_voice_pool_config config;
     ma_pool_diagnostics diagnostics;
-    ma_effects effects;
     ma_rack *rack;                 /* caller-owned, attached after init; NULL = none */
     float bend[16], pressure[16], mod_wheel[16];
     bool sustain[16];
@@ -904,7 +1016,8 @@ void ma_voice_pool_set_output(ma_voice_pool *pool, float drive, float width,
     float crossfeed, float master);
 /* Insert the rack between the output DC block and the master fader. Init
  * detaches it; reset keeps it. NULL detaches. The rack's own state is never
- * touched by the pool. */
+ * touched by the pool. Since RK2 the output chain is body, DC block, rack,
+ * master, safety: chorus and reverb are rack blocks. */
 void ma_voice_pool_attach_rack(ma_voice_pool *pool, ma_rack *rack);
 [[nodiscard]] ma_frame ma_voice_pool_tick(ma_voice_pool *pool);
 /* Events are dispatched by the caller at block boundaries. */

@@ -8,6 +8,15 @@
 
 static ma_effects fx, saved;
 static ma_voice_pool pool, dry_pool;
+/* Since RK2 the pool's chorus and reverb are blocks of its insert rack. */
+static ma_rack rack;
+static ma_rack_spec chain;
+
+static void set_chain(float chorus_mix, float reverb_mix) {
+    assert(ma_rack_spec_set_chorus(&chain, chorus_mix, .35f, .25f));
+    assert(ma_rack_spec_set_reverb(&chain, reverb_mix, .65f, .55f));
+    assert(ma_rack_apply(&rack, &chain));
+}
 static ma_midi_renderer renderer;
 static ma_chorus_controls chorus = {true, .3f, .35f, .25f};
 static ma_reverb_controls reverb = {true, .25f, .65f, .55f};
@@ -33,7 +42,7 @@ static void bypass(void) {
         assert(memcmp(&f, &inputs[i], sizeof f) == 0);
     }
     assert(fx.chorus.write_index == 3 && fx.reverb.write_index == 3);
-    assert(fx.sanitizations > 0);
+    assert(fx.meter.sanitizations > 0);
     ma_effects_set_chorus(&fx, chorus); ma_effects_set_reverb(&fx, reverb);
     assert(fx.chorus.write_index == 3 && fx.reverb.write_index == 3);
     for (unsigned i = 0; i < 24000; i++) {
@@ -56,7 +65,7 @@ static void bypass(void) {
     ma_effects_reset(&fx);
     assert(fx.chorus.controls.enabled && fx.reverb.controls.enabled);
     assert(fx.chorus.write_index == 0 && fx.reverb.write_index == 0);
-    assert(fx.chorus.phase == 0 && fx.clips == 0 && fx.pre_peak == 0);
+    assert(fx.chorus.phase == 0 && fx.meter.clips == 0 && fx.meter.pre_peak == 0);
 }
 
 static void impulse(void) {
@@ -121,31 +130,43 @@ static void pool_tail(void) {
     config.limit = 1;
     assert(ma_voice_pool_init(&pool, 48000, &config, &patch));
     dry_pool = pool;
-    ma_effects_set_chorus(&pool.effects, (ma_chorus_controls){true, 0, .35f, .25f});
-    ma_effects_set_reverb(&pool.effects, (ma_reverb_controls){true, 0, .65f, .55f});
+    /* Blocks at mix zero run no DSP and return the dry bits (RKD3). */
+    chain = (ma_rack_spec){0};
+    ma_rack_init(&rack, 48000);
+    set_chain(.3f, .25f);
+    set_chain(0, 0);
+    ma_rack_settle(&rack);
+    ma_voice_pool_attach_rack(&pool, &rack);
     assert(ma_voice_pool_note_on(&pool, 0, 60, 100));
     assert(ma_voice_pool_note_on(&dry_pool, 0, 60, 100));
     for (unsigned i = 0; i < 12000; i++) {
         ma_frame wet = ma_voice_pool_tick(&pool), dry = ma_voice_pool_tick(&dry_pool);
         assert(memcmp(&wet, &dry, sizeof wet) == 0);
     }
-    /* Mix changes rejoin running history; panic must not reset that history. */
-    ma_effects_set_chorus(&pool.effects, chorus);
-    ma_effects_set_reverb(&pool.effects, reverb);
-    saved = pool.effects;
+    assert(rack.chorus.written == 0 && rack.reverb.written == 0);
+    /* A mix above zero starts the lines from silence; panic must not
+     * restart them. */
+    set_chain(chorus.mix, reverb.mix);
+    for (unsigned i = 0; i < 4800; i++) safe(ma_voice_pool_tick(&pool));
+    unsigned written = rack.reverb.written, at = rack.reverb.write_index;
+    float phase = rack.chorus.phase;
+    assert(written == 4800 && rack.chorus.written == rack.chorus.length);   /* 80 ms: the chorus line is full */
     ma_voice_pool_panic(&pool);
-    assert(memcmp(&pool.effects, &saved, sizeof saved) == 0);
+    assert(rack.reverb.written == written && rack.reverb.write_index == at && rack.chorus.phase == phase);
     bool tail = false;
     for (unsigned i = 0; i < 48000; i++) {
         ma_frame f = ma_voice_pool_tick(&pool); safe(f);
         if (i > 24000 && !pool.diagnostics.active_slots && fabsf(f.left) > 1e-6f) tail = true;
     }
     assert(tail && pool.diagnostics.active_slots == 0);
+    /* A patch edit and a pool reset leave the rack's chain and state alone:
+     * the rack is the host's, and its own reset ends the tails. */
     ma_voice_pool_set_patch(&pool, &ma_patch_granica);
-    assert(pool.effects.reverb.controls.mix == reverb.mix);
     ma_voice_pool_reset(&pool);
-    assert(pool.effects.chorus.controls.mix == chorus.mix);
-    assert(pool.effects.reverb.controls.enabled && pool.effects.reverb.write_index == 0);
+    assert(pool.rack == &rack && rack.block[0].kind == MA_RACK_CHORUS && rack.block[1].kind == MA_RACK_REVERB);
+    assert(rack.block[1].mix.target == reverb.mix && rack.reverb.written > 0);
+    ma_rack_reset(&rack);
+    assert(rack.reverb.written == 0 && rack.chorus.written == 0);
     for (unsigned i = 0; i < 24000; i++) {
         ma_frame f = ma_voice_pool_tick(&pool); assert(f.left == 0 && f.right == 0);
     }
@@ -162,19 +183,23 @@ static void midi_twin(void) {
     ma_voice_pool_config config = ma_voice_pool_default_config; config.limit = 8;
     static float expected[48000 * 2], pcm[48000 * 2];
     assert(ma_voice_pool_init(&pool, 48000, &config, &ma_patch_tepih));
+    chain = (ma_rack_spec){0};
+    ma_rack_init(&rack, 48000);
+    ma_voice_pool_attach_rack(&pool, &rack);
     size_t next = 0;
     for (unsigned i = 0; i < 48000; i++) {
         while (next < 8 && at[next] == i) {
             smf_event e = events[next++];
             if (e.d1 == 107) {
-                ma_chorus_controls c = chorus; c.mix = (float)e.d2 / 127;
-                ma_effects_set_chorus(&pool.effects, c);
+                assert(ma_rack_spec_set_chorus(&chain, (float)e.d2 / 127, chorus.depth, chorus.rate_hz));
+                assert(ma_rack_apply(&rack, &chain));
             } else if (e.d1 == 108) {
-                ma_reverb_controls r = reverb; r.mix = (float)e.d2 / 127;
-                ma_effects_set_reverb(&pool.effects, r);
+                assert(ma_rack_spec_set_reverb(&chain, (float)e.d2 / 127, reverb.size, reverb.damping));
+                assert(ma_rack_apply(&rack, &chain));
             } else if (e.status == 0x90) assert(ma_voice_pool_note_on(&pool, 0, e.d1, e.d2));
             else ma_voice_pool_panic(&pool);
         }
+        if (i == 0) ma_rack_settle(&rack);   /* the renderer's rule for frame zero */
         ma_frame f = ma_voice_pool_tick(&pool);
         expected[2*i] = f.left; expected[2*i+1] = f.right;
     }
@@ -189,9 +214,11 @@ static void midi_twin(void) {
         assert(memcmp(expected, pcm, sizeof pcm) == 0);
     }
     uint64_t hash = tw_fnv1a64(pcm, sizeof pcm, 0);
-    /* Re-pinned 2026-11-10 for the triangle integrator gain (was
-     * e95149977684d494; docs/ma-source-fix-20261110.md). */
-    assert(hash == UINT64_C(0xeca2f01ea356eda1));
+    /* Re-pinned 2026-11-16 for RK2 (docs/ma-rack-rk2.md, RKD9): chorus and
+     * reverb are rack blocks before master and safety, and come in through
+     * the rack's mix ramp and fades (was eca2f01ea356eda1; before that
+     * e95149977684d494, docs/ma-source-fix-20261110.md). */
+    assert(hash == UINT64_C(0x4654fccc1c01a1db));
     printf("ma3-2 MIDI/direct wet twin=%016" PRIx64 "\n", hash);
 }
 
@@ -211,5 +238,6 @@ int main(void) {
         printf("ma3-2 effects rate=%u hostile=%u hash=%016" PRIx64 "\n", rates[r], extreme, hash);
     }
     printf("ma3-2: bypass, rejoin, taps, tails, hostile controls, block twins pass; "
-        "effects=%zu pool=%zu voice=%zu bytes\n", sizeof(ma_effects), sizeof(ma_voice_pool), sizeof(ma_synth));
+        "effects=%zu rack=%zu pool=%zu voice=%zu bytes\n", sizeof(ma_effects), sizeof(ma_rack),
+        sizeof(ma_voice_pool), sizeof(ma_synth));
 }

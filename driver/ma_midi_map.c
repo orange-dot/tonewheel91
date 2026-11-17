@@ -7,7 +7,34 @@ bool ma_midi_map_init(ma_midi_map *map, float rate,
     map->patch = patch ? *patch : ma_patch_tepih;
     map->stats = (ma_midi_stats){0};
     map->channel_mask = channels;
+    map->rack_spec = (ma_rack_spec){0};
+    ma_rack_init(&map->rack, map->pool.control.sample_rate_hz);
+    ma_voice_pool_attach_rack(&map->pool, &map->rack);
     return true;
+}
+
+bool ma_midi_map_set_rack(ma_midi_map *map, const ma_rack_spec *spec, bool settle) {
+    if (!ma_rack_apply(&map->rack, spec)) return false;
+    map->rack_spec = *spec;
+    if (settle) ma_rack_settle(&map->rack);
+    return true;
+}
+
+/* CC107 and CC108 set the mix of the chain's chorus or reverb block and keep
+ * its other values; without such a block one is added at the old defaults.
+ * A full chain leaves the CC ignored. */
+static bool session_mix(ma_midi_map *map, ma_rack_kind kind, float mix) {
+    ma_rack_spec next = map->rack_spec;
+    float a = kind == MA_RACK_CHORUS ? .35f : .65f, b = kind == MA_RACK_CHORUS ? .25f : .55f;
+    for (unsigned i = 0; i < MA_RACK_SLOTS; i++)
+        if (next.slot[i].kind == kind) {
+            a = next.slot[i].param[0];
+            b = next.slot[i].param[1];
+            break;
+        }
+    bool ok = kind == MA_RACK_CHORUS ? ma_rack_spec_set_chorus(&next, mix, a, b)
+                                     : ma_rack_spec_set_reverb(&next, mix, a, b);
+    return ok && ma_midi_map_set_rack(map, &next, false);
 }
 
 static bool control_change(ma_midi_map *map, uint8_t ch, uint8_t cc, uint8_t v) {
@@ -35,18 +62,8 @@ static bool control_change(ma_midi_map *map, uint8_t ch, uint8_t cc, uint8_t v) 
         ma_voice_pool_set_lfo(pool, pool->control.lfo.depth, MA_MIDI_LFO_HZ[v]);
         return true;
     case 93: ma_voice_pool_set_character(pool, unit); return true;
-    case 107: {
-        ma_chorus_controls c = pool->effects.chorus.controls;
-        c.enabled = true; c.mix = unit;
-        ma_effects_set_chorus(&pool->effects, c);
-        return true;
-    }
-    case 108: {
-        ma_reverb_controls c = pool->effects.reverb.controls;
-        c.enabled = true; c.mix = unit;
-        ma_effects_set_reverb(&pool->effects, c);
-        return true;
-    }
+    case 107: return session_mix(map, MA_RACK_CHORUS, unit);
+    case 108: return session_mix(map, MA_RACK_REVERB, unit);
     case 120: case 123: ma_voice_pool_panic(pool); return true;
     case 7: p->master_level = unit; break;
     case 14: p->vco2_interval = (48 * v + 63) / 127 - 24; break;

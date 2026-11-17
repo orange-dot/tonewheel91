@@ -213,8 +213,7 @@ typedef struct {
     wb_epset epset;
     ma_patch patch;
     ma_voice_pool_config config;
-    ma_chorus_controls chorus;
-    ma_reverb_controls reverb;
+    ma_rack_spec rack;     /* the patch's rack with the part's chorus and reverb */
     unsigned stem;
 } part_setup;
 
@@ -250,8 +249,8 @@ static bool setup_parts(const wb_session *s, const char *dir, part_setup *setup,
             : p->seed;
         x->config.engine = s->head.engine == WB_ENGINE_SCALAR ? MA_POOL_ENGINE_SCALAR
                                                               : MA_POOL_ENGINE_AUTO;
-        x->chorus = (ma_chorus_controls){ p->chorus > 0, p->chorus, p->chorus_depth, p->chorus_rate_hz };
-        x->reverb = (ma_reverb_controls){ p->reverb > 0, p->reverb, p->reverb_size, p->reverb_damping };
+        if (!wb_part_rack(p, &doc.rack, &x->rack))
+            return fail(error, "part '%s': the patch's rack has no slot left for the part's chorus or reverb", p->id);
         int stem = wb_find_stem(s, p->stem);
         if (stem < 0) return fail(error, "part '%s': undefined stem", p->id);
         x->stem = (unsigned)stem;
@@ -570,10 +569,12 @@ bool wb_render(const wb_session *s, const char *dir, const wb_score *score,
 
     part_setup *setup = calloc(WB_PARTS, sizeof *setup);
     ma_voice_pool *pools = calloc(s->part_count, sizeof *pools);
+    /* One rack per pool; its lines are written only by the blocks in use. */
+    ma_rack *racks = calloc(s->part_count, sizeof *racks);
     lane_plan *plan = calloc(WB_LANES, sizeof *plan);
     float (*pcm)[2 * BLOCK] = calloc(outputs, sizeof *pcm);
     wav_f32_writer *writers = calloc(outputs, sizeof *writers);
-    bool ok = setup && pools && plan && pcm && writers;
+    bool ok = setup && pools && racks && plan && pcm && writers;
     if (!ok) fail(error, "out of memory");
     ok = ok && setup_parts(s, dir, setup, error) && plan_lanes(s, plan, error);
     if (ok && options->engine_scalar)
@@ -593,8 +594,13 @@ bool wb_render(const wb_session *s, const char *dir, const wb_score *score,
             break;
         }
         ma_voice_pool_set_character(&pools[p], s->part[p].character);
-        ma_effects_set_chorus(&pools[p].effects, setup[p].chorus);
-        ma_effects_set_reverb(&pools[p].effects, setup[p].reverb);
+        ma_rack_init(&racks[p], (float)s->head.rate);
+        if (!ma_rack_apply(&racks[p], &setup[p].rack)) {
+            ok = fail(error, "part '%s': invalid rack", s->part[p].id);
+            break;
+        }
+        ma_rack_settle(&racks[p]);   /* a render starts with the rack in place */
+        ma_voice_pool_attach_rack(&pools[p], &racks[p]);
     }
 
     unsigned opened = 0;
@@ -819,7 +825,7 @@ bool wb_render(const wb_session *s, const char *dir, const wb_score *score,
             options->progress(options->user, at, frames);
     }
 
-    for (unsigned p = 0; p < s->part_count && pools; p++) {
+    for (unsigned p = 0; p < s->part_count && pools && racks; p++) {
         wb_part_report *r = &report->part[p];
         if (engines[p].kind) {
             r->out_of_compass = wb_engine_out_of_compass(&engines[p]);
@@ -832,11 +838,11 @@ bool wb_render(const wb_session *s, const char *dir, const wb_score *score,
         r->steals_sustained = d.steals_sustained;
         r->steals_held = d.steals_held;
         r->sleeps = d.sleeps;
-        r->fx_clips = pools[p].effects.clips;
-        r->fx_sanitizations = pools[p].effects.sanitizations;
+        r->fx_clips = racks[p].fx.clips;
+        r->fx_sanitizations = racks[p].fx.sanitizations + racks[p].sanitizations;
         r->active_at_end = d.active_slots;
         if (!ok || (options->solo_part && p != options->only_part)) continue;
-        if (d.steals_held || d.steals_sustained || pools[p].effects.sanitizations)
+        if (d.steals_held || d.steals_sustained || r->fx_sanitizations)
             ok = fail(error, "part '%s': held/sustained steal or FX sanitization", s->part[p].id);
         else if (frames == total && !begin && d.active_slots)
             ok = fail(error, "part '%s': still sounding at the end", s->part[p].id);
@@ -866,6 +872,7 @@ bool wb_render(const wb_session *s, const char *dir, const wb_score *score,
     report->wall_seconds = now_seconds() - started;
     free(setup);
     free(pools);
+    free(racks);
     free(plan);
     free(pcm);
     free(writers);

@@ -9,6 +9,7 @@
 
 enum { RATE = 48000, FRAMES = RATE * 8, ACTIVE = RATE * 4, ARMS = 4 };
 static ma_voice_pool pool;
+static ma_rack rack;   /* chorus and reverb are rack blocks since RK2 */
 static const char *arms[] = {"dry", "chorus", "reverb", "wet"};
 static void chord(unsigned offset) {
     const uint8_t notes[] = {48, 55, 60, 64};
@@ -19,10 +20,13 @@ static void render(const ma_patch *patch, unsigned arm, float *pcm) {
     ma_voice_pool_config config = ma_voice_pool_default_config;
     config.limit = 16; config.unison_count = 2;
     if (!ma_voice_pool_init(&pool, RATE, &config, patch)) abort();
-    if (arm == 1 || arm == 3)
-        ma_effects_set_chorus(&pool.effects, (ma_chorus_controls){true, .30f, .35f, .25f});
-    if (arm == 2 || arm == 3)
-        ma_effects_set_reverb(&pool.effects, (ma_reverb_controls){true, .25f, .65f, .55f});
+    ma_rack_spec chain = {0};
+    ma_rack_init(&rack, RATE);
+    if (!ma_rack_spec_set_effects(&chain, (ma_chorus_controls){arm == 1 || arm == 3, .30f, .35f, .25f},
+            (ma_reverb_controls){arm == 2 || arm == 3, .25f, .65f, .55f})
+        || !ma_rack_apply(&rack, &chain)) abort();
+    ma_rack_settle(&rack);
+    ma_voice_pool_attach_rack(&pool, &rack);
     for (unsigned i = 0; i < FRAMES; i++) {
         if (i == 0) chord(0);
         if (i == RATE) {
@@ -51,8 +55,8 @@ int main(int argc, char **argv) {
     if (!repeat || !pcm[0] || !pcm[1] || !pcm[2] || !pcm[3]) goto done;
     const ma_patch *patches[] = {&ma_patch_tepih, &ma_patch_granica};
     const char *names[] = {"tepih", "granica"};
-    printf("effects=%zu pool=%zu bytes; 48kHz limit16 unison2; active RMS window 0..4s\n",
-        sizeof(ma_effects), sizeof(ma_voice_pool));
+    printf("chorus+reverb=%zu pool=%zu bytes; 48kHz limit16 unison2; active RMS window 0..4s\n",
+        sizeof(ma_chorus) + sizeof(ma_reverb), sizeof(ma_voice_pool));
     for (unsigned p = 0; p < 2; p++) {
         double rms[ARMS], peak[ARMS], target = pow(10, -22.0/20);
         for (unsigned a = 0; a < ARMS; a++) {

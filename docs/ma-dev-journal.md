@@ -35,8 +35,10 @@ Updated 2026-11-16, at `0e8cccb`.
   seventh factory patch, is the one that uses them.
 - **Insert rack** (`docs/ma-rack-plan.md`): RK1 and RK1b (8-band EQ, its
   editor, utility, `.mapatch` v5) are committed (`94cff34`). RK2 (chorus
-  and reverb into the rack, delay, saturator, compressor) is next and
-  operator-confirmed.
+  and reverb as rack blocks before master and safety, delay, saturator,
+  compressor, `.mapatch` v9) is committed on top of `d910be0`
+  (`docs/ma-rack-rk2.md`); its listening is open. The pool holds no effects
+  any more. RK3 (the modulation bus) is next and waits for the operator.
 - **Patchbench** (`docs/patchbench-progress.md`): PB0..PB9 and four
   sequencer channels are committed (`94cff34`); its open items are listed
   there.
@@ -1837,3 +1839,40 @@ Notes:
   `build/vco/vco5/listen/`.
 - `vco_ma_ref` takes `sync@AMOUNT,SYNC,SOFTNESS,INTERVAL,CENTS` (VCO2's saw
   alone under a silent VCO1).
+
+### 2026-11-16 — RK2: chorus and reverb into the rack; delay, saturator, compressor
+
+- The pool's chain ends `body -> DC block -> rack -> master -> safety`
+  (RKD9). `ma_voice_pool` drops its `ma_effects` (964 kB to 319 kB). The
+  MA3-2 kernels are written once for the rack's chorus and reverb blocks
+  and for the standalone `ma_effects`; their eight pinned stress hashes did
+  not move. Dry signatures are unchanged.
+- New kinds: `delay` (two lines of 2^19 frames a rack, free or synced to the
+  host tempo, ping-pong, cuts in the feedback), `saturator` (`tw_drive`
+  between two exact-inverse tilts) and `compressor` (peak or RMS, soft knee).
+  Decisions RKD27..RKD35 in `docs/ma-rack-plan.md`.
+- A line is never cleared: a restart counts the frames written since (RKD7).
+  A buffered block coming out of a bypass takes its input through a 10 ms
+  gate, so its first delayed copy does not start with a step (RKD28).
+- Found while rendering the listening set: the kernels' ±1 bound was right
+  after the safety and wrong before master, where Tepih's signal is 5.5
+  times its output. The rack's blocks bound at ±64; `ma_effects` keeps ±1.
+- One wet pin moved (`test/ma_effects.c`, the MIDI/direct twin). A settled
+  wet render differs from `d910be0` by 2.4e-9 RMS, 142 dB under the signal.
+- f32: a one-pole on the delay's read distance stalls 2.3 frames short of
+  24,000 (the step falls under half an ulp). The distance still to go decays
+  instead and reaches zero.
+- Hosts: `ma_midi_map` owns a rack (CC107/108 set or add its chorus and
+  reverb blocks); `render_midi` hands the file's tempo to the rack and
+  settles it before the first frame; the MA3 shows, the Workbench desk and
+  its live path give each pool a rack. The Workbench now plays a patch's
+  rack. `.mapatch` version 9, `wbpatch=3`.
+- Patchbench: the five kinds in the rack row, each with a picture from its
+  own output; the voice's chorus and reverb are folded into the channel's
+  chain on the audio thread (`docs/patchbench-progress.md`).
+- Cost (`build/rk2-perf-20261116-01/`, 8 slots, 128-frame blocks): dry
+  0.993× and wet 1.001× of `d910be0` on the lanes, 1.000× and 1.003× on the
+  scalar engine; a saturator, a compressor and a delay together add 0.07 M
+  cycles a block.
+- Evidence, gates and measurements: `docs/ma-rack-rk2.md`. Listening set in
+  `build/rk2-listen/`.

@@ -58,6 +58,7 @@ typedef struct {
     wb_part_engine kind;
     bool active;
     ma_voice_pool *pool;           /* Mamut */
+    ma_rack *rack;                 /* its insert rack: the patch's, with the part's sends */
     wb_engine_instance engine;     /* organ / ep73 */
     float gain;
     float pressure;

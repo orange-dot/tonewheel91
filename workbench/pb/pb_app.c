@@ -628,15 +628,18 @@ static void sync_engine(pb_app *a) {
             pb_engine_set_patch(a->engine, c, &audible);
             a->sent_patch[c] = audible;
         }
-        ma_rack_spec rack = pb_channel_rack(a, c);
-        if (!a->sent_valid || memcmp(&rack, &a->sent_rack[c], sizeof rack)) {
+        ma_rack_spec rack = pb_channel_rack(a, c), chain;
+        const pb_voice *voice = &a->bench.channel[c].voice;
+        bool rack_new = !a->sent_valid || memcmp(&rack, &a->sent_rack[c], sizeof rack);
+        bool voice_new = !a->sent_valid || memcmp(voice, &a->sent_voice[c], sizeof *voice);
+        /* RK2: the voice's chorus and reverb are blocks of this rack. */
+        if ((rack_new || voice_new) && !pb_rt_chain(&rack, voice, &chain))
+            pb_say(a, true, "channel %u: the rack is full, so the voice's chorus or reverb does not play", c + 1);
+        if (rack_new) {
             pb_engine_set_rack(a->engine, c, &rack);
             a->sent_rack[c] = rack;
         }
-        const pb_voice *voice = &a->bench.channel[c].voice;
-        if ((!a->sent_valid || memcmp(voice, &a->sent_voice[c], sizeof *voice))
-            && pb_engine_set_voice(a->engine, c, voice, &audible))
-            a->sent_voice[c] = *voice;
+        if (voice_new && pb_engine_set_voice(a->engine, c, voice, &audible)) a->sent_voice[c] = *voice;
     }
     pb_sequence sequence = pb_audible_sequence(a);
     if (pb_sequence_valid(&sequence)
@@ -1016,6 +1019,37 @@ static int smoke(pb_app *a) {
             }
             frames += 2 + PB_SRC_COUNT;
         }
+    }
+    /* RK2: every new kind in the rack, each selected once, so its picture
+     * (the block's own output) and its controls draw; then the rack as it
+     * was. */
+    static const ma_rack_kind RK2_KINDS[] = { MA_RACK_CHORUS, MA_RACK_REVERB, MA_RACK_DELAY, MA_RACK_SATURATOR,
+                                              MA_RACK_COMPRESSOR };
+    unsigned vertices_before = max_vertices;
+    for (unsigned k = 0; k < 5; k++) ma_rack_slot_init(&rack->slot[3 + k], RK2_KINDS[k], 10 + k);
+    rack->slot[5].param[MA_DELAY_SYNC] = MA_DELAY_SYNC_8D;
+    rack->slot[5].param[MA_DELAY_PINGPONG] = 1;
+    bool rk2_ok = ma_rack_spec_valid(rack);
+    a->rack_selected = -1;
+    a->rack_insert = 2;                  /* the kind buttons for the empty second slot */
+    smoke_frame(a);
+    a->rack_insert = 0;
+    for (unsigned k = 0; k < 5; k++) {
+        a->rack_selected = 3 + (int)k;
+        const char *shots = getenv("PB_SHOTS");
+        if (shots) snprintf(shot_path, sizeof shot_path, "%s/pb-rack-%s.bmp", shots, ma_rack_kind_name(RK2_KINDS[k]));
+        smoke_frame(a);
+        smoke_frame(a);
+        frames += 2;
+    }
+    *rack = rack_start;
+    a->rack_selected = 0;
+    smoke_frame(a);
+    printf("patchbench smoke: at most %u vertices a frame before the RK2 kinds, %u with seven blocks in the rack\n",
+           vertices_before, max_vertices);
+    if (!rk2_ok) {
+        printf("patchbench smoke: FAILED, the RK2 rack is not a valid spec\n");
+        return 1;
     }
     /* Drawing without input must not edit. */
     if (a->dirty || memcmp(&start, pb_authored(a), sizeof start) || memcmp(&rack_start, rack, sizeof rack_start)) {

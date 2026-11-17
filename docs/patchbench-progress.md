@@ -228,3 +228,44 @@ solo is monitor state; a muted channel does not set the bounce length.
 - Four channels at limit 8 can ask for 32 voices; the measured capacity is
   about 20 Granica voices on one core and 40 on two. The overload guard
   releases every channel.
+
+## RK2 kinds in the rack row (2026-11-16)
+
+`docs/ma-rack-rk2.md` has the blocks themselves. In the Patchbench:
+
+- **Insert.** An empty cell has one button. It asks for a kind in the
+  editor beside the cells, one button per kind; a kind at its instance cap
+  (one chorus, one reverb, two delays) is not offered.
+- **Editor.** Every parameter of the selected block, generated from the
+  core's parameter table and the file names: a bar for a value (the unit
+  from the name's suffix), a toggle for a switch, a list for a value written
+  as a word (a delay's sync, a compressor's detector). The mix bar resets to
+  the kind's initial mix.
+- **Pictures**, from the block's own output in a private rack: the left and
+  right peak level after an impulse for chorus (120 ms), reverb (2 s) and
+  delay (4.5 times its time, at the sequencer's tempo when synced); one
+  cycle of a 220 Hz sine at −20 and −8 dBFS for the saturator; the settled
+  output level of a 1 kHz sine from −60 to 0 dBFS for the compressor, with
+  the unity line and the threshold. Cached per slot.
+- **Voice sends.** The VOICE module's chorus and reverb set the rack's
+  chorus or reverb block, or play as two more blocks at its end
+  (`pb_rt_chain`); the audio thread builds that chain when the rack or the
+  voice arrives. A full rack leaves the send out and the status line says
+  so. The racks follow the sequencer's tempo. The overload stop resets the
+  racks with the pools.
+- **Engine memory.** The engine holds four racks of 9.06 MB (chorus, reverb
+  and two delay lines each) and locks them with the rest before audio starts.
+
+Gates: `make test-patchbench` (879 + 82 checks; the referee of the channel
+parity builds each channel's rack from the core's calls) and the smoke on
+Prizma, Granica and Tepih. The smoke adds a pass with seven blocks in the
+rack and each RK2 kind selected once.
+
+Vertices: the largest frame is 48,421 on Prizma before the RK2 pass and
+48,791 with seven blocks; on Granica 49,664 and 50,034, on Tepih 47,191 and
+47,561. Granica was already over the smoke's 50,000 gate at `d910be0`
+(50,144; the smoke target runs Prizma, 48,909 there). The pictures draw a
+point every five pixels and one trace where both channels are alike.
+
+Not looked at on a display; no audio was opened. `check-patchbench-live`
+and the soak were not run.

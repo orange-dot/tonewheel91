@@ -61,6 +61,7 @@ hashes included — reproduce bit-for-bit.
     make check-ma3-2 # shared effects, wet MIDI twins, bypass and tail checks
     make audition-ma3-2 # short Tepih/Granica dry/chorus/reverb/wet WAVs
     make check-rk1   # Mamut insert rack (EQ, utility) gates; docs/ma-rack-rk1.md
+    make check-rk2   # its chorus, reverb, delay, saturator, compressor; docs/ma-rack-rk2.md
     make check-ma-vco  # circuit-derived oscillator pitch against the SPICE study; docs/ma-vco-plan.md
     make check-ma-vco-shape  # circuit-derived triangle, saw bow and triangle shapers; docs/ma-vco-plan.md
     make check-ma-vco-couple # two oscillator cores on one supply (locking); docs/ma-vco4-spice.md
@@ -110,7 +111,8 @@ hashes included — reproduce bit-for-bit.
         --unison 1 -t 4 -o build/mamut-dry.wav input.mid
                    # dry by default; optional --chorus-mix .30 --reverb-mix .25
                    # optional --detune, --seed, --block-frames
-                   # optional --rack patch.mapatch: its insert rack (v5)
+                   # optional --rack patch.mapatch: its insert rack (EQ, utility,
+                   #   chorus, reverb, delay, saturator, compressor)
                    # global direct CCs, per-channel sustain/expression;
                    # macros CC109..113; CC114 unison changes are ignored
 
@@ -139,7 +141,9 @@ MA3-1 adds the dry pool-backed MIDI renderer; controls and verification are in
 choice, not a realtime capacity guarantee.
 MA3-2 adds shared fixed-buffer chorus/reverb, controlled by CC107/108 or CLI;
 [docs/ma3-2-effects.md](docs/ma3-2-effects.md) records the controls, bypass
-contract and short listening pairs.
+contract and short listening pairs. Since RK2 both are blocks of the insert
+rack, beside a delay, a saturator and a compressor
+([docs/ma-rack-rk2.md](docs/ma-rack-rk2.md)).
 New full-length pool/effects versions of Blues and all-Mamut Hurt are prepared
 in [docs/ma3-musical-exhibits.md](docs/ma3-musical-exhibits.md). Rendering is
 explicit; the current handoff stops before audio generation.

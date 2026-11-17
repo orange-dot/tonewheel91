@@ -78,7 +78,6 @@ bool ma_voice_pool_init(ma_voice_pool *p, float rate,
     p->lanes_enabled = c.engine == MA_POOL_ENGINE_AUTO && ma_lanes_supported();
     ma_synth_init_patch(&p->control, rate, patch ? patch : &ma_patch_tepih);
     initialize_slots(p);
-    ma_effects_init(&p->effects, p->control.sample_rate_hz);
     return true;
 }
 
@@ -90,17 +89,12 @@ void ma_voice_pool_reset(ma_voice_pool *p) {
     ma_voice_pool_config config = p->config;
     bool lanes_enabled = p->lanes_enabled;
     ma_rack *rack = p->rack;
-    ma_chorus_controls chorus = p->effects.chorus.controls;
-    ma_reverb_controls reverb = p->effects.reverb.controls;
     *p = (ma_voice_pool){ 0 };
     p->config = config;
     p->lanes_enabled = lanes_enabled;
     p->rack = rack;
     copy_voice(&p->control, &control);
     initialize_slots(p);
-    ma_effects_init(&p->effects, p->control.sample_rate_hz);
-    ma_effects_set_chorus(&p->effects, chorus);
-    ma_effects_set_reverb(&p->effects, reverb);
     ma_voice_pool_set_character(p, amount);
 }
 
@@ -429,9 +423,10 @@ static unsigned plan_parts(ma_voice_pool *p, unsigned parts) {
     return used;
 }
 
-/* Master, safety and the effects after the rack. */
+/* Master and safety after the rack (RKD9; chorus and reverb are rack
+ * blocks since RK2). */
 [[gnu::always_inline]] static inline ma_frame pool_back(ma_voice_pool *p, ma_frame x, bool finite) {
-    return ma_effects_tick(&p->effects, ma_output_back(&p->output, x, p->control.master_level, finite));
+    return ma_output_back(&p->output, x, p->control.master_level, finite);
 }
 
 ma_frame ma_voice_pool_tick(ma_voice_pool *p) {
@@ -462,8 +457,8 @@ void ma_voice_pool_render_parallel(ma_voice_pool *p, ma_frame *frames, size_t co
     }
     /* Run by run: the voice banks for the run (on the executor's parts when
      * there is one), then the per-frame mix and output front, the rack over
-     * the run (its AVX2 wavefront where an EQ is settled), then master,
-     * safety and effects. Rack, output and effects share no state with the
+     * the run (its AVX2 wavefront where an EQ is settled), then master
+     * and safety. Rack and output share no state with the
      * voices, so this is the per-frame result bit for bit (test/ma_rack.c,
      * test/ma_pool_parallel.c). */
     bool skip[MA_POOL_RUN];

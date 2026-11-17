@@ -366,7 +366,7 @@ static void test_ma_patch_files(void) {
                            &invalid, &error)
           && strstr(error.message, "domain"),
           "fractional MA patch integer was accepted");
-    CHECK(!read_patch_text("mamutanalog_patch=9\nname=x\n",
+    CHECK(!read_patch_text("mamutanalog_patch=99\nname=x\n",
                            &invalid, &error)
           && strstr(error.message, "version"),
           "unsupported MA patch version was accepted");
@@ -665,6 +665,78 @@ static void test_ma_patch_rack(void) {
         CHECK(edited_ok && !read_patch_text(edited, &doc, &error) && strstr(error.message, bad[i].why),
               "rack case %zu (%s) gave \"%s\"", i, bad[i].why, error.message);
     }
+
+    /* RK2: a rack with a kind beyond eq and utility is version 9, which
+     * carries every patch field; the worded values are written as words. */
+    ma_patch_document wide = racked;
+    ma_rack_slot_init(&wide.rack.slot[1], MA_RACK_SATURATOR, 21);
+    wide.rack.slot[1].param[MA_SATURATOR_DRIVE] = .7f;
+    wide.rack.slot[1].param[MA_SATURATOR_TILT_PRE_DB] = -3;
+    ma_rack_slot_init(&wide.rack.slot[2], MA_RACK_COMPRESSOR, 22);
+    wide.rack.slot[2].param[MA_COMPRESSOR_DETECTOR] = MA_COMPRESSOR_PEAK;
+    wide.rack.slot[2].param[MA_COMPRESSOR_RATIO] = 8;
+    ma_rack_slot_init(&wide.rack.slot[4], MA_RACK_DELAY, 23);
+    wide.rack.slot[4].param[MA_DELAY_SYNC] = MA_DELAY_SYNC_8D;
+    wide.rack.slot[4].param[MA_DELAY_PINGPONG] = 1;
+    ma_rack_slot_init(&wide.rack.slot[5], MA_RACK_DELAY, 24);
+    wide.rack.slot[5].param[MA_DELAY_TIME_S] = .0125f;
+    ma_rack_slot_init(&wide.rack.slot[6], MA_RACK_CHORUS, 25);
+    ma_rack_slot_init(&wide.rack.slot[7], MA_RACK_REVERB, 26);
+    wide.rack.slot[7].mix = .4f;
+    CHECK(patch_text(&wide, text, sizeof text) && !strncmp(text, "mamutanalog_patch=9\n", 20)
+          && strstr(text, "vco.supply=") && strstr(text, "rack.2.kind=saturator\n")
+          && strstr(text, "rack.3.detector=peak\n") && strstr(text, "rack.5.sync=1/8d\n")
+          && strstr(text, "rack.5.pingpong=1\n") && strstr(text, "rack.6.time_s=0.0125000002\n")
+          && strstr(text, "rack.7.kind=chorus\n") && strstr(text, "rack.7.mix=0.300000012\n")
+          && strstr(text, "rack.8.kind=reverb\n") && strstr(text, "rack.8.damping=0.550000012\n"),
+          "the RK2 kinds did not write as version 9");
+    back = (ma_patch_document){ 0 };
+    CHECK(read_patch_text(text, &back, &error)
+          && !memcmp(&back.value, &wide.value, sizeof wide.value)
+          && !memcmp(&back.rack, &wide.rack, sizeof wide.rack),
+          "the RK2 rack did not round-trip: line %u %s", error.line, error.message);
+    struct { const char *from, *to, *why; } bad9[] = {
+        { "mamutanalog_patch=9", "mamutanalog_patch=8", "version 9" },
+        { "rack.5.sync=1/8d", "rack.5.sync=1/7", "unknown rack value name" },
+        { "rack.5.sync=1/8d", "rack.5.sync=8", "unknown rack value name" },
+        { "rack.3.detector=peak", "rack.3.detector=0", "unknown rack value name" },
+        { "rack.7.kind=chorus", "rack.7.kind=delay", "unknown rack key" },
+        { "rack.6.time_s=0.0125000002", "rack.6.time_s=3", "domain" },
+        { "rack.2.drive=0.699999988\n", "", "missing" },
+        { "rack.5.pingpong=1", "rack.5.pingpong=2", "domain" },
+    };
+    for (size_t i = 0; i < sizeof bad9 / sizeof *bad9; i++) {
+        memcpy(edited, text, sizeof text);
+        ma_patch_document doc = { 0 };
+        error = (ma_patch_error){ 0 };
+        bool edited_ok = edit_text(edited, sizeof edited, bad9[i].from, bad9[i].to);
+        CHECK(edited_ok && !read_patch_text(edited, &doc, &error) && strstr(error.message, bad9[i].why),
+              "RK2 rack case %zu (%s) gave \"%s\"", i, bad9[i].why, error.message);
+    }
+    /* The instance caps (RKD8): a second chorus is not a valid rack. */
+    ma_patch_document capped = wide;
+    ma_rack_slot_init(&capped.rack.slot[3], MA_RACK_CHORUS, 27);
+    FILE *over = tmpfile();
+    CHECK(over && !ma_patch_write(over, &capped), "writer accepted two choruses");
+    if (over) fclose(over);
+    /* The longest rack: eight EQs of eight bands with nine-digit values.
+     * Its text was 88 bytes past the writer's old 8192-byte buffer. */
+    static char full_text[32768];
+    ma_patch_document full = plain;
+    for (unsigned j = 0; j < MA_RACK_SLOTS; j++) {
+        ma_rack_slot_init(&full.rack.slot[j], MA_RACK_EQ, j + 1);
+        full.rack.slot[j].param[MA_EQ_BAND_COUNT] = MA_EQ_BANDS;
+        for (unsigned b = 0; b < MA_EQ_BANDS; b++) {
+            full.rack.slot[j].param[MA_EQ_BAND(b, MA_EQ_FREQ_HZ)] = 1234.56789f + (float)b;
+            full.rack.slot[j].param[MA_EQ_BAND(b, MA_EQ_GAIN_DB)] = -3.14159265f;
+            full.rack.slot[j].param[MA_EQ_BAND(b, MA_EQ_Q)] = 1.23456789f;
+        }
+    }
+    back = (ma_patch_document){ 0 };
+    CHECK(patch_text(&full, full_text, sizeof full_text) && strlen(full_text) > 8192
+          && read_patch_text(full_text, &back, &error) && !memcmp(&back.rack, &full.rack, sizeof full.rack),
+          "a full rack of EQs did not round-trip: line %u %s", error.line, error.message);
+    CHECK(patch_text(&racked, text, sizeof text), "restore the version 5 text");
 
     static const char *factory[] = { "dubina", "granica", "kolo", "lead", "prizma", "raster", "tepih" };
     for (size_t i = 0; i < sizeof factory / sizeof *factory; i++) {

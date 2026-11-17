@@ -64,3 +64,41 @@ bool smf_make_event_frames(const smf_file *midi, unsigned rate,
     *out_frames = total;
     return true;
 }
+
+bool smf_make_tempo_frames(const smf_file *midi, unsigned rate, size_t **out_frames,
+                           float **out_bpm) {
+    *out_frames = 0;
+    *out_bpm = 0;
+    if (!midi->division || !rate) return false;
+    if (!midi->tempo_count) return true;
+    size_t bytes = 0, bpm_bytes = 0;
+    if (!host_size_mul(midi->tempo_count, sizeof **out_frames, &bytes)
+        || !host_size_mul(midi->tempo_count, sizeof **out_bpm, &bpm_bytes)) return false;
+    size_t *frames = malloc(bytes);
+    float *bpm = malloc(bpm_bytes);
+    if (!frames || !bpm) {
+        free(frames);
+        free(bpm);
+        return false;
+    }
+    double seconds = 0.0, max_frame = RENDER_MAX_SECONDS * rate;
+    uint64_t segment_tick = 0;
+    uint32_t us_per_quarter = 500000;
+    for (size_t i = 0; i < midi->tempo_count; i++) {
+        seconds += (double)(midi->tempos[i].tick - segment_tick)
+                 * us_per_quarter * 1e-6 / midi->division;
+        segment_tick = midi->tempos[i].tick;
+        us_per_quarter = midi->tempos[i].us_per_quarter;
+        double frame = seconds * rate + 0.5;
+        if (!isfinite(frame) || frame < 0.0 || frame > max_frame || !us_per_quarter) {
+            free(frames);
+            free(bpm);
+            return false;
+        }
+        frames[i] = (size_t)frame;
+        bpm[i] = (float)(6e7 / us_per_quarter);
+    }
+    *out_frames = frames;
+    *out_bpm = bpm;
+    return true;
+}

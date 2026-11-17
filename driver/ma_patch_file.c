@@ -143,6 +143,8 @@ static bool valid_name(const char *name) {
 
 static const char *const RACK_KIND_NAMES[MA_RACK_KIND_COUNT] = {
     [MA_RACK_EMPTY] = "empty", [MA_RACK_EQ] = "eq", [MA_RACK_UTILITY] = "utility",
+    [MA_RACK_CHORUS] = "chorus", [MA_RACK_REVERB] = "reverb", [MA_RACK_DELAY] = "delay",
+    [MA_RACK_SATURATOR] = "saturator", [MA_RACK_COMPRESSOR] = "compressor",
 };
 static const char *const EQ_TYPE_NAMES[MA_EQ_TYPE_COUNT] = {
     [MA_EQ_BELL] = "bell", [MA_EQ_LOW_SHELF] = "low_shelf", [MA_EQ_HIGH_SHELF] = "high_shelf",
@@ -154,6 +156,42 @@ static const char *const EQ_FIELD_NAMES[MA_EQ_BAND_FIELDS] = {
 };
 static const char *const UTILITY_PARAM_NAMES[MA_UTILITY_PARAM_COUNT] = {
     [MA_UTILITY_GAIN_DB] = "gain_db", [MA_UTILITY_WIDTH] = "width", [MA_UTILITY_PAN] = "pan",
+};
+static const char *const CHORUS_PARAM_NAMES[MA_CHORUS_PARAM_COUNT] = {
+    [MA_CHORUS_DEPTH] = "depth", [MA_CHORUS_RATE_HZ] = "rate_hz",
+};
+static const char *const REVERB_PARAM_NAMES[MA_REVERB_PARAM_COUNT] = {
+    [MA_REVERB_SIZE] = "size", [MA_REVERB_DAMPING] = "damping",
+};
+static const char *const DELAY_PARAM_NAMES[MA_DELAY_PARAM_COUNT] = {
+    [MA_DELAY_TIME_S] = "time_s", [MA_DELAY_SYNC] = "sync", [MA_DELAY_FEEDBACK] = "feedback",
+    [MA_DELAY_PINGPONG] = "pingpong", [MA_DELAY_LOWCUT_HZ] = "lowcut_hz", [MA_DELAY_HIGHCUT_HZ] = "highcut_hz",
+};
+static const char *const SATURATOR_PARAM_NAMES[MA_SATURATOR_PARAM_COUNT] = {
+    [MA_SATURATOR_DRIVE] = "drive", [MA_SATURATOR_SHAPE] = "shape", [MA_SATURATOR_INPUT_DB] = "input_db",
+    [MA_SATURATOR_TILT_PRE_DB] = "tilt_pre_db", [MA_SATURATOR_TILT_POST_DB] = "tilt_post_db",
+    [MA_SATURATOR_OUTPUT_DB] = "output_db",
+};
+static const char *const COMPRESSOR_PARAM_NAMES[MA_COMPRESSOR_PARAM_COUNT] = {
+    [MA_COMPRESSOR_DETECTOR] = "detector", [MA_COMPRESSOR_THRESHOLD_DB] = "threshold_db",
+    [MA_COMPRESSOR_RATIO] = "ratio", [MA_COMPRESSOR_KNEE_DB] = "knee_db",
+    [MA_COMPRESSOR_ATTACK_MS] = "attack_ms", [MA_COMPRESSOR_RELEASE_MS] = "release_ms",
+    [MA_COMPRESSOR_MAKEUP_DB] = "makeup_db",
+};
+static const char *const DELAY_SYNC_NAMES[MA_DELAY_SYNC_COUNT] = {
+    [MA_DELAY_SYNC_FREE] = "free", [MA_DELAY_SYNC_32] = "1/32", [MA_DELAY_SYNC_16T] = "1/16t",
+    [MA_DELAY_SYNC_16] = "1/16", [MA_DELAY_SYNC_8T] = "1/8t", [MA_DELAY_SYNC_16D] = "1/16d",
+    [MA_DELAY_SYNC_8] = "1/8", [MA_DELAY_SYNC_4T] = "1/4t", [MA_DELAY_SYNC_8D] = "1/8d",
+    [MA_DELAY_SYNC_4] = "1/4", [MA_DELAY_SYNC_2T] = "1/2t", [MA_DELAY_SYNC_4D] = "1/4d",
+    [MA_DELAY_SYNC_2] = "1/2", [MA_DELAY_SYNC_1] = "1/1",
+};
+static const char *const DETECTOR_NAMES[MA_COMPRESSOR_DETECTOR_COUNT] = {
+    [MA_COMPRESSOR_PEAK] = "peak", [MA_COMPRESSOR_RMS] = "rms",
+};
+static const char *const *const PARAM_NAMES[MA_RACK_KIND_COUNT] = {
+    [MA_RACK_UTILITY] = UTILITY_PARAM_NAMES, [MA_RACK_CHORUS] = CHORUS_PARAM_NAMES,
+    [MA_RACK_REVERB] = REVERB_PARAM_NAMES, [MA_RACK_DELAY] = DELAY_PARAM_NAMES,
+    [MA_RACK_SATURATOR] = SATURATOR_PARAM_NAMES, [MA_RACK_COMPRESSOR] = COMPRESSOR_PARAM_NAMES,
 };
 /* "band.<b>.<field>", b 1-based, built once. */
 static_assert(MA_RACK_PARAMS <= 64, "the reader marks keys in a uint64_t");
@@ -168,8 +206,8 @@ const char *ma_eq_type_name(ma_eq_type type) {
 }
 
 const char *ma_rack_param_name(ma_rack_kind kind, unsigned index) {
-    if (kind == MA_RACK_UTILITY && index < MA_UTILITY_PARAM_COUNT) return UTILITY_PARAM_NAMES[index];
-    if (kind != MA_RACK_EQ || index >= MA_EQ_PARAM_COUNT) return nullptr;
+    if (kind >= MA_RACK_KIND_COUNT || index >= ma_rack_param_count(kind)) return nullptr;
+    if (kind != MA_RACK_EQ) return PARAM_NAMES[kind][index];
     if (index == MA_EQ_BAND_COUNT) return "bands";
     if (index == MA_EQ_OUTPUT_DB) return "output_db";
     unsigned at = index - MA_EQ_FIRST_BAND;
@@ -177,6 +215,30 @@ const char *ma_rack_param_name(ma_rack_kind kind, unsigned index) {
         snprintf(eq_names[at], sizeof eq_names[at], "band.%u.%s", at / MA_EQ_BAND_FIELDS + 1,
                  EQ_FIELD_NAMES[at % MA_EQ_BAND_FIELDS]);
     return eq_names[at];
+}
+
+const char *const *ma_rack_param_words(ma_rack_kind kind, unsigned index, unsigned *count) {
+    unsigned n = 0;
+    const char *const *words = nullptr;
+    if (kind == MA_RACK_EQ && index >= MA_EQ_FIRST_BAND && index < MA_EQ_PARAM_COUNT
+        && (index - MA_EQ_FIRST_BAND) % MA_EQ_BAND_FIELDS == MA_EQ_TYPE) {
+        words = EQ_TYPE_NAMES;
+        n = MA_EQ_TYPE_COUNT;
+    } else if (kind == MA_RACK_DELAY && index == MA_DELAY_SYNC) {
+        words = DELAY_SYNC_NAMES;
+        n = MA_DELAY_SYNC_COUNT;
+    } else if (kind == MA_RACK_COMPRESSOR && index == MA_COMPRESSOR_DETECTOR) {
+        words = DETECTOR_NAMES;
+        n = MA_COMPRESSOR_DETECTOR_COUNT;
+    }
+    if (count) *count = n;
+    return words;
+}
+
+bool ma_rack_spec_basic(const ma_rack_spec *rack) {
+    for (unsigned i = 0; rack && i < MA_RACK_SLOTS; i++)
+        if (rack->slot[i].kind > MA_RACK_UTILITY) return false;
+    return true;
 }
 
 static bool is_band(ma_rack_kind kind, unsigned index) {
@@ -200,6 +262,10 @@ bool ma_rack_read_key(ma_rack_spec *rack, ma_rack_reader *reader,
         if (s->kind) { *why = "duplicate rack key"; return false; }
         for (unsigned k = MA_RACK_EQ; k < MA_RACK_KIND_COUNT; k++)
             if (!strcmp(text, RACK_KIND_NAMES[k])) {
+                if (reader->basic_only && k > MA_RACK_UTILITY) {
+                    *why = "this rack kind requires patch version 9 (wbpatch=3)";
+                    return false;
+                }
                 ma_rack_slot_init(slot, (ma_rack_kind)k, 1);   /* initial values */
                 slot->id = 0;
                 slot->enabled = false;
@@ -242,10 +308,15 @@ bool ma_rack_read_key(ma_rack_spec *rack, ma_rack_reader *reader,
         if (s->params >> i & 1u) { *why = "duplicate rack key"; return false; }
         ma_rack_param_info info = { 0 };
         (void)ma_rack_param_info_at(slot->kind, i, &info);
-        if (is_band(slot->kind, i) && (i - MA_EQ_FIRST_BAND) % MA_EQ_BAND_FIELDS == MA_EQ_TYPE) {
+        unsigned word_count = 0;
+        const char *const *words = ma_rack_param_words(slot->kind, i, &word_count);
+        if (words) {
             unsigned t = 0;
-            while (t < MA_EQ_TYPE_COUNT && strcmp(text, EQ_TYPE_NAMES[t])) t++;
-            if (t == MA_EQ_TYPE_COUNT) { *why = "unknown EQ band type"; return false; }
+            while (t < word_count && strcmp(text, words[t])) t++;
+            if (t == word_count) {
+                *why = slot->kind == MA_RACK_EQ ? "unknown EQ band type" : "unknown rack value name";
+                return false;
+            }
             value = t;
         } else if (!host_parse_double(text, info.minimum, info.maximum, &value)) {
             *why = "rack value outside its domain";
@@ -289,7 +360,7 @@ bool ma_rack_read_finish(const ma_rack_spec *rack, const ma_rack_reader *reader,
         }
     }
     if (!ma_rack_spec_valid(rack)) {
-        *why = "rack ids must be unique";
+        *why = "rack ids must be unique, with at most one chorus, one reverb and two delays";
         return false;
     }
     return true;
@@ -321,10 +392,10 @@ int ma_rack_format(const ma_rack_spec *rack, char *out, size_t size) {
         for (unsigned i = 0; i < ma_rack_param_count(slot->kind); i++) {
             if (is_band(slot->kind, i) && band_of(i) >= bands) break;
             const char *name = ma_rack_param_name(slot->kind, i);
-            bool type = is_band(slot->kind, i) && (i - MA_EQ_FIRST_BAND) % MA_EQ_BAND_FIELDS == MA_EQ_TYPE;
-            bool ok = type ? emit(out, size, &used, "rack.%u.%s=%s\n", n + 1, name,
-                                  EQ_TYPE_NAMES[(unsigned)slot->param[i]])
-                           : emit(out, size, &used, "rack.%u.%s=%.9g\n", n + 1, name, (double)slot->param[i]);
+            const char *const *words = ma_rack_param_words(slot->kind, i, nullptr);
+            bool ok = words ? emit(out, size, &used, "rack.%u.%s=%s\n", n + 1, name,
+                                   words[(unsigned)slot->param[i]])
+                            : emit(out, size, &used, "rack.%u.%s=%.9g\n", n + 1, name, (double)slot->param[i]);
             if (!ok) return -1;
         }
     }
@@ -442,11 +513,13 @@ bool ma_patch_read(FILE *file, ma_patch_document *document,
                            && strcmp(separator, "5")
                            && strcmp(separator, "6")
                            && strcmp(separator, "7")
-                           && strcmp(separator, "8"))) {
+                           && strcmp(separator, "8")
+                           && strcmp(separator, "9"))) {
                 set_error(error, line_number, "invalid or duplicate version");
                 return false;
             }
             version = (unsigned)(separator[0] - '0');
+            rack.basic_only = version < 9;
             header = true;
             continue;
         }
@@ -563,8 +636,10 @@ bool ma_patch_write(FILE *file, const ma_patch_document *document) {
     bool supplied = v->vco_supply != 0.0f;
     shaped = shaped || supplied;
     bool analog = shaped || v->vco_analog != 0.0f || v->vco_dead_time != 0.0f;
-    int version = supplied ? 8 : shaped ? 7 : analog ? 6 : racked ? 5 : 4;
-    size_t count = supplied ? sizeof FIELDS / sizeof *FIELDS
+    /* A rack with an RK2 kind is version 9, which carries every field. */
+    bool wide = !ma_rack_spec_basic(&document->rack);
+    int version = wide ? 9 : supplied ? 8 : shaped ? 7 : analog ? 6 : racked ? 5 : 4;
+    size_t count = wide || supplied ? sizeof FIELDS / sizeof *FIELDS
                  : shaped ? SUPPLY_FIELD : analog ? SHAPER_FIRST_FIELD : VCO_FIRST_FIELD;
     if (fprintf(file, "mamutanalog_patch=%d\nname=%s\n", version, document->name) < 0)
         return false;
@@ -585,7 +660,7 @@ bool ma_patch_write(FILE *file, const ma_patch_document *document) {
         if (result < 0) return false;
     }
     if (racked) {
-        char text[8192];
+        char text[MA_RACK_TEXT_MAX];
         if (ma_rack_format(&document->rack, text, sizeof text) < 0 || fputs(text, file) < 0)
             return false;
     }

@@ -180,6 +180,11 @@ five card outputs
   -> stereo f32 frame
 ```
 
+Since RK2 (2026-11-16) the end of the pool's chain is `body -> DC block ->
+insert rack -> master -> safety`: chorus and reverb are two of the rack's
+blocks (`docs/ma-rack-plan.md` RKD9, `docs/ma-rack-rk2.md`). The diagram
+shows the MA3-2 order.
+
 The direct layer constructs a sound. The identity layer is a performance
 overlay. A raw macro never enters an oscillator, filter, VCA, effect or
 field primitive. `ma_synth` resolves macros and performance inputs into
@@ -586,6 +591,13 @@ The first playable chain ports the behavior of the donor's
   modulation routes only. No route exists by default, every route is
   visible in the Patchbench, and no route reproduces the unmodulated PCM
   bit for bit (`docs/ma-rack-plan.md` RKD14..RKD18).
+- Amended 2026-11-16 (RK2): the two kernels are insert-rack blocks before
+  master and safety, not a stage of the pool. Their lines are never
+  cleared: a restart counts the frames written since and reads zero beyond
+  that count. A block at mix zero runs no DSP and starts from an empty line
+  when it comes back, so the "may advance state" clause above holds only
+  for the standalone `ma_effects` pair. The bound on the lines is ±64
+  before master (it was ±1 after the safety).
 
 ## Generic MIDI contract
 
@@ -624,7 +636,7 @@ All 128 notes are valid. NoteOn velocity zero is NoteOff for MIDI 1.0.
 | CC94 / CC95 | Mozaik mix / slope |
 | CC102..104 | Mozaik contrast / phason / drift |
 | CC105 / CC106 | mixer pressure / filter drive |
-| CC107 / CC108 | chorus mix / reverb mix |
+| CC107 / CC108 | chorus mix / reverb mix: the mix of the rack's chorus or reverb block, added at the old defaults when the chain has none (RK2) |
 | CC109..113 | Gravitacija, Bloom, Heat, Ruin, Swarm |
 | CC114 | historical bank unison; ignored/counted by the fixed-configuration pool; use session `--unison` |
 | CC115 | GFM amount after MA4; ignored and counted before MA4 |
@@ -1101,7 +1113,7 @@ zone; transport does not define the DSP model.
 | BCS | implemented feedback-only in MA2-BCS; operator listening pending | ad hoc slice before MA2-4 |
 | Orbita | candidate; offline spike done 2026-11-07 (`docs/ma-orbita-spike-20261107.md`); hosted use in MA3 Hurt (`docs/ma3-hurt-orbita.md`) | v0.2 insertion choice |
 | Glas (formant bank, Orbita formants, formant grains) | implemented in the core 2026-11-07 by operator decision, exact bypass (`ma-constants.md` §10C); on the vector lanes since 2026-11-08 (`docs/ma3-glas-lanes-20261108.md`) | patch-file v4 if it stays |
-| Insert rack (EQ, utility; then chorus/reverb, delay, saturator, compressor) and modulation bus (rack targets RK3, global voice targets RK3b) | RK0 plan 2026-11-11; RK1 and RK1b (8-band EQ, editor, utility, `.mapatch` v5) committed `94cff34`; RK2 re-pin and RK3/RK3b scope operator-confirmed (`docs/ma-rack-plan.md`) | RK2 |
+| Insert rack (EQ, utility; then chorus/reverb, delay, saturator, compressor) and modulation bus (rack targets RK3, global voice targets RK3b) | RK0 plan 2026-11-11; RK1 and RK1b (8-band EQ, editor, utility, `.mapatch` v5) committed `94cff34`; RK2 (chorus and reverb as blocks, delay, saturator, compressor, `.mapatch` v9) implemented 2026-11-16, listening open (`docs/ma-rack-rk2.md`); RK3/RK3b scope operator-confirmed (`docs/ma-rack-plan.md`) | RK3 |
 | Circuit-derived oscillators (VCO-2 pitch law, B1 shapes, triangle shapers, supply coupling) | V1..V4 in the core 2026-11-12..14 by operator decision, exact bypass at `vco.analog` 0, file versions 6 to 8 (`docs/ma-vco-plan.md`); on the vector lanes since 2026-11-15; factory patch Kolo. V5 (sync) studied in SPICE and declined for the core (`docs/ma-vco5-spice.md`) | none queued |
 | Kosava | candidate; donor plan only | post-MA5 offline backlog if selected |
 | Mraz | research priority among wild concepts | unscheduled |

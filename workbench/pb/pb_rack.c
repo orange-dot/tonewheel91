@@ -1,11 +1,14 @@
-/* The insert rack row (RK1) and the parametric EQ editor (RK1b),
- * docs/ma-rack-plan.md.  The row shows the eight slots in chain order and a
- * compact editor for the selected block; the EQ editor takes the place of
- * the two module rows.  Every EQ curve is evaluated from the coefficients
+/* The insert rack row (RK1), the parametric EQ editor (RK1b) and the RK2
+ * kinds, docs/ma-rack-plan.md.  The row shows the eight slots in chain order
+ * and a compact editor for the selected block; the EQ editor takes the place
+ * of the two module rows.  Every EQ curve is evaluated from the coefficients
  * the core computed for the block (a private rack, settled, one tick), not
  * from a formula of its own; the DSP loop itself is refereed against the
- * analytic response in test/ma_rack.c.  Edits go through the same undo
- * steps as the patch. */
+ * analytic response in test/ma_rack.c.  The pictures of the RK2 kinds are
+ * the block's own output on a test signal: an impulse for chorus, reverb
+ * and delay, a sine at two levels for the saturator, steady sines over the
+ * level range for the compressor.  Edits go through the same undo steps as
+ * the patch. */
 #include "pb_app.h"
 
 #include <complex.h>
@@ -99,6 +102,112 @@ static const float *curve(curve_cache *c, const ma_rack_slot_spec *slot, int ban
     return c->db;
 }
 
+/* ---- the RK2 kinds' pictures, from the block's own output -------------------------- */
+
+typedef struct {
+    ma_rack_slot_spec spec;
+    float rate, tempo;
+    unsigned n;
+    bool valid;
+    float a[CURVE_MAX], b[CURVE_MAX];
+} picture_cache;
+
+static picture_cache pictures[MA_RACK_SLOTS], big_picture;
+
+static const double SAT_LEVELS_DB[2] = { -20, -8 };      /* the rack's chord peaks, and 12 dB over */
+enum { COMP_POINTS = 25 };                               /* -60..0 dBFS in 2.5 dB steps */
+
+/* The window of an impulse picture in seconds. */
+static double impulse_seconds(const ma_rack_slot_spec *s, float tempo) {
+    if (s->kind == MA_RACK_CHORUS) return .12;
+    if (s->kind == MA_RACK_REVERB) return 2;
+    unsigned sync = (unsigned)s->param[MA_DELAY_SYNC];
+    double t = sync ? ma_delay_sync_beats(sync) * 60.0 / tempo : s->param[MA_DELAY_TIME_S];
+    t = 4.5 * t;
+    return t < .05 ? .05 : t > 6 ? 6 : t;
+}
+
+/* The block alone, enabled, in a private rack in place.
+ * - chorus, reverb, delay: a[] and b[] are the left and right peak level in
+ *   dB (floor -72) of each of n columns after a unit impulse.
+ * - saturator: one settled cycle of a 220 Hz sine at each SAT_LEVELS_DB,
+ *   over the input's amplitude.
+ * - compressor: a[] is the settled output level in dB of a 1 kHz sine at
+ *   COMP_POINTS input levels from -60 to 0 dBFS (b[] the input levels). */
+static const picture_cache *picture(picture_cache *c, const ma_rack_slot_spec *slot, float rate, float tempo,
+                                    unsigned n) {
+    if (n > CURVE_MAX) n = CURVE_MAX;
+    if (n < 2) n = 2;
+    if (c->valid && c->rate == rate && c->tempo == tempo && c->n == n && !memcmp(&c->spec, slot, sizeof *slot)) return c;
+    static ma_rack probe;
+    ma_rack_spec spec = { 0 };
+    spec.slot[0] = *slot;
+    spec.slot[0].enabled = true;
+    c->valid = false;
+    if (!ma_rack_spec_valid(&spec)) return nullptr;
+    if (slot->kind == MA_RACK_CHORUS || slot->kind == MA_RACK_REVERB || slot->kind == MA_RACK_DELAY) {
+        size_t total = (size_t)(impulse_seconds(slot, tempo) * rate);
+        for (unsigned i = 0; i < n; i++) c->a[i] = c->b[i] = 0;
+        ma_rack_init(&probe, rate);
+        ma_rack_set_tempo(&probe, tempo);
+        (void)ma_rack_apply(&probe, &spec);
+        ma_rack_settle(&probe);
+        for (size_t i = 0; i < total; i++) {
+            ma_frame y = ma_rack_tick(&probe, i ? (ma_frame){ 0, 0 } : (ma_frame){ 1, 1 });
+            unsigned col = (unsigned)(i * n / total);
+            if (fabsf(y.left) > c->a[col]) c->a[col] = fabsf(y.left);
+            if (fabsf(y.right) > c->b[col]) c->b[col] = fabsf(y.right);
+        }
+        for (unsigned i = 0; i < n; i++) {
+            c->a[i] = c->a[i] > 2.5e-4f ? 20 * log10f(c->a[i]) : -72;
+            c->b[i] = c->b[i] > 2.5e-4f ? 20 * log10f(c->b[i]) : -72;
+        }
+    } else if (slot->kind == MA_RACK_SATURATOR) {
+        const double hz = 220, w = 2 * M_PI * hz / rate;
+        size_t settle = (size_t)(.25 * rate), cycle = (size_t)(rate / hz);
+        for (int level = 0; level < 2; level++) {
+            float *out = level ? c->b : c->a;
+            double amp = pow(10, SAT_LEVELS_DB[level] / 20);
+            ma_rack_init(&probe, rate);
+            (void)ma_rack_apply(&probe, &spec);
+            ma_rack_settle(&probe);
+            for (size_t i = 0; i < settle + cycle; i++) {
+                float x = (float)(amp * sin(w * (double)i));
+                ma_frame y = ma_rack_tick(&probe, (ma_frame){ x, x });
+                if (i >= settle) {
+                    unsigned from = (unsigned)((i - settle) * n / cycle), to = (unsigned)((i - settle + 1) * n / cycle);
+                    for (unsigned k = from; k < to && k < n; k++) out[k] = (float)(y.left / amp);
+                }
+            }
+        }
+    } else if (slot->kind == MA_RACK_COMPRESSOR) {
+        const double w = 2 * M_PI * 1000 / rate;
+        double attack_s = slot->param[MA_COMPRESSOR_ATTACK_MS] * .001;
+        size_t settle = (size_t)((.08 + 5 * attack_s) * rate), measure = (size_t)(.02 * rate);
+        if (n < COMP_POINTS) n = COMP_POINTS;
+        for (unsigned k = 0; k < COMP_POINTS; k++) {
+            double in_db = -60 + 60.0 * k / (COMP_POINTS - 1), amp = pow(10, in_db / 20), sum = 0;
+            ma_rack_init(&probe, rate);
+            (void)ma_rack_apply(&probe, &spec);
+            ma_rack_settle(&probe);
+            for (size_t i = 0; i < settle + measure; i++) {
+                float x = (float)(amp * sin(w * (double)i));
+                ma_frame y = ma_rack_tick(&probe, (ma_frame){ x, x });
+                if (i >= settle) sum += (double)y.left * y.left;
+            }
+            double rms = sqrt(sum / (double)measure);
+            c->b[k] = (float)in_db;
+            c->a[k] = (float)(rms > 1e-7 ? 20 * log10(rms * 1.41421356237) : -140);
+        }
+    } else return nullptr;
+    c->spec = *slot;
+    c->rate = rate;
+    c->tempo = tempo;
+    c->n = n;
+    c->valid = true;
+    return c;
+}
+
 /* ---- small helpers ----------------------------------------------------------- */
 
 static unsigned band_count(const ma_rack_slot_spec *s) {
@@ -117,8 +226,16 @@ static bool neutral(const ma_rack_slot_spec *s) {
     }
     if (s->kind == MA_RACK_UTILITY)
         return !s->param[MA_UTILITY_GAIN_DB] && s->param[MA_UTILITY_WIDTH] == 1 && !s->param[MA_UTILITY_PAN];
-    return true;
+    if (s->kind == MA_RACK_SATURATOR)
+        return !s->param[MA_SATURATOR_DRIVE] && !s->param[MA_SATURATOR_TILT_PRE_DB]
+            && !s->param[MA_SATURATOR_TILT_POST_DB] && !s->param[MA_SATURATOR_OUTPUT_DB];
+    if (s->kind == MA_RACK_COMPRESSOR)
+        return s->param[MA_COMPRESSOR_RATIO] == 1 && !s->param[MA_COMPRESSOR_MAKEUP_DB];
+    return s->kind == MA_RACK_EMPTY;   /* chorus, reverb and delay have no neutral setting */
 }
+
+/* The sequencer's tempo, which the engine hands to the racks. */
+static float bench_tempo(const pb_app *a) { return (float)a->bench.channel[0].pattern.bpm * .01f; }
 
 /* Lit while the block hands its input on unchanged (RKD3). */
 static bool bypassed(const pb_app *a, unsigned i, const ma_rack_slot_spec *s) {
@@ -134,8 +251,19 @@ static uint32_t next_id(pb_app *a) {
     return a->rack_next_id;
 }
 
-static const char *kind_label(ma_rack_kind k) {
-    return k == MA_RACK_EQ ? "EQ" : k == MA_RACK_UTILITY ? "Utility" : "empty";
+static const char *const KIND_LABEL[MA_RACK_KIND_COUNT] = {
+    [MA_RACK_EMPTY] = "empty", [MA_RACK_EQ] = "EQ", [MA_RACK_UTILITY] = "Utility", [MA_RACK_CHORUS] = "Chorus",
+    [MA_RACK_REVERB] = "Reverb", [MA_RACK_DELAY] = "Delay", [MA_RACK_SATURATOR] = "Saturator",
+    [MA_RACK_COMPRESSOR] = "Compressor",
+};
+static const char *kind_label(ma_rack_kind k) { return k < MA_RACK_KIND_COUNT ? KIND_LABEL[k] : "empty"; }
+
+/* How many blocks of a capped kind the chain may still take (RKD8). */
+static bool kind_fits(const ma_rack_spec *r, ma_rack_kind kind) {
+    unsigned held = 0, cap = kind == MA_RACK_CHORUS ? MA_RACK_CHORUSES : kind == MA_RACK_REVERB ? MA_RACK_REVERBS
+                             : kind == MA_RACK_DELAY ? MA_RACK_DELAYS : MA_RACK_SLOTS;
+    for (unsigned i = 0; i < MA_RACK_SLOTS; i++) held += r->slot[i].kind == kind;
+    return held < cap;
 }
 
 static const char *const TYPE_LABEL[MA_EQ_TYPE_COUNT] = {
@@ -183,8 +311,14 @@ static void p_format(const void *c, double x, char *t, size_t n) {
     const param_scale *s = c;
     if (!strcmp(s->unit, "Hz")) {
         if (x >= 1000) snprintf(t, n, "%.2f kHz", x / 1000);
+        else if (x < 10) snprintf(t, n, "%.2f Hz", x);
         else snprintf(t, n, "%.0f Hz", x);
     } else if (!strcmp(s->unit, "dB")) snprintf(t, n, "%+.1f dB", x);
+    else if (!strcmp(s->unit, "ms")) snprintf(t, n, x < 10 ? "%.2f ms" : "%.0f ms", x);
+    else if (!strcmp(s->unit, "s")) {
+        if (x < 1) snprintf(t, n, "%.1f ms", x * 1000);
+        else snprintf(t, n, "%.3f s", x);
+    } else if (!strcmp(s->unit, ":1")) snprintf(t, n, "%.1f:1", x);
     else snprintf(t, n, "%.2f", x);
 }
 static bool p_parse(const void *c, const char *t, double *x) {
@@ -232,9 +366,9 @@ static void param_bar(pb_app *a, struct nk_context *ctx, unsigned slot, unsigned
 
 static void mix_bar(pb_app *a, struct nk_context *ctx, unsigned slot) {
     ma_rack_slot_spec *s = &pb_authored_rack(a)->slot[slot];
-    param_scale ps = { .info = { 0, 1, 1, MA_RACK_LINEAR }, .unit = "" };
+    param_scale ps = { .info = { 0, 1, ma_rack_mix_initial(s->kind), MA_RACK_LINEAR }, .unit = "" };
     double value = s->mix;
-    pb_scale_fn fn = { p_to, p_from, p_format, p_parse, &ps, .01, .1, 1, false };
+    pb_scale_fn fn = { p_to, p_from, p_format, p_parse, &ps, .01, .1, ps.info.initial, false };
     pb_marks m = { .parent = NAN, .b = NAN, .effective = NAN, .mod_lo = NAN, .mod_hi = NAN };
     if (pb_bar(&a->ui, ctx, ID_BASE + (int)(slot * ID_SLOT + ID_MIX), PB_MOD_COUNT, "mix", &value, &fn, &m)) {
         begin(a, "rack mix");
@@ -252,6 +386,62 @@ static void enabled_toggle(pb_app *a, struct nk_context *ctx, ma_rack_slot_spec 
     }
 }
 
+/* A parameter's label and unit from its file name: "lowcut_hz" is "lowcut"
+ * in Hz, "tilt_pre_db" is "tilt pre" in dB. */
+static void param_label(ma_rack_kind kind, unsigned index, char *label, size_t size, const char **unit) {
+    static const struct { const char *suffix, *unit; } UNITS[] = {
+        { "_hz", "Hz" }, { "_db", "dB" }, { "_ms", "ms" }, { "_s", "s" },
+    };
+    const char *name = ma_rack_param_name(kind, index);
+    snprintf(label, size, "%s", name ? name : "?");
+    *unit = kind == MA_RACK_COMPRESSOR && index == MA_COMPRESSOR_RATIO ? ":1" : "";
+    size_t length = strlen(label);
+    for (unsigned i = 0; i < sizeof UNITS / sizeof *UNITS; i++) {
+        size_t k = strlen(UNITS[i].suffix);
+        if (length > k && !strcmp(label + length - k, UNITS[i].suffix)) {
+            label[length - k] = 0;
+            *unit = UNITS[i].unit;
+            break;
+        }
+    }
+    for (char *p = label; *p; p++)
+        if (*p == '_') *p = ' ';
+}
+
+/* Every parameter of an RK2 block, in its file order: a bar for a value, a
+ * toggle for a switch, a list for a value written as a word. */
+static void kind_params(pb_app *a, struct nk_context *ctx, unsigned slot) {
+    ma_rack_slot_spec *s = &pb_authored_rack(a)->slot[slot];
+    const wb_theme *t = pb_theme(a);
+    unsigned count = ma_rack_param_count(s->kind);
+    nk_layout_row_dynamic(ctx, 18, 3);
+    for (unsigned i = 0; i < count; i++) {
+        ma_rack_param_info info = { 0 };
+        (void)ma_rack_param_info_at(s->kind, i, &info);
+        char label[32];
+        const char *unit;
+        param_label(s->kind, i, label, sizeof label, &unit);
+        unsigned word_count = 0;
+        const char *const *words = ma_rack_param_words(s->kind, i, &word_count);
+        if (words) {
+            int now = (int)s->param[i];
+            int pick = nk_combo(ctx, (const char **)words, (int)word_count, now, 18, nk_vec2(120, 220));
+            if (pick != now) {
+                pb_begin_edit(a, "rack");
+                s->param[i] = (float)pick;
+                pb_edited(a);
+            }
+        } else if (info.curve == MA_RACK_TOGGLE) {
+            bool on = s->param[i] != 0;
+            if (pb_toggle(ctx, t, label, &on)) {
+                pb_begin_edit(a, "rack");
+                s->param[i] = on ? 1 : 0;
+                pb_edited(a);
+            }
+        } else param_bar(a, ctx, slot, i, label, unit);
+    }
+}
+
 /* ---- structure: slots ---------------------------------------------------------- */
 
 static void set_band(ma_rack_slot_spec *s, unsigned b, ma_eq_type type, float hz, float db, float q) {
@@ -263,6 +453,10 @@ static void set_band(ma_rack_slot_spec *s, unsigned b, ma_eq_type type, float hz
 }
 
 static void insert(pb_app *a, unsigned at, ma_rack_kind kind) {
+    if (!kind_fits(pb_authored_rack(a), kind)) {
+        pb_say(a, true, "a rack holds one chorus, one reverb and two delays");
+        return;
+    }
     pb_begin_edit(a, "rack insert");
     ma_rack_slot_spec *s = &pb_authored_rack(a)->slot[at];
     ma_rack_slot_init(s, kind, next_id(a));
@@ -276,6 +470,7 @@ static void insert(pb_app *a, unsigned at, ma_rack_kind kind) {
     }
     a->rack_mute[at] = false;
     a->rack_selected = (int)at;
+    a->rack_insert = 0;
     a->eq_band = 0;
     pb_edited(a);
 }
@@ -383,6 +578,32 @@ static float node_db(const ma_rack_slot_spec *s, unsigned b, const float *sum, u
     return sum[i < 0 ? 0 : i >= (int)n ? (int)n - 1 : i];
 }
 
+/* An RK2 block's picture in r (see picture()). */
+static void draw_picture(pb_app *a, struct nk_context *ctx, struct nk_rect r, picture_cache *cache,
+                         const ma_rack_slot_spec *s, bool dim) {
+    const wb_theme *t = pb_theme(a);
+    struct nk_command_buffer *out = nk_window_get_canvas(ctx);
+    /* A point every five pixels: the frame's vertex budget is the backend's
+     * 16-bit index (patchbench-progress.md), and eight pictures can show. */
+    unsigned n = (unsigned)(r.w / 5);
+    const picture_cache *c = picture(cache, s, (float)a->rate, bench_tempo(a), n);
+    if (!c) return;
+    struct nk_color first = dim ? t->dim : t->live, second = dim ? t->dim : t->text;
+    bool same = !memcmp(c->a, c->b, c->n * sizeof *c->a);        /* both channels alike: one trace */
+    if (s->kind == MA_RACK_SATURATOR) {
+        pb_trace(out, r, c->a, c->n, -1.6f, 1.6f, first, 1);     /* at the chord level */
+        pb_trace(out, r, c->b, c->n, -1.6f, 1.6f, second, 1);    /* 12 dB over */
+    } else if (s->kind == MA_RACK_COMPRESSOR) {
+        nk_stroke_line(out, r.x, r.y + r.h, r.x + r.w, r.y, 1, t->line);   /* unity */
+        float knee = r.x + r.w * (s->param[MA_COMPRESSOR_THRESHOLD_DB] + 60) / 60;
+        nk_stroke_line(out, knee, r.y, knee, r.y + r.h, 1, pb_alpha(t->line, 140));
+        pb_xy(out, r, c->b, c->a, COMP_POINTS, -60, 0, -60, 0, first, 1);
+    } else {
+        pb_trace(out, r, c->a, c->n, -72, 0, first, 1);          /* left */
+        if (!same) pb_trace(out, r, c->b, c->n, -72, 0, second, 1);   /* right */
+    }
+}
+
 static void draw_thumb(pb_app *a, struct nk_context *ctx, struct nk_rect r, unsigned slot,
                        const ma_rack_slot_spec *s) {
     const wb_theme *t = pb_theme(a);
@@ -403,6 +624,8 @@ static void draw_thumb(pb_app *a, struct nk_context *ctx, struct nk_rect r, unsi
         snprintf(text, sizeof text, "%+.1f dB  w %.2f  pan %+.2f", (double)s->param[MA_UTILITY_GAIN_DB],
                  (double)s->param[MA_UTILITY_WIDTH], (double)s->param[MA_UTILITY_PAN]);
         pb_text(ctx, nk_rect(r.x + 4, r.y, r.w - 8, r.h), text, bypassed(a, slot, s) ? t->dim : t->text);
+    } else if (s->kind != MA_RACK_EMPTY) {
+        draw_picture(a, ctx, r, &pictures[slot], s, bypassed(a, slot, s));
     }
 }
 
@@ -450,9 +673,12 @@ static void draw_cell(pb_app *a, struct nk_context *ctx, unsigned i) {
         }
     }
     if (s->kind == MA_RACK_EMPTY) {
-        nk_layout_row_dynamic(ctx, 18, 2);
-        if (nk_button_label(ctx, "+EQ")) insert(a, i, MA_RACK_EQ);
-        if (nk_button_label(ctx, "+Util")) insert(a, i, MA_RACK_UTILITY);
+        /* The kinds to choose from show in the editor beside the cells. */
+        nk_layout_row_dynamic(ctx, 18, 1);
+        if (nk_button_label(ctx, a->rack_insert == i + 1 ? "choose >" : "+ insert")) {
+            a->rack_insert = a->rack_insert == i + 1 ? 0 : i + 1;
+            a->rack_selected = -1;
+        }
     } else {
         nk_layout_row_dynamic(ctx, 18, 4);
         if (nk_button_label(ctx, "<")) move(a, i, -1);
@@ -468,18 +694,41 @@ static void draw_compact(pb_app *a, struct nk_context *ctx, struct nk_rect area)
     const wb_theme *t = pb_theme(a);
     int sel = a->rack_selected;
     ma_rack_slot_spec *s = sel >= 0 ? &pb_authored_rack(a)->slot[sel] : nullptr;
+    if (s && s->kind != MA_RACK_EMPTY) a->rack_insert = 0;
+    if (a->rack_insert && pb_authored_rack(a)->slot[a->rack_insert - 1].kind != MA_RACK_EMPTY) a->rack_insert = 0;
+    if (a->rack_insert) {
+        /* An empty slot asked for a block: one button per kind (RKD1: the
+         * closed set). A kind at its instance cap is not offered. */
+        unsigned at = a->rack_insert - 1;
+        char text[64];
+        snprintf(text, sizeof text, "Insert into slot %u:", at + 1);
+        nk_layout_row_dynamic(ctx, 18, 1);
+        nk_label_colored(ctx, text, NK_TEXT_LEFT, t->dim);
+        nk_layout_row_dynamic(ctx, 20, 4);
+        for (unsigned k = MA_RACK_EQ; k < MA_RACK_KIND_COUNT; k++) {
+            if (!kind_fits(pb_authored_rack(a), (ma_rack_kind)k)) nk_label_colored(ctx, kind_label((ma_rack_kind)k), NK_TEXT_CENTERED, t->dim);
+            else if (nk_button_label(ctx, kind_label((ma_rack_kind)k))) insert(a, at, (ma_rack_kind)k);
+        }
+        return;
+    }
     if (!s || s->kind == MA_RACK_EMPTY) {
         a->rack_selected = -1;
         nk_layout_row_dynamic(ctx, 18, 1);
         nk_label_colored(ctx, "Select a block, or insert one into an empty slot. The rack runs after the "
-                         "output DC block, before master.", NK_TEXT_LEFT, t->dim);
+                         "output DC block, before master and safety.", NK_TEXT_LEFT, t->dim);
+        nk_label_colored(ctx, "The bench voice's chorus and reverb set the rack's chorus and reverb blocks, "
+                         "or play as two more at its end.", NK_TEXT_LEFT, t->dim);
         return;
     }
     nk_layout_row_begin(ctx, NK_DYNAMIC, area.h - 8, 2);
     nk_layout_row_push(ctx, .42f);
     struct nk_rect r;
     if (nk_widget(&r, ctx)) {
-        draw_thumb(a, ctx, r, (unsigned)sel, s);
+        if (s->kind > MA_RACK_UTILITY) {
+            /* Its own cache: this picture is wider than the cell's. */
+            pb_frame(nk_window_get_canvas(ctx), r, t);
+            draw_picture(a, ctx, r, &big_picture, s, bypassed(a, (unsigned)sel, s));
+        } else draw_thumb(a, ctx, r, (unsigned)sel, s);
         if (s->kind == MA_RACK_EQ && nk_input_has_mouse_click_down_in_rect(&ctx->input, NK_BUTTON_DOUBLE, r, nk_true))
             a->eq_open = true;
     }
@@ -497,12 +746,12 @@ static void draw_compact(pb_app *a, struct nk_context *ctx, struct nk_rect area)
             char label[48];
             snprintf(label, sizeof label, "open EQ editor (%u/%d bands)", band_count(s), MA_EQ_BANDS);
             if (nk_button_label(ctx, label)) a->eq_open = true;
-        } else {
+        } else if (s->kind == MA_RACK_UTILITY) {
             nk_layout_row_dynamic(ctx, 18, 3);
             param_bar(a, ctx, (unsigned)sel, MA_UTILITY_GAIN_DB, "gain", "dB");
             param_bar(a, ctx, (unsigned)sel, MA_UTILITY_WIDTH, "width", "");
             param_bar(a, ctx, (unsigned)sel, MA_UTILITY_PAN, "pan", "");
-        }
+        } else kind_params(a, ctx, (unsigned)sel);
         nk_group_end(ctx);
     }
     nk_layout_row_end(ctx);
